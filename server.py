@@ -1,68 +1,150 @@
-import MetaTrader5 as mt5
-from flask import Flask, jsonify, request
+"""
+Astra Analyzer Pro - Backend Server
+Модульная архитектура с Yahoo Finance API
+"""
+from flask import Flask, jsonify
 from flask_cors import CORS
+import logging
 
+# Импорт конфигурации
+from config.settings import FLASK_PORT, FLASK_DEBUG, SYMBOL
+
+# Импорт роутов
+from routes.market_routes import market_bp
+from routes.analysis_routes import analysis_bp
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('astra_server.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Создание приложения Flask
 app = Flask(__name__)
 CORS(app)
 
-TF_MAP = {
-    "M15": mt5.TIMEFRAME_M15,
-    "H1":  mt5.TIMEFRAME_H1,
-    "H4":  mt5.TIMEFRAME_H4
-}
+# Регистрация blueprints
+app.register_blueprint(market_bp, url_prefix='/api/market')
+app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
 
-def get_mt5_data(target_tf):
-    if not mt5.initialize():
-        return {"error": "MT5 не запущен"}
 
-    symbol = "XAUUSD"
-    mt5.symbol_select(symbol, True) 
-    acc_info = mt5.account_info()
-    
-    # Конфиг свечей для покрытия нужных периодов
-    TF_CONFIG = {
-        "M15": {"tf": mt5.TIMEFRAME_M15, "count": 200},
-        "H1":  {"tf": mt5.TIMEFRAME_H1, "count": 200},
-        "H4":  {"tf": mt5.TIMEFRAME_H4, "count": 180}
-    }
-    config = TF_CONFIG.get(target_tf, TF_CONFIG["M15"])
-    
-    rates = mt5.copy_rates_from_pos(symbol, config["tf"], 0, config["count"])
-    if rates is None or len(rates) == 0:
-        return {"error": f"Нет данных для {target_tf}"}
-
-    candles = []
-    for r in rates:
-        candles.append({
-            "time": int(r[0]),
-            "open": float(r[1]),
-            "high": float(r[2]),
-            "low": float(r[3]),
-            "close": float(r[4])
-        })
-
-    # Контекст для ИИ (сокращенный OHLC)
-    def get_ai_data(tf_code, count):
-        r = mt5.copy_rates_from_pos(symbol, tf_code, 0, count)
-        if r is None: return []
-        return [{"h": float(x[2]), "l": float(x[3]), "c": float(x[4])} for x in r]
-
-    return {
-        "balance": acc_info.balance if acc_info else 0,
-        "equity": acc_info.equity if acc_info else 0,
-        "history": candles,
-        "ai_context": {
-            "M15": get_ai_data(mt5.TIMEFRAME_M15, 30),
-            "H1":  get_ai_data(mt5.TIMEFRAME_H1, 20),
-            "H4":  get_ai_data(mt5.TIMEFRAME_H4, 15)
+# Корневой роут (для обратной совместимости)
+@app.route('/')
+def index():
+    """Главная страница API"""
+    return jsonify({
+        "name": "Astra Analyzer Pro API",
+        "version": "2.0.0",
+        "status": "running",
+        "symbol": SYMBOL,
+        "endpoints": {
+            "market": {
+                "candles_all": "/api/market/candles (H4:10, H1:20, M15:50)",
+                "candles_single": "/api/market/candles?tf=M15&limit=100",
+                "ticker_info": "/api/market/ticker-info",
+                "current_price": "/api/market/current-price",
+                "config": "/api/market/config",
+                "health": "/api/market/health"
+            },
+            "analysis": {
+                "calculate": "/api/analysis/calculate (POST)",
+                "analyze": "/api/analysis/analyze (POST)",
+                "breakeven": "/api/analysis/breakeven (POST)",
+                "drawdown": "/api/analysis/drawdown (POST)",
+                "ai_status": "/api/analysis/ai-status"
+            }
         }
-    }
+    })
 
-@app.route('/stats')
-def stats():
-    selected_tf = request.args.get('tf', 'M15')
-    return jsonify(get_mt5_data(selected_tf))
+
+# Старые роуты для обратной совместимости (перенаправление на новые)
+@app.route('/config')
+def config_legacy():
+    """Legacy endpoint - перенаправление на новый API"""
+    from routes.market_routes import get_config
+    return get_config()
+
+
+@app.route('/calculate', methods=['POST'])
+def calculate_legacy():
+    """Legacy endpoint - перенаправление на новый API"""
+    from routes.analysis_routes import calculate_trade
+    return calculate_trade()
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze_legacy():
+    """Legacy endpoint - перенаправление на новый API"""
+    from routes.analysis_routes import analyze_trade
+    return analyze_trade()
+
+
+# Обработчики ошибок
+@app.errorhandler(404)
+def not_found(e):
+    """Обработка 404 ошибки"""
+    return jsonify({
+        "error": "Endpoint not found",
+        "message": "Проверьте документацию API на главной странице"
+    }), 404
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Обработка 500 ошибки"""
+    logger.error(f"Internal server error: {str(e)}")
+    return jsonify({
+        "error": "Internal server error",
+        "message": "Проверьте логи сервера"
+    }), 500
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Общий обработчик исключений"""
+    logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
+    return jsonify({
+        "error": "Unexpected error",
+        "message": str(e)
+    }), 500
+
 
 if __name__ == '__main__':
-    print("--- ASTRA SERVER: PRO MULTI-TF ACTIVE ---")
-    app.run(port=5000)
+    logger.info("=" * 60)
+    logger.info("ASTRA ANALYZER PRO - SERVER STARTING")
+    logger.info("=" * 60)
+    logger.info(f"Symbol: {SYMBOL}")
+    logger.info(f"Port: {FLASK_PORT}")
+    logger.info(f"Debug: {FLASK_DEBUG}")
+    logger.info(f"Data Source: Yahoo Finance API")
+    logger.info("=" * 60)
+    
+    # Проверка доступности сервисов
+    from services.yfinance_service import yfinance_service
+    from services.gemini_service import gemini_service
+    
+    if not gemini_service.is_available():
+        logger.warning("WARNING: GEMINI_API_KEY not set! AI analysis will not work.")
+    else:
+        logger.info("OK: Gemini AI service available")
+    
+    if yfinance_service.validate_symbol():
+        logger.info(f"OK: Yahoo Finance: {SYMBOL} is available")
+    else:
+        logger.warning(f"WARNING: Yahoo Finance: {SYMBOL} validation failed")
+    
+    logger.info("=" * 60)
+    logger.info("Server ready! Access API at http://127.0.0.1:{}/".format(FLASK_PORT))
+    logger.info("=" * 60)
+    
+    # Запуск сервера
+    app.run(
+        host='127.0.0.1',
+        port=FLASK_PORT,
+        debug=FLASK_DEBUG
+    )

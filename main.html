@@ -18,6 +18,7 @@
         .btn-mode { background: #363c4e; color: #d1d4dc; border: 1px solid #434651; padding: 12px; border-radius: 4px; cursor: pointer; font-size: 13px; text-align: left; transition: 0.2s; width: 100%; margin-bottom: 5px; }
         .btn-mode.active { border-color: #2962ff; background: rgba(41, 98, 255, 0.2); color: #fff; }
         .ai-btn { background: linear-gradient(45deg, #7b1fa2, #4a148c); color: white; border: none; padding: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px; width: 100%; }
+        .ai-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .calc-result { background: #2a2e39; padding: 15px; border-radius: 4px; border: 1px solid #363c4e; }
         .ai-box { background: #1e222d; padding: 15px; border-radius: 6px; font-size: 13px; line-height: 1.6; border: 1px solid #363c4e; margin-top: 10px; margin-bottom: 20px; height: auto !important; min-height: 80px; flex-shrink: 0; white-space: pre-wrap; word-wrap: break-word; overflow: visible; }
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -46,7 +47,7 @@
 
 <div id="chart-container">
     <div class="status-bar"> 
-        XAU/USD • 
+        <span id="symbol-text">XAU/USD</span> • 
         <select id="tf-select" onchange="window.currentTF = this.value; refreshData();" 
             style="background:#2a2e39; color:#2962ff; border:1px solid #363c4e; padding: 2px 5px; border-radius: 4px; font-weight:bold; cursor:pointer; outline:none; margin: 0 5px;">
             <option value="M15">M15</option>
@@ -78,26 +79,29 @@
         <div id="drawdown-warn" class="risk-warn">⚠️ ПРЕДЕЛ ПРОСАДКИ БЛИЗКО!</div>
     </div>
     <hr style="width:100%; border:0; border-top:1px solid #363c4e; margin: 10px 0;">
-    <div><label>Entry Price</label><input type="number" id="input-entry" step="0.01" oninput="drawSetup()"></div>
-    <div><label>Stop Loss</label><input type="number" id="input-sl" step="0.01" oninput="drawSetup()"></div>
-    <div><label>Take Profit</label><input type="number" id="input-tp" step="0.01" oninput="drawSetup()"></div>
+    <div><label>Entry Price</label><input type="number" id="input-entry" step="0.01" oninput="calculateSetup()"></div>
+    <div><label>Stop Loss</label><input type="number" id="input-sl" step="0.01" oninput="calculateSetup()"></div>
+    <div><label>Take Profit</label><input type="number" id="input-tp" step="0.01" oninput="calculateSetup()"></div>
     <div class="calc-result">
         <div style="display: flex; justify-content: space-between;"><span>R:R Ratio:</span> <strong id="rrValue">-</strong></div>
         <div style="display: flex; justify-content: space-between;"><span>Риск:</span> <strong id="riskPoints">-</strong></div>
     </div>
-    <button onclick="askAI()" class="ai-btn">Анализ AI</button>
+    <button onclick="askAI()" id="ai-btn" class="ai-btn">Анализ AI</button>
     <div id="aiResponse" class="ai-box">Установите уровни на графике.</div>
 </div>
 
 <script>
-    const GEMINI_KEY = "AIzaSyCGPYPm59RlXKZLNfje9UVon6FY8OIHY4s"; // меняем в случае истечения запросов
-    const START_BALANCE = 5000;
-    const DAILY_LOSS_LIMIT = 250;
-    let currentBalance = 5000;
+    const API_BASE = "http://127.0.0.1:5000";
+    
+    // Глобальные переменные
+    let config = {};
+    let currentBalance = 0;
+    let currentEquity = 0;
     let currentHistory = [];
     let aiContextData = {};
     window.currentTF = "M15";
 
+    // Инициализация графика
     const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
         layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
         grid: { vertLines: { color: '#2b2b43' }, horzLines: { color: '#2b2b43' } },
@@ -110,44 +114,127 @@
         priceFormat: { type: 'price', precision: 2, minMove: 0.01 }
     });
 
+    // Загрузка конфигурации
+    async function loadConfig() {
+        try {
+            const response = await fetch(`${API_BASE}/api/market/config`);
+            const data = await response.json();
+            if (!data.error) {
+                config = data;
+                currentBalance = data.start_balance;
+                currentEquity = data.start_balance;
+                document.getElementById('symbol-text').innerText = data.symbol || 'XAU/USD';
+                document.getElementById('acc-balance').innerText = `$${data.start_balance.toFixed(2)}`;
+                document.getElementById('acc-equity').innerText = `$${data.start_balance.toFixed(2)}`;
+            }
+        } catch (e) {
+            console.error('Failed to load config:', e);
+        }
+    }
+
+    // Обновление данных графика
     async function refreshData() {
         try {
-            const response = await fetch(`http://127.0.0.1:5000/stats?tf=${window.currentTF}`);
+            // Определяем лимит свечей в зависимости от таймфрейма
+            const limit = window.currentTF === 'H4' ? 50 : 200;
+            
+            // Получаем данные свечей для текущего таймфрейма
+            const response = await fetch(`${API_BASE}/api/market/candles?tf=${window.currentTF}&limit=${limit}`);
             const data = await response.json();
-            if (data.error) { document.getElementById('status-text').innerText = "MT5 OFFLINE"; return; }
-            currentBalance = data.balance;
-            document.getElementById('acc-balance').innerText = `$${data.balance.toFixed(2)}`;
-            document.getElementById('acc-equity').innerText = `$${data.equity.toFixed(2)}`;
-            if (data.history) {
-                const OFFSET = 2 * 3600; 
-                const formatted = data.history.map(d => ({ time: d.time + OFFSET, open: d.open, high: d.high, low: d.low, close: d.close }));
+            
+            if (data.error) { 
+                document.getElementById('status-text').innerText = "API OFFLINE"; 
+                return; 
+            }
+            
+            // Обрабатываем данные свечей
+            if (data.candles && data.candles.length > 0) {
+                // Yahoo Finance уже возвращает правильный timestamp
+                const formatted = data.candles.map(d => ({ 
+                    time: d.time,
+                    open: d.open, 
+                    high: d.high, 
+                    low: d.low, 
+                    close: d.close 
+                }));
                 candleSeries.setData(formatted);
                 currentHistory = formatted;
             }
-            aiContextData = data.ai_context;
+            
             updateMarketStatusUI();
-            const dailyLoss = Math.max(0, START_BALANCE - data.equity);
-            const percent = Math.min(100, (dailyLoss / DAILY_LOSS_LIMIT) * 100);
-            const bar = document.getElementById('daily-bar');
-            bar.style.width = percent + "%";
-            bar.style.background = percent > 80 ? "#ef5350" : (percent > 50 ? "#fb8c00" : "#26a69a");
-            document.getElementById('drawdown-warn').style.display = (data.equity <= 4550) ? "block" : "none";
-        } catch (e) { document.getElementById('status-text').innerText = "SERVER OFFLINE"; }
+            updateRiskBar();
+            
+        } catch (e) { 
+            console.error('Refresh error:', e);
+            document.getElementById('status-text').innerText = "SERVER OFFLINE"; 
+        }
     }
 
+    // Загрузка AI контекста (вызывается только перед анализом)
+    async function loadAIContext() {
+        try {
+            // Получаем данные по всем таймфреймам для AI
+            const response = await fetch(`${API_BASE}/api/market/candles`);
+            const data = await response.json();
+            
+            if (data.error || !data.timeframes) {
+                console.error('Failed to load AI context');
+                return {};
+            }
+            
+            // Преобразуем в формат для AI (только H, L, C)
+            const context = {};
+            for (const [tf, tfData] of Object.entries(data.timeframes)) {
+                context[tf] = tfData.candles.map(c => ({
+                    h: c.high,
+                    l: c.low,
+                    c: c.close
+                }));
+            }
+            
+            return context;
+        } catch (e) {
+            console.error('AI context error:', e);
+            return {};
+        }
+    }
+
+    // Обновление полосы риска
+    function updateRiskBar() {
+        if (!config.start_balance || !config.daily_loss_limit) return;
+        
+        const dailyLoss = Math.max(0, config.start_balance - currentEquity);
+        const percent = Math.min(100, (dailyLoss / config.daily_loss_limit) * 100);
+        const bar = document.getElementById('daily-bar');
+        
+        bar.style.width = percent + "%";
+        bar.style.background = percent > 80 ? "#ef5350" : (percent > 50 ? "#fb8c00" : "#26a69a");
+        
+        const warnThreshold = config.start_balance - (config.daily_loss_limit * 0.9);
+        document.getElementById('drawdown-warn').style.display = 
+            (currentEquity <= warnThreshold) ? "block" : "none";
+    }
+
+    // Статус рынка
     function updateMarketStatusUI() {
         const now = new Date();
         const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
         const astNow = new Date(utc + (3600000 * 4));
         const day = astNow.getDay(), hour = astNow.getHours();
+        
         let isOpen = true;
-        if ((day === 6 && hour >= 2) || day === 0 || (day === 1 && hour < 3)) isOpen = false;
+        if ((day === 6 && hour >= 2) || day === 0 || (day === 1 && hour < 3)) {
+            isOpen = false;
+        }
+        
         const el = document.getElementById('status-text');
         el.innerText = isOpen ? "РЫНОК ОТКРЫТ" : "РЫНОК ЗАКРЫТ";
         el.className = isOpen ? "market-open" : "market-closed";
     }
 
+    // Режимы установки уровней
     let activeMode = null, entryLine, slLine, tpLine;
+    
     function setMode(m) {
         activeMode = m;
         document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
@@ -158,124 +245,147 @@
         if (!param.point || !activeMode) return;
         const price = candleSeries.coordinateToPrice(param.point.y);
         document.getElementById('input-' + activeMode).value = price.toFixed(2);
-        drawSetup();
+        calculateSetup();
     });
 
-    function drawSetup() {
-        const e = parseFloat(document.getElementById('input-entry').value.replace(',', '.'));
-        const s = parseFloat(document.getElementById('input-sl').value.replace(',', '.'));
-        const t = parseFloat(document.getElementById('input-tp').value.replace(',', '.'));
+    // Отрисовка линий
+    function drawLines(entry, sl, tp) {
         if (entryLine) candleSeries.removePriceLine(entryLine);
         if (slLine) candleSeries.removePriceLine(slLine);
         if (tpLine) candleSeries.removePriceLine(tpLine);
-        if (e) entryLine = candleSeries.createPriceLine({ price: e, color: '#2962ff', lineWidth: 2, lineStyle: 2, title: 'ENTRY' });
-        if (s) slLine = candleSeries.createPriceLine({ price: s, color: '#ef5350', lineWidth: 2, title: 'SL' });
-        if (t) tpLine = candleSeries.createPriceLine({ price: t, color: '#26a69a', lineWidth: 2, title: 'TP' });
-        if (e && s && t) {
-            const pts = Math.abs(e - s);
-            const rr = (Math.abs(t - e) / pts).toFixed(2);
-            document.getElementById('rrValue').innerText = `1 : ${rr}`;
-            const lot = calculateLot();
-            const lotColor = (lot === "0.00") ? "#ef5350" : "#26a69a";
-            document.getElementById('riskPoints').innerHTML = `${pts.toFixed(2)} pts | <span style="color:${lotColor}; font-weight:bold;">Lot: ${lot}</span>`;
-        }
-    }
-
-    function calculateLot() {
-        const e = parseFloat(document.getElementById('input-entry').value.replace(',', '.'));
-        const s = parseFloat(document.getElementById('input-sl').value.replace(',', '.'));
-        const t = parseFloat(document.getElementById('input-tp').value.replace(',', '.'));
-        if (isNaN(e) || isNaN(s) || isNaN(t) || e === s) return "0.00";
-        const stopPoints = Math.abs(e - s), profitPoints = Math.abs(t - e), rr = profitPoints / stopPoints;
-        if (rr < 2.0) return "0.00"; 
-        const riskTargetUSD = currentBalance * 0.005;
-        let rawLot = riskTargetUSD / (stopPoints * 100);
-        if (rawLot < 0.01) {
-            if (stopPoints <= (currentBalance * 0.01)) return "0.01";
-            return "0.00";
-        }
-        return Math.min(0.10, Math.floor(rawLot * 100) / 100).toFixed(2);
-    }
-
-    async function askAI() {
-    const aiDiv = document.getElementById('aiResponse');
-    const entry = document.getElementById('input-entry').value;
-    const sl = document.getElementById('input-sl').value;
-    const tp = document.getElementById('input-tp').value;
-    const rrValue = document.getElementById('rrValue').innerText;
-    const lot = calculateLot();
-    
-    if(!entry || !sl || !tp) return aiDiv.innerText = "Сначала установите уровни на графике!";
-    
-    aiDiv.style.color = "#d1d4dc";
-    aiDiv.innerText = "AI анализирует...";
-
-    const balance = document.getElementById('acc-balance').innerText;
-    const equity = document.getElementById('acc-equity').innerText;
-
-    // Форматируем OHLC данные для всех ТФ
-    const formatPA = (candles) => candles?.map(c => `[H:${c.h || c.high} L:${c.l || c.low} C:${c.c || c.close}]`).join('|') || "нет данных";
-
-    // ФОРМИРОВАНИЕ ПРОМПТА
-  const prompt = `
-    # ROLE
-    Institutional Advisor. Specialty: XAU/USD. 
-
-    # SOURCES OF TRUTH
-    - Account: ${balance} | Equity: ${equity}.
-    - Proposed: ${parseFloat(entry) > parseFloat(sl) ? 'BUY' : 'SELL'} at ${entry} | SL: ${sl} | TP: ${tp} | Lot: ${lot}.
-    - Context (OHLC): H4: ${formatPA(aiContextData.H4)} | H1: ${formatPA(aiContextData.H1)} | M15: ${formatPA(currentHistory.slice(-25))}
-
-    # TASK
-    1. Analyze market structure (MSS, Liquidity). 
-    2. If the user's plan is suboptimal, propose a better "AI SETUP".
-    3. Provide precise BE level.
-
-    # OUTPUT PROTOCOL (ULTRA-CONCISE)
-    - LANGUAGE: Russian.
-    - FORMAT: Max 3 short sections. No Markdown, no fillers.
-    - LIMIT: Max 2 sentences per section.
-
-    # FINAL RESPONSE STRUCTURE:
-
-    ВЕРДИКТ: [ВХОДИТЬ / ЖДАТЬ / ОТМЕНА] (Риск: X/10)
-
-    АНАЛИЗ И ЛОГИКА
-    (Кратко: состояние ТФ и Price Action. Почему выбран такой вердикт.)
-
-    AI SETUP (ПРЕДЛОЖЕНИЕ ИИ)
-    (Если твой вход плохой, ИИ пишет: Вход: X, SL: Y, TP: Z. Если твой вход ок, пишет: "Твой план оптимален".)
-
-    СТРАТЕГИЯ УПРАВЛЕНИЯ
-    (Уровень безубытка BE и краткое предупреждение.)
-    `.trim();
-
-    try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_KEY}`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        });
         
-        const resData = await response.json();
-        if (response.status === 429) { 
-            aiDiv.innerText = "ЛИМИТ ЗАПРОСОВ."; 
-            return; 
-        }
-
-        if (resData.candidates && resData.candidates[0].content) {
-            let text = resData.candidates[0].content.parts[0].text;
-            // Убираем возможные артефакты Markdown (#, * и т.п.)
-            aiDiv.innerText = text.replace(/\*/g, '').replace(/#/g, '').trim();
-        }
-    } catch (e) {
-        aiDiv.innerText = "Ошибка ИИ. Проверь VPN.";
+        if (entry) entryLine = candleSeries.createPriceLine({ 
+            price: entry, color: '#2962ff', lineWidth: 2, lineStyle: 2, title: 'ENTRY' 
+        });
+        if (sl) slLine = candleSeries.createPriceLine({ 
+            price: sl, color: '#ef5350', lineWidth: 2, title: 'SL' 
+        });
+        if (tp) tpLine = candleSeries.createPriceLine({ 
+            price: tp, color: '#26a69a', lineWidth: 2, title: 'TP' 
+        });
     }
-}
 
-    setInterval(refreshData, 3000);
-    refreshData();
-    window.addEventListener('resize', () => chart.resize(document.getElementById('chart-container').clientWidth, window.innerHeight));
+    // Расчет через backend API
+    async function calculateSetup() {
+        const entry = parseFloat(document.getElementById('input-entry').value.replace(',', '.'));
+        const sl = parseFloat(document.getElementById('input-sl').value.replace(',', '.'));
+        const tp = parseFloat(document.getElementById('input-tp').value.replace(',', '.'));
+        
+        drawLines(entry, sl, tp);
+        
+        if (!entry || !sl || !tp) {
+            document.getElementById('rrValue').innerText = '-';
+            document.getElementById('riskPoints').innerText = '-';
+            return;
+        }
+        
+        try {
+            const response = await fetch(`${API_BASE}/api/analysis/calculate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entry, sl, tp, balance: currentBalance })
+            });
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                console.error('Calculate error:', data.error);
+                return;
+            }
+            
+            document.getElementById('rrValue').innerText = `1 : ${data.rr_ratio}`;
+            
+            const lotColor = data.lot > 0 ? "#26a69a" : "#ef5350";
+            document.getElementById('riskPoints').innerHTML = 
+                `${data.stop_points} pts | <span style="color:${lotColor}; font-weight:bold;">Lot: ${data.lot.toFixed(2)}</span>`;
+                
+        } catch (e) {
+            console.error('Failed to calculate:', e);
+        }
+    }
+
+    // AI анализ через backend
+    async function askAI() {
+        const aiDiv = document.getElementById('aiResponse');
+        const aiBtn = document.getElementById('ai-btn');
+        const entry = document.getElementById('input-entry').value;
+        const sl = document.getElementById('input-sl').value;
+        const tp = document.getElementById('input-tp').value;
+        
+        if (!entry || !sl || !tp) {
+            aiDiv.innerText = "Сначала установите уровни на графике!";
+            return;
+        }
+        
+        aiDiv.style.color = "#d1d4dc";
+        aiDiv.innerText = "AI анализирует...";
+        aiBtn.disabled = true;
+        
+        try {
+            // Получаем расчет лота для передачи в анализ
+            const calcResponse = await fetch(`${API_BASE}/api/analysis/calculate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    entry: parseFloat(entry), 
+                    sl: parseFloat(sl), 
+                    tp: parseFloat(tp), 
+                    balance: currentBalance 
+                })
+            });
+            const calcData = await calcResponse.json();
+            
+            // Загружаем AI контекст
+            const aiContext = await loadAIContext();
+            
+            // Запрос AI анализа
+            const response = await fetch(`${API_BASE}/api/analysis/analyze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    entry,
+                    sl,
+                    tp,
+                    balance: currentBalance,
+                    equity: currentEquity,
+                    lot: calcData.lot || 0,
+                    ai_context: aiContext
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.status === 429) {
+                aiDiv.innerText = "ЛИМИТ ЗАПРОСОВ AI.";
+            } else if (data.error) {
+                aiDiv.innerText = `Ошибка: ${data.error}`;
+            } else if (data.analysis) {
+                aiDiv.innerText = data.analysis;
+            } else {
+                aiDiv.innerText = "Некорректный ответ от AI";
+            }
+            
+        } catch (e) {
+            aiDiv.innerText = "Ошибка связи с сервером. Проверьте соединение.";
+            console.error('AI Error:', e);
+        } finally {
+            aiBtn.disabled = false;
+        }
+    }
+
+    // Адаптивность
+    window.addEventListener('resize', () => {
+        chart.resize(
+            document.getElementById('chart-container').clientWidth, 
+            window.innerHeight
+        );
+    });
+
+    // Инициализация
+    (async function init() {
+        await loadConfig();
+        await refreshData();
+    })();
 </script>
 </body>
 </html>
