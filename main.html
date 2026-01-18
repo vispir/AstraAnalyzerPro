@@ -8,38 +8,84 @@
     <link rel="icon" type="image/svg+xml" href="logo.svg">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #131722; color: #d1d4dc; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Сайдбар */
         #sidebar { width: 320px; padding: 20px; background: #1e222d; border-right: 1px solid #2a2e39; display: flex; flex-direction: column; gap: 15px; box-shadow: 2px 0 5px rgba(0,0,0,0.3); overflow-y: auto; z-index: 10; }
+        
+        /* График */
         #chart-container { flex-grow: 1; position: relative; height: 100%; }
-        .status-bar { position: absolute; top: 15px; left: 15px; z-index: 20; background: rgba(30, 34, 45, 0.9); padding: 8px 12px; border-radius: 6px; font-size: 13px; border: 1px solid #2a2e39; pointer-events: auto; color: #fff; }
+        
+        /* Кнопка Логина в сайдбаре */
+        .user-profile-btn { 
+            background: #2a2e39; 
+            border: 1px solid #363c4e; 
+            color: #fff; 
+            padding: 12px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px; 
+            text-align: center; 
+            transition: 0.2s; 
+            margin-bottom: 5px;
+        }
+        .user-profile-btn:hover { border-color: #2962ff; color: #2962ff; }
+
+        .status-bar { position: absolute; top: 15px; left: 15px; z-index: 20; background: rgba(30, 34, 45, 0.9); padding: 8px 12px; border-radius: 6px; font-size: 13px; border: 1px solid #2a2e39; color: #fff; }
         .market-closed { color: #ef5350; font-weight: bold; }
         .market-open { color: #26a69a; font-weight: bold; }
-        h3 { margin: 0 0 10px 0; color: #fff; font-size: 18px; }
+
+        h3 { margin: 10px 0 0 0; color: #fff; font-size: 18px; }
         label { font-size: 11px; color: #8f98a3; text-transform: uppercase; }
-        .btn-mode { background: #363c4e; color: #d1d4dc; border: 1px solid #434651; padding: 12px; border-radius: 4px; cursor: pointer; font-size: 13px; text-align: left; transition: 0.2s; width: 100%; margin-bottom: 5px; }
+        
+        .btn-mode { background: #363c4e; color: #d1d4dc; border: 1px solid #434651; padding: 12px; border-radius: 4px; cursor: pointer; font-size: 13px; text-align: left; transition: 0.2s; width: 100%; }
         .btn-mode.active { border-color: #2962ff; background: rgba(41, 98, 255, 0.2); color: #fff; }
+        
         .ai-btn { background: linear-gradient(45deg, #7b1fa2, #4a148c); color: white; border: none; padding: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px; width: 100%; }
         .calc-result { background: #2a2e39; padding: 15px; border-radius: 4px; border: 1px solid #363c4e; }
+        
         .ai-box { background: #1e222d; padding: 15px; border-radius: 6px; font-size: 13px; line-height: 1.6; border: 1px solid #363c4e; margin-top: 10px; margin-bottom: 20px; height: auto !important; min-height: 80px; flex-shrink: 0; white-space: pre-wrap; word-wrap: break-word; overflow: visible; }
+
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-        input[type=number] { -moz-appearance: textfield; background: #2a2e39; border: 1px solid #363c4e; color: #fff; padding: 12px; border-radius: 6px; width: 100%; box-sizing: border-box; font-size: 15px; text-align: center; outline: none; margin-top: 5px; }
+        input[type=number] { -moz-appearance: textfield; appearance: textfield; background: #2a2e39; border: 1px solid #363c4e; color: #fff; padding: 12px; border-radius: 6px; width: 100%; box-sizing: border-box; font-size: 15px; text-align: center; outline: none; margin-top: 5px; }
         input:focus { border-color: #2962ff; background: #1e222d; }
+
         .astra-logo { position: absolute; bottom: 50px; left: 20px; z-index: 5; display: flex; align-items: center; gap: 10px; opacity: 0.2; pointer-events: none; transition: 0.3s; }
         .astra-logo img { height: 38px; width: auto; }
         .t-main { font-size: 16px; font-weight: 900; color: #fff; letter-spacing: 2px; }
         .t-sub { font-size: 9px; color: #d1d4dc; margin-top: 3px; }
+
+        /* Модальное окно */
+        #modalOverlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); z-index: 1000; display: none; align-items: center; justify-content: center; }
+        #modalOverlay.active { display: flex; }
+        
+        .settings-box { 
+            background: #1e222d; 
+            border: 1px solid #2962ff; 
+            padding: 30px; 
+            border-radius: 12px; 
+            width: 320px; 
+            position: relative; 
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5); 
+        }
+        .settings-box h2 { margin: 0 0 20px 0; font-size: 18px; color: #fff; text-align: center; }
+        .settings-box label { display: block; margin-bottom: 5px; color: #8f98a3; font-size: 11px; }
+        .settings-box input { background: #2a2e39; border: 1px solid #363c4e; color: #fff; padding: 10px; border-radius: 6px; width: 100%; box-sizing: border-box; font-size: 14px; margin-bottom: 15px; text-align: left; }
+        .settings-box button.save-btn { background: #2962ff; color: #fff; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; width: 100%; transition: 0.2s; }
+        .settings-box button.save-btn:hover { background: #1e88e5; }
+        
+        .modal-close-btn { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: #8f98a3; font-size: 24px; cursor: pointer; line-height: 1; padding: 5px; transition: 0.2s; }
+        .modal-close-btn:hover { color: #fff; }
+
         .account-card { background: linear-gradient(135deg, #1e222d 0%, #161925 100%); border: 1px solid #2962ff; padding: 15px; border-radius: 8px; margin-top: 10px; }
         .stat-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 13px; }
         .progress-bg { background: #363c4e; height: 6px; border-radius: 3px; margin-top: 5px; overflow: hidden; }
         .progress-fill { height: 100%; transition: 0.3s; }
         .risk-warn { color: #ef5350; font-size: 11px; margin-top: 5px; font-weight: bold; display: none; }
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
+
+        /* Скроллбар */
+        ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #1e222d; }
         ::-webkit-scrollbar-thumb { background: #363c4e; border-radius: 10px; border: 2px solid #1e222d; }
-        #chart-container:hover .astra-logo { opacity: 0.5; }
-        .astra-logo img { height: 38px; width: auto; }
-        .astra-text { display: flex; flex-direction: column; line-height: 1; }
-        .t-main { font-size: 16px; font-weight: 900; color: #fff; letter-spacing: 2px; }
-        .t-sub { font-size: 9px; color: #d1d4dc; margin-top: 3px; }
     </style>
 </head>
 <body>
@@ -48,7 +94,7 @@
     <div class="status-bar"> 
         XAU/USD • 
         <select id="tf-select" onchange="window.currentTF = this.value; refreshData();" 
-            style="background:#2a2e39; color:#2962ff; border:1px solid #363c4e; padding: 2px 5px; border-radius: 4px; font-weight:bold; cursor:pointer; outline:none; margin: 0 5px;">
+            style="background:#2a2e39; color:#2962ff; border:none; font-weight:bold; cursor:pointer; outline:none; margin: 0 5px;">
             <option value="M15">M15</option>
             <option value="H1">H1</option>
             <option value="H4">H4</option>
@@ -65,6 +111,7 @@
 </div>
 
 <div id="sidebar">
+    <div class="user-profile-btn" onclick="toggleSettings()">Log in 👤</div>
     <h3>Анализ Золота</h3>
     <div style="display: flex; flex-direction: column; gap: 8px;">
         <button class="btn-mode" id="btn-entry" onclick="setMode('entry')">📍 Установить Entry</button>
@@ -89,8 +136,24 @@
     <div id="aiResponse" class="ai-box">Установите уровни на графике.</div>
 </div>
 
+<!-- Модальное окно авторизации -->
+<div id="modalOverlay" onclick="handleOverlayClick(event)">
+    <div class="settings-box">
+        <button class="modal-close-btn" onclick="toggleSettings()">×</button>
+        <h2>Авторизация</h2>
+        <label>MT5 LOGIN</label>
+        <input type="text" id="mt5-login" placeholder="Введите логин">
+        <label>MT5 PASSWORD</label>
+        <input type="password" id="mt5-password" placeholder="Введите пароль">
+        <label>MT5 SERVER</label>
+        <input type="text" id="mt5-server" placeholder="Введите сервер">
+        <button class="save-btn" onclick="saveAccount()">Подключить счет</button>
+        <div id="settingsStatus" style="margin-top: 10px; text-align: center; font-size: 12px;"></div>
+    </div>
+</div>
+
 <script>
-    const GEMINI_KEY = "AIzaSyCGPYPm59RlXKZLNfje9UVon6FY8OIHY4s"; // меняем в случае истечения запросов
+    const GEMINI_KEY = "AIzaSyCGPYPm59RlXKZLNfje9UVon6FY8OIHY4s";
     const START_BALANCE = 5000;
     const DAILY_LOSS_LIMIT = 250;
     let currentBalance = 5000;
@@ -162,9 +225,9 @@
     });
 
     function drawSetup() {
-        const e = parseFloat(document.getElementById('input-entry').value.replace(',', '.'));
-        const s = parseFloat(document.getElementById('input-sl').value.replace(',', '.'));
-        const t = parseFloat(document.getElementById('input-tp').value.replace(',', '.'));
+        const e = parseFloat(document.getElementById('input-entry').value.toString().replace(',', '.'));
+        const s = parseFloat(document.getElementById('input-sl').value.toString().replace(',', '.'));
+        const t = parseFloat(document.getElementById('input-tp').value.toString().replace(',', '.'));
         if (entryLine) candleSeries.removePriceLine(entryLine);
         if (slLine) candleSeries.removePriceLine(slLine);
         if (tpLine) candleSeries.removePriceLine(tpLine);
@@ -182,10 +245,10 @@
     }
 
     function calculateLot() {
-        const e = parseFloat(document.getElementById('input-entry').value.replace(',', '.'));
-        const s = parseFloat(document.getElementById('input-sl').value.replace(',', '.'));
-        const t = parseFloat(document.getElementById('input-tp').value.replace(',', '.'));
-        if (isNaN(e) || isNaN(s) || isNaN(t) || e === s) return "0.00";
+        const e = parseFloat(document.getElementById('input-entry').value.toString().replace(',', '.'));
+        const s = parseFloat(document.getElementById('input-sl').value.toString().replace(',', '.'));
+        const t = parseFloat(document.getElementById('input-tp').value.toString().replace(',', '.'));
+        if (!e || !s || !t || e === s) return "0.00";
         const stopPoints = Math.abs(e - s), profitPoints = Math.abs(t - e), rr = profitPoints / stopPoints;
         if (rr < 2.0) return "0.00"; 
         const riskTargetUSD = currentBalance * 0.005;
@@ -272,6 +335,35 @@
         aiDiv.innerText = "Ошибка ИИ. Проверь VPN.";
     }
 }
+
+    function toggleSettings() {
+        const overlay = document.getElementById('modalOverlay');
+        overlay.classList.toggle('active');
+    }
+
+    function handleOverlayClick(event) {
+        if (event.target.id === 'modalOverlay') toggleSettings();
+    }
+
+    async function saveAccount() {
+        const login = document.getElementById('mt5-login').value;
+        const password = document.getElementById('mt5-password').value;
+        const server = document.getElementById('mt5-server').value;
+        const statusDiv = document.getElementById('settingsStatus');
+        if (!login || !password || !server) { statusDiv.innerText = 'Заполните все поля'; return; }
+        statusDiv.innerText = 'Подключение...';
+        try {
+            const response = await fetch('http://127.0.0.1:5000/login', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ login, password, server })
+            });
+            const data = await response.json();
+            if (data.success) {
+                statusDiv.style.color = '#26a69a'; statusDiv.innerText = 'Успешно!';
+                setTimeout(() => { refreshData(); toggleSettings(); }, 1000);
+            } else { statusDiv.style.color = '#ef5350'; statusDiv.innerText = data.error; }
+        } catch (e) { statusDiv.innerText = 'Ошибка соединения'; }
+    }
 
     setInterval(refreshData, 3000);
     refreshData();

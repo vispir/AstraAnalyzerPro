@@ -63,6 +63,31 @@ def stats():
     selected_tf = request.args.get('tf', 'M15')
     return jsonify(get_mt5_data(selected_tf))
 
+@app.route('/login', methods=['POST'])
+def login():
+    try:
+        data = request.get_json()
+        login = data.get('login')
+        password = data.get('password')
+        server = data.get('server')
+
+        if not login or not password or not server:
+            return jsonify({"success": False, "error": "Не все поля заполнены"}), 400
+
+        if not mt5.initialize():
+            return jsonify({"success": False, "error": "MT5 не запущен"}), 500
+
+        result = mt5.login(int(login), password, server)
+
+        if result:
+            return jsonify({"success": True, "message": "Подключение успешно"})
+        else:
+            error_code = mt5.last_error()
+            return jsonify({"success": False, "error": f"Ошибка подключения: код {error_code[0]}, {error_code[1]}"}), 400
+
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Ошибка сервера: {str(e)}"}), 500
+
 if __name__ == '__main__':
     print("--- ASTRA SERVER: PRO MULTI-TF ACTIVE ---")
     app.run(port=5000)
