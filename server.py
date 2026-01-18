@@ -12,6 +12,7 @@ from config.settings import FLASK_PORT, FLASK_DEBUG, SYMBOL
 # Импорт роутов
 from routes.market_routes import market_bp
 from routes.analysis_routes import analysis_bp
+from routes.news_routes import news_bp
 
 # Настройка логирования
 logging.basicConfig(
@@ -31,6 +32,7 @@ CORS(app)
 # Регистрация blueprints
 app.register_blueprint(market_bp, url_prefix='/api/market')
 app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
+app.register_blueprint(news_bp, url_prefix='/api/news')
 
 
 # Корневой роут (для обратной совместимости)
@@ -57,6 +59,13 @@ def index():
                 "breakeven": "/api/analysis/breakeven (POST)",
                 "drawdown": "/api/analysis/drawdown (POST)",
                 "ai_status": "/api/analysis/ai-status"
+            },
+            "news": {
+                "all": "/api/news/all?currency=USD&impact=High",
+                "upcoming": "/api/news/upcoming?hours=24",
+                "today": "/api/news/today",
+                "high_impact": "/api/news/high-impact",
+                "gold_relevant": "/api/news/gold-relevant"
             }
         }
     })

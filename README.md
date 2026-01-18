@@ -1,22 +1,36 @@
 # 🌟 Astra Analyzer Pro
 
-Профессиональная система анализа торговли XAUUSD с интеграцией MetaTrader 5 и AI-рекомендациями через Gemini API.
+Профессиональная система анализа торговли золотом (XAUUSD) с AI-рекомендациями через Gemini API и интеграцией экономических новостей.
 
 ## 🚀 Возможности
 
+### 📊 Анализ графиков
 - ✅ Мультитаймфреймовый анализ (M15, H1, H4)
-- ✅ Автоматический расчет лота на основе риск-менеджмента (0.5% от баланса)
+- ✅ Автоматическая агрегация H1 → H4 свечей
+- ✅ Интерактивные графики в стиле TradingView (Lightweight Charts)
+- ✅ Реальные данные через Yahoo Finance
+
+### 💰 Риск-менеджмент
+- ✅ Автоматический расчет лота (0.5% от баланса)
 - ✅ Проверка R:R соотношения (минимум 1:2)
-- ✅ AI анализ сделок через Gemini API
 - ✅ Контроль дневной просадки
-- ✅ Интерактивный график в стиле TradingView
-- ✅ Безопасное хранение API ключей
+- ✅ Калькулятор позиции
+
+### 🤖 AI и Новости
+- ✅ AI анализ сделок через Gemini API
+- ✅ Экономический календарь (investpy)
+- ✅ Геополитические новости о золоте (gnews)
+- ✅ Комбинированная лента новостей
+
+### 🔐 Безопасность
+- ✅ Безопасное хранение API ключей (.env)
+- ✅ Модульная архитектура
+- ✅ CORS защита
 
 ## 📋 Требования
 
 - Python 3.8+
-- MetaTrader 5
-- Аккаунт Gemini API (для AI анализа)
+- Gemini API ключ (для AI анализа)
 
 ## 🔧 Установка
 
@@ -33,22 +47,22 @@ pip install -r requirements.txt
 
 ### 3. Настройте переменные окружения
 
-Переименуйте `env.template` в `.env`:
+Скопируйте `env.template` в `.env`:
 ```bash
 # Windows
-ren env.template .env
+copy env.template .env
 
 # Linux/Mac
-mv env.template .env
+cp env.template .env
 ```
 
 Откройте `.env` и настройте параметры:
 ```env
 # API Keys
-GEMINI_API_KEY=your_actual_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 
 # Trading Configuration
-SYMBOL=XAUUSD
+YAHOO_SYMBOL=GC=F
 START_BALANCE=5000
 DAILY_LOSS_LIMIT=250
 MAX_LOT_SIZE=0.10
@@ -61,15 +75,13 @@ FLASK_DEBUG=False
 
 ### 4. Получите Gemini API ключ
 
-1. Перейдите на [Google AI Studio](https://makersuite.google.com/app/apikey)
+1. Перейдите на [Google AI Studio](https://aistudio.google.com/app/apikey)
 2. Создайте новый API ключ
-3. Вставьте его в `.env` файл
+3. Вставьте его в `.env` файл (`GEMINI_API_KEY`)
 
 ## 🎯 Запуск
 
-### 1. Убедитесь, что MetaTrader 5 запущен
-
-### 2. Запустите backend сервер
+### 1. Запустите backend сервер
 ```bash
 python server.py
 ```
@@ -78,14 +90,18 @@ python server.py
 ```
 ==================================================
 ASTRA ANALYZER PRO - SERVER STARTING
-Symbol: XAUUSD
+Yahoo Symbol: GC=F
 Port: 5000
 ==================================================
 ```
 
-### 3. Откройте frontend
+### 2. Откройте frontend
 
 Откройте `main.html` в браузере или используйте Live Server в VS Code.
+
+Приложение будет доступно по адресу:
+- Backend API: `http://127.0.0.1:5000`
+- Frontend: `main.html` (откройте в браузере)
 
 ## 📖 Использование
 
@@ -106,23 +122,55 @@ Port: 5000
 
 ## 🏗️ Архитектура
 
-### Backend (server.py)
-- **Flask API** на порту 5000
-- **4 эндпоинта**:
-  - `GET /stats?tf=M15` - получение данных графика
-  - `GET /config` - получение конфигурации
-  - `POST /calculate` - расчет лота и R:R
-  - `POST /analyze` - AI анализ сделки
+### Backend (модульная структура)
+
+```
+AstraAnalyzerPro/
+├── server.py              # Главный сервер
+├── config/
+│   └── settings.py        # Конфигурация
+├── services/
+│   ├── yfinance_service.py   # Получение данных золота
+│   ├── gemini_service.py     # AI анализ
+│   ├── calculator.py         # Расчет лота и R:R
+│   └── news_service.py       # Экономические новости
+└── routes/
+    ├── market_routes.py      # API рынка
+    ├── analysis_routes.py    # API анализа
+    └── news_routes.py        # API новостей
+```
+
+### API Endpoints
+
+#### 📊 Market (рынок)
+- `GET /api/market/candles?tf=H4&limit=50` - свечи по таймфрейму
+- `GET /api/market/candles` - данные для AI (H4, H1, M15)
+- `GET /api/market/config` - конфигурация приложения
+
+#### 🤖 Analysis (анализ)
+- `POST /api/analysis/calculate` - расчет лота и R:R
+- `POST /api/analysis/analyze` - AI анализ сделки
+
+#### 📰 News (новости)
+- `GET /api/news/feed` - комбинированная лента новостей ⭐
+- `GET /api/news/upcoming?hours=12` - предстоящие события
+- `GET /api/news/past?hours=24` - прошедшие события
+- `GET /api/news/geopolitical?days=7` - геополитические новости
+- `GET /api/news/all` - все новости недели
+- `GET /api/news/today` - новости на сегодня
+- `GET /api/news/high-impact` - только High важности
 
 ### Frontend (main.html)
 - **Lightweight Charts** для графиков
 - Чистый JavaScript (без фреймворков)
 - Адаптивный UI в стиле TradingView
+- Динамическое переключение таймфреймов
 
-### Безопасность
-- ✅ API ключи в `.env` файле
-- ✅ `.gitignore` защищает секреты
-- ✅ Все AI запросы через backend
+### Источники данных
+- **Yahoo Finance** (yfinance) - котировки золота
+- **Investing.com** (investpy) - экономический календарь
+- **Google News** (gnews) - геополитические новости
+- **Gemini API** - AI анализ
 
 ## ⚙️ Конфигурация
 
@@ -130,31 +178,99 @@ Port: 5000
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `GEMINI_API_KEY` | API ключ для Gemini | - |
-| `SYMBOL` | Торговый инструмент | XAUUSD |
+| `GEMINI_API_KEY` | API ключ для AI анализа | - |
+| `YAHOO_SYMBOL` | Тикер Yahoo Finance | GC=F (Gold Futures) |
 | `START_BALANCE` | Начальный баланс | 5000 |
 | `DAILY_LOSS_LIMIT` | Лимит дневной просадки | 250 |
 | `MAX_LOT_SIZE` | Максимальный размер лота | 0.10 |
 | `RISK_PERCENT` | Процент риска на сделку | 0.005 (0.5%) |
 | `FLASK_PORT` | Порт сервера | 5000 |
+| `FLASK_DEBUG` | Режим отладки | False |
+
+### Таймфреймы
+
+| TF | Описание | Источник данных |
+|----|----------|-----------------|
+| M15 | 15 минут | Yahoo Finance (15m) |
+| H1 | 1 час | Yahoo Finance (1h) |
+| H4 | 4 часа | Агрегация из H1 (200→50 свечей) |
 
 ## 🐛 Устранение неполадок
 
-### "MT5 не запущен"
-- Убедитесь, что MetaTrader 5 запущен
-- Проверьте, что терминал авторизован
-
 ### "SERVER OFFLINE"
+**Решение:**
 - Проверьте, что `server.py` запущен
 - Убедитесь, что порт 5000 не занят
+- Проверьте firewall/антивирус
+
+### "Error fetching candles"
+**Решение:**
+- Проверьте интернет-соединение
+- Yahoo Finance может быть временно недоступен
+- Убедитесь, что `YAHOO_SYMBOL=GC=F` в `.env`
 
 ### "ЛИМИТ ЗАПРОСОВ AI"
-- Gemini API имеет лимиты на бесплатном тарифе
-- Подождите несколько минут или обновите API ключ
+**Решение:**
+- Gemini API имеет rate limits
+- Подождите несколько минут
+- Проверьте квоты в [Google AI Studio](https://aistudio.google.com)
 
 ### "Ошибка AI. Проверь VPN"
+**Решение:**
 - Gemini API может быть недоступен в вашем регионе
-- Попробуйте использовать VPN
+- Используйте VPN
+- Проверьте правильность API ключа
+
+### "investpy library is not installed"
+**Решение:**
+```bash
+pip install investpy
+```
+
+### "gnews library is not installed"
+**Решение:**
+```bash
+pip install gnews
+```
+
+### H4 свечи выглядят странно
+**Это нормально!** H4 свечи агрегируются из H1 данных (4 свечи H1 → 1 свеча H4), так как Yahoo Finance не предоставляет прямой интервал 4h.
+
+## 📊 Особенности реализации
+
+### Агрегация H4 свечей
+Yahoo Finance не поддерживает интервал 4h напрямую. Решение:
+- Запрашиваем 200 свечей H1
+- Агрегируем 4 H1 свечи → 1 H4 свеча
+- Получаем 50 H4 свечей
+
+### Фильтрация новостей
+Все новости автоматически фильтруются:
+- **Важность**: только High и Medium (Low исключены)
+- **Валюта**: только USD (релевантно для золота)
+- **Период**: upcoming (12ч), past (24ч), geopolitical (7 дней)
+
+### Комбинированная лента `/api/news/feed`
+Возвращает три категории новостей в одном запросе:
+```json
+{
+  "upcoming": { "count": 5, "events": [...] },
+  "past": { "count": 8, "events": [...] },
+  "geopolitical": { "count": 15, "articles": [...] }
+}
+```
+
+## 📦 Зависимости
+
+Основные библиотеки:
+- `Flask` - веб-сервер
+- `yfinance` - данные Yahoo Finance
+- `investpy` - экономический календарь
+- `gnews` - геополитические новости
+- `pandas` - обработка данных
+- `python-dotenv` - переменные окружения
+
+Полный список в `requirements.txt`
 
 ## 📝 Лицензия
 
@@ -162,7 +278,7 @@ MIT License
 
 ## 🤝 Вклад в проект
 
-Пул-реквесты приветствуются! Для крупных изменений сначала откройте issue.
+Pull requests приветствуются! Для крупных изменений сначала откройте issue.
 
 ## 📧 Контакты
 
@@ -170,4 +286,4 @@ MIT License
 
 ---
 
-**Сделано с ❤️ для трейдеров**
+**Сделано с ❤️ для трейдеров золота 🏆**
