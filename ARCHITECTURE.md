@@ -37,7 +37,6 @@ AstraAnalyzerPro/
 
 **yfinance_service.py** - Данные с Yahoo Finance
 - `get_candles()` - получение свечных данных
-- `get_ai_context()` - данные для AI анализа
 - `get_current_price()` - текущая цена
 - `get_ticker_info()` - информация о тикере
 - `validate_symbol()` - проверка доступности
@@ -121,8 +120,6 @@ Frontend → POST /api/analysis/analyze
            {entry, sl, tp, balance, equity, lot}
           ↓
        analysis_routes.analyze_trade()
-          ↓
-       yfinance_service.get_ai_context()
           ↓
        gemini_service.analyze_trade()
           ↓

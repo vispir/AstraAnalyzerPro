@@ -8,8 +8,7 @@ from typing import Dict, List, Optional
 from config.settings import (
     YAHOO_SYMBOL, 
     TIMEFRAME_MAP, 
-    PERIOD_MAP,
-    AI_CONTEXT_BARS
+    PERIOD_MAP
 )
 
 # Фикс для кириллицы: принудительно отключаем проверку сертификатов на уровне ОС
@@ -65,16 +64,26 @@ class YFinanceService:
             
             candles = []
             for index, row in df.iterrows():
+                def get_val(val):
+                    return val.iloc[0] if hasattr(val, 'iloc') else val
                 candles.append({
                     "time": int(index.timestamp()),
-                    "open": float(row['Open']),
-                    "high": float(row['High']),
-                    "low": float(row['Low']),
-                    "close": float(row['Close']),
-                    "volume": int(row['Volume'])
+                    "open": round(float(get_val(row['Open'])), 2),
+                    "high": round(float(get_val(row['High'])), 2),
+                    "low": round(float(get_val(row['Low'])), 2),
+                    "close": round(float(get_val(row['Close'])), 2),
+                    "volume": int(float(get_val(row['Volume']))) if 'Volume' in row else 0
                 })
             
-            return {"success": True, "symbol": self.symbol, "candles": candles}
+            logger.info(f"Successfully fetched {len(candles)} candles")
+            
+            return {
+                "success": True,
+                "symbol": self.symbol,
+                "timeframe": timeframe,
+                "candles": candles,
+                "count": len(candles)
+            }
             
         except Exception as e:
             logger.error(f"Error: {str(e)}")

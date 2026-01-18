@@ -4,3 +4,5 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 yfinance>=1.0.0
 pandas>=2.0.0
+investpy>=1.0.8
+gnews>=0.3.7
