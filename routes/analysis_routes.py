@@ -76,12 +76,8 @@ def analyze_trade():
         lot = data.get('lot', 0)
         ai_context = data.get('ai_context')
         
-        if not all([entry, sl, tp, balance, equity]):
+        if not all([entry, sl, tp, balance, equity, ai_context]):
             return jsonify({"error": "Недостаточно данных для анализа"}), 400
-        
-        # Если контекст не передан, получаем его
-        if not ai_context:
-            ai_context = yfinance_service.get_ai_context()
         
         result = gemini_service.analyze_trade(
             float(entry),

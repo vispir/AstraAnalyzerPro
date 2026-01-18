@@ -9,8 +9,7 @@ from typing import Dict, List, Optional
 from config.settings import (
     YAHOO_SYMBOL, 
     TIMEFRAME_MAP, 
-    PERIOD_MAP,
-    AI_CONTEXT_BARS
+    PERIOD_MAP
 )
 
 logger = logging.getLogger(__name__)
@@ -89,10 +88,10 @@ class YFinanceService:
             for index, row in df.iterrows():
                 candles.append({
                     "time": int(index.timestamp()),
-                    "open": float(row['Open']),
-                    "high": float(row['High']),
-                    "low": float(row['Low']),
-                    "close": float(row['Close']),
+                    "open": round(float(row['Open']), 2),
+                    "high": round(float(row['High']), 2),
+                    "low": round(float(row['Low']), 2),
+                    "close": round(float(row['Close']), 2),
                     "volume": int(row['Volume']) if 'Volume' in row else 0
                 })
             
@@ -110,60 +109,18 @@ class YFinanceService:
             logger.error(f"Error fetching candles: {str(e)}")
             return {"error": f"Ошибка получения данных: {str(e)}"}
     
-    def get_ai_context(self) -> Dict:
-        """
-        Получение сокращенных данных для AI анализа (несколько таймфреймов)
-        
-        Returns:
-            Dict с данными по разным таймфреймам
-        """
-        try:
-            context = {}
-            
-            for tf, bars_count in AI_CONTEXT_BARS.items():
-                interval = TIMEFRAME_MAP.get(tf, '15m')
-                period = PERIOD_MAP.get(tf, '5d')
-                
-                df = self.ticker.history(period=period, interval=interval)
-                
-                if not df.empty:
-                    # Берем только последние N свечей
-                    df_last = df.tail(bars_count)
-                    
-                    # Сокращенный формат (только H, L, C)
-                    context[tf] = [
-                        {
-                            "h": float(row['High']),
-                            "l": float(row['Low']),
-                            "c": float(row['Close'])
-                        }
-                        for _, row in df_last.iterrows()
-                    ]
-                else:
-                    context[tf] = []
-                    
-            return context
-            
-        except Exception as e:
-            logger.error(f"Error fetching AI context: {str(e)}")
-            return {
-                "M15": [],
-                "H1": [],
-                "H4": []
-            }
-    
     def get_current_price(self) -> Optional[float]:
         """
         Получение текущей цены
         
         Returns:
-            Текущая цена или None
+            Текущая цена (округлена до 2 знаков) или None
         """
         try:
             # Получаем последнюю свечу на минутном интервале
             df = self.ticker.history(period='1d', interval='1m')
             if not df.empty:
-                return float(df['Close'].iloc[-1])
+                return round(float(df['Close'].iloc[-1]), 2)
             return None
         except Exception as e:
             logger.error(f"Error fetching current price: {str(e)}")
