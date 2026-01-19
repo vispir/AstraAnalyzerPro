@@ -9,6 +9,7 @@ load_dotenv()
 
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY') 
 
 # Trading Configuration
 SYMBOL = os.getenv('SYMBOL', 'XAUUSD')

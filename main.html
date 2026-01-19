@@ -41,18 +41,43 @@
         .astra-text { display: flex; flex-direction: column; line-height: 1; }
         .t-main { font-size: 16px; font-weight: 900; color: #fff; letter-spacing: 2px; }
         .t-sub { font-size: 9px; color: #d1d4dc; margin-top: 3px; }
+        .status-bar select { background-color: #1e222d; color: #b2b5be; border: 1px solid #363c4e; border-radius: 4px; padding: 4px 24px 4px 8px; /* Место справа под стрелочку */ font-size: 12px; font-weight: 600; cursor: pointer; outline: none; transition: all 0.2s ease; -webkit-appearance: none; -moz-appearance: none; appearance: none;
+        /* Добавляем свою аккуратную стрелочку через SVG */
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238f98a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 8px center;
+    }
+
+/* Цвет для Таймфрейма (Синий акцент) */
+#tf-select { color: #2962ff; border-color: rgba(41, 98, 255, 0.3); }
+
+#tf-select:hover { background-color: rgba(41, 98, 255, 0.05); border-color: #2962ff; }
+
+/* Цвет для Источника (Желтый акцент) */
+#source-select { color: #d1d4dc; border-color: #363c4e; }
+
+#source-select:hover { background-color: #2a2e39; border-color: #8f98a3; }
+
+/* Стиль для выпадающего списка (в некоторых браузерах) */
+.status-bar option { background-color: #1e222d; color: #fff; }
+
+/* Чтобы текст "XAU/USD" не терялся */
+.status-bar span:first-child { color: #fff; font-weight: 800; letter-spacing: 0.5px; }
     </style>
 </head>
 <body>
 
 <div id="chart-container">
     <div class="status-bar"> 
-        <span id="symbol-text">XAU/USD</span> • 
-        <select id="tf-select" onchange="window.currentTF = this.value; refreshData();" 
-            style="background:#2a2e39; color:#2962ff; border:1px solid #363c4e; padding: 2px 5px; border-radius: 4px; font-weight:bold; cursor:pointer; outline:none; margin: 0 5px;">
+        <span style="color: #8f98a3; font-weight: bold;">XAU/USD</span> • 
+        <select id="tf-select" onchange="window.currentTF = this.value; refreshData();">
             <option value="M15">M15</option>
             <option value="H1">H1</option>
             <option value="H4">H4</option>
+        </select> • 
+        <select id="source-select" onchange="window.currentSource = this.value; refreshData();">
+            <option value="twelvedata">Twelve Data (Fast)</option>
+            <option value="yfinance">Yahoo Finance (Slow)</option>
         </select> • 
         <span id="status-text">ПОДКЛЮЧЕНИЕ...</span>
     </div>
@@ -100,6 +125,7 @@
     let currentHistory = [];
     let aiContextData = {};
     window.currentTF = "M15";
+    window.currentSource = "twelvedata";
 
     // Инициализация графика
     const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
@@ -134,41 +160,50 @@
 
     // Обновление данных графика
     async function refreshData() {
-        try {
-            // Определяем лимит свечей в зависимости от таймфрейма
-            const limit = window.currentTF === 'H4' ? 50 : 200;
-            
-            // Получаем данные свечей для текущего таймфрейма
-            const response = await fetch(`${API_BASE}/api/market/candles?tf=${window.currentTF}&limit=${limit}`);
-            const data = await response.json();
-            
-            if (data.error) { 
-                document.getElementById('status-text').innerText = "API OFFLINE"; 
-                return; 
-            }
-            
-            // Обрабатываем данные свечей
-            if (data.candles && data.candles.length > 0) {
-                // Yahoo Finance уже возвращает правильный timestamp
-                const formatted = data.candles.map(d => ({ 
-                    time: d.time,
-                    open: d.open, 
-                    high: d.high, 
-                    low: d.low, 
-                    close: d.close 
-                }));
-                candleSeries.setData(formatted);
-                currentHistory = formatted;
-            }
-            
-            updateMarketStatusUI();
-            updateRiskBar();
-            
-        } catch (e) { 
-            console.error('Refresh error:', e);
-            document.getElementById('status-text').innerText = "SERVER OFFLINE"; 
+    try {
+        // 1. Определяем лимит свечей
+        const limit = window.currentTF === 'H4' ? 50 : 200;
+        
+        // 2. Источник (если вдруг не задан, ставим twelvedata)
+        const source = window.currentSource || 'twelvedata';
+
+        // 3. Делаем запрос с учетом ТФ, Лимита и Источника
+        const response = await fetch(`${API_BASE}/api/market/candles?tf=${window.currentTF}&limit=${limit}&source=${source}`);
+        const data = await response.json();
+        
+        if (data.error) { 
+            document.getElementById('status-text').innerText = "API OFFLINE"; 
+            console.error("API Error:", data.error);
+            return; 
         }
+        
+        // 4. Отрисовываем свечи
+        if (data.candles && data.candles.length > 0) {
+            const formatted = data.candles.map(d => ({ 
+                time: d.time,
+                open: d.open, 
+                high: d.high, 
+                low: d.low, 
+                close: d.close 
+            }));
+            candleSeries.setData(formatted);
+            currentHistory = formatted;
+            
+            // Если в ответе пришел анализ, сохраняем его (для ИИ)
+            if (data.analysis) {
+                window.lastAnalysis = data.analysis;
+            }
+        }
+        // 5. Обновляем статус сервера и рынок
+        document.getElementById('status-text').innerText = `LIVE (${source.toUpperCase()})`;
+        updateMarketStatusUI();
+        updateRiskBar();
+
+    } catch (e) { 
+        console.error('Refresh error:', e);
+        document.getElementById('status-text').innerText = "SERVER OFFLINE"; 
     }
+}
 
     // Загрузка AI контекста (вызывается только перед анализом)
     async function loadAIContext() {
