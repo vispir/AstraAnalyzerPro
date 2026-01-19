@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 import logging
 
 from services.yfinance_service import yfinance_service
+from services.calculator import calculator
 from config.settings import (
     SYMBOL,
     START_BALANCE,
@@ -45,9 +46,13 @@ def get_candles():
             h4_data = yfinance_service.get_candles('H4', limit=10)
             h1_data = yfinance_service.get_candles('H1', limit=20)
             m15_data = yfinance_service.get_candles('M15', limit=50)
+
+            h4_raw = yfinance_service.get_candles('H4', limit=40)
+            h1_raw = yfinance_service.get_candles('H1', limit=40)
+            m15_raw = yfinance_service.get_candles('M15', limit=60)
             
             # Проверяем на ошибки
-            if "error" in h4_data or "error" in h1_data or "error" in m15_data:
+            if "error" in h4_data or "error" in h1_data or "error" in m15_data or "error" in h4_raw or "error" in h1_raw or "error" in m15_raw:
                 return jsonify({
                     "error": "Ошибка получения данных",
                     "details": {
@@ -56,6 +61,10 @@ def get_candles():
                         "M15": m15_data.get("error")
                     }
                 }), 500
+
+            h4_analysis = calculator.get_market_analysis(h4_raw.get("candles", []))
+            h1_analysis = calculator.get_market_analysis(h1_raw.get("candles", []))
+            m15_analysis = calculator.get_market_analysis(m15_raw.get("candles", []))
             
             # Формируем ответ
             return jsonify({
@@ -64,15 +73,18 @@ def get_candles():
                 "timeframes": {
                     "H4": {
                         "candles": h4_data.get("candles", []),
-                        "count": len(h4_data.get("candles", []))
+                        "count": len(h4_data.get("candles", [])),
+                        "analysis": h4_analysis
                     },
                     "H1": {
                         "candles": h1_data.get("candles", []),
-                        "count": len(h1_data.get("candles", []))
+                        "count": len(h1_data.get("candles", [])),
+                        "analysis": h1_analysis
                     },
                     "M15": {
                         "candles": m15_data.get("candles", []),
-                        "count": len(m15_data.get("candles", []))
+                        "count": len(m15_data.get("candles", [])),
+                        "analysis": m15_analysis
                     }
                 }
             })
@@ -87,6 +99,9 @@ def get_candles():
         
         if "error" in result:
             return jsonify(result), 500
+
+        if "candles" in result:
+            result["analysis"] = calculator.get_market_analysis(result["candles"])
             
         return jsonify(result)
         
