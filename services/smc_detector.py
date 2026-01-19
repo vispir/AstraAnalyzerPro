@@ -16,152 +16,128 @@ class SMCDetector:
     def __init__(self):
         pass
     
-    def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 30) -> List[Dict]:
-        """
-        Определение Order Blocks
-        OB = последняя противоположная свеча перед сильным импульсом
-        
-        Args:
-            df: DataFrame с OHLC данными
-            lookback: Количество свечей для поиска
-            
-        Returns:
-            Список Order Blocks
-        """
+    def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
         order_blocks = []
+        if len(df) < 5: return []
         
-        try:
-            if len(df) < 5:
-                return order_blocks
+        recent_df = df.tail(lookback)
+        current_price = df['Close'].iloc[-1] # Текущая цена для фильтрации
+        
+        for i in range(len(recent_df) - 3):
+            # Берем индексы относительно всего df, чтобы не путаться
+            idx = recent_df.index[i]
+            current = recent_df.iloc[i]     # Потенциальный OB
+            next1 = recent_df.iloc[i + 1]   # Свеча 1 после
+            next2 = recent_df.iloc[i + 2]   # Свеча 2 после
             
-            recent_df = df.tail(lookback)
-            
-            for i in range(2, len(recent_df) - 2):
-                current = recent_df.iloc[i]
-                next1 = recent_df.iloc[i + 1]
-                next2 = recent_df.iloc[i + 2] if i + 2 < len(recent_df) else None
+            # --- BULLISH OB (Sell to Buy) ---
+            # Была красная свеча, потом сильный вылет вверх
+            if current['Close'] < current['Open']: # Красная
+                # Импульс: Следующие свечи пробивают High красной свечи
+                # Проверяем не только next2, а совокупный вылет
+                break_level = current['High']
                 
-                # Определяем направление свечи
-                is_bearish = current['Close'] < current['Open']
-                is_bullish = current['Close'] > current['Open']
-                
-                # Bullish Order Block: медвежья свеча перед сильным бычьим движением
-                if is_bearish and next2 is not None:
-                    # Проверяем сильное движение вверх (мин 2 бычьи свечи)
-                    impulse_strength = (next2['High'] - current['Low']) / current['Low']
+                # Если next1 или next2 закрылись сильно выше
+                if (next1['Close'] > break_level or next2['Close'] > break_level):
+                     # Считаем силу движения (тело бычьей свечи относительно OB)
+                    move_size = max(next1['Close'], next2['Close']) - current['Low']
+                    ob_size = current['High'] - current['Low']
                     
-                    if (impulse_strength > 0.003 and  # Минимум 0.3% движение
-                        next1['Close'] > next1['Open'] and  # Следующая бычья
-                        next2['Close'] > current['High']):  # Пробой максимума OB
+                    # Фильтр: движение хотя бы в 2 раза больше размера OB (Imbalance)
+                    if move_size > ob_size * 2:
                         
+                        # !!! ГЛАВНЫЙ ФИЛЬТР: ЖИВ ЛИ БЛОК? !!!
+                        # Если текущая цена НИЖЕ дна блока -> он пробит (Failed)
+                        if current_price < current['Low']:
+                            continue
+                            
                         order_blocks.append({
                             'type': 'BULL_OB',
                             'top': float(current['High']),
                             'bottom': float(current['Low']),
-                            'strength': float(impulse_strength),
-                            'start_time': current.name,
-                            'end_time': recent_df.index[-1]
+                            'strength': float(move_size),
+                            'time': str(idx)
                         })
+
+            # --- BEARISH OB (Buy to Sell) ---
+            # Была зеленая свеча, потом сильный слив
+            if current['Close'] > current['Open']: # Зеленая
+                break_level = current['Low']
                 
-                # Bearish Order Block: бычья свеча перед сильным медвежьим движением
-                if is_bullish and next2 is not None:
-                    # Проверяем сильное движение вниз
-                    impulse_strength = (current['High'] - next2['Low']) / current['High']
+                if (next1['Close'] < break_level or next2['Close'] < break_level):
+                    move_size = current['High'] - min(next1['Close'], next2['Close'])
+                    ob_size = current['High'] - current['Low']
                     
-                    if (impulse_strength > 0.003 and  # Минимум 0.3% движение
-                        next1['Close'] < next1['Open'] and  # Следующая медвежья
-                        next2['Close'] < current['Low']):  # Пробой минимума OB
+                    if move_size > ob_size * 2:
                         
+                        # !!! ГЛАВНЫЙ ФИЛЬТР: ЖИВ ЛИ БЛОК? !!!
+                        # Если текущая цена ВЫШЕ верха блока -> он пробит
+                        if current_price > current['High']:
+                            continue
+                            
                         order_blocks.append({
                             'type': 'BEAR_OB',
                             'top': float(current['High']),
                             'bottom': float(current['Low']),
-                            'strength': float(impulse_strength),
-                            'start_time': current.name,
-                            'end_time': recent_df.index[-1]
+                            'strength': float(move_size),
+                            'time': str(idx)
                         })
-            
-            # Сортируем по силе и берем топ-3
-            order_blocks = sorted(order_blocks, key=lambda x: x['strength'], reverse=True)[:3]
-            
-            logger.info(f"Detected {len(order_blocks)} Order Blocks")
-            
-        except Exception as e:
-            logger.error(f"Error detecting Order Blocks: {str(e)}")
         
-        return order_blocks
+        # Возвращаем только самые свежие или сильные (например, последние 3)
+        return order_blocks[-3:]
     
-    def detect_fvg(self, df: pd.DataFrame, lookback: int = 40) -> List[Dict]:
-        """
-        Определение Fair Value Gaps (правильная логика)
-        FVG = гэп между свечами, когда средняя свеча НЕ заполняет пространство
-        
-        Args:
-            df: DataFrame с OHLC данными
-            lookback: Количество свечей для поиска
-            
-        Returns:
-            Список FVG с диапазонами (top и bottom)
-        """
+    def detect_fvg(self, df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
         fvg_list = []
+        if len(df) < 3: return []
         
-        try:
-            if len(df) < 3:
-                return fvg_list
-            
-            recent_df = df.tail(lookback)
-            
-            for i in range(1, len(recent_df) - 1):
-                candle1 = recent_df.iloc[i - 1]  # Предыдущая
-                candle2 = recent_df.iloc[i]      # Средняя (создает гэп)
-                candle3 = recent_df.iloc[i + 1]  # Следующая
-                
-                # Bullish FVG: Low свечи 3 > High свечи 1 (гэп вверх)
-                # Это значит, что между свечой 1 и 3 есть неторгованный диапазон
-                if candle3['Low'] > candle1['High']:
-                    gap_bottom = candle1['High']
-                    gap_top = candle3['Low']
-                    gap_size = gap_top - gap_bottom
-                    
-                    # Фильтр: минимальный размер гэпа (0.05% от цены)
-                    if gap_size > candle2['Close'] * 0.0005:
-                        fvg_list.append({
-                            'type': 'BULL_FVG',
-                            'top': float(gap_top),
-                            'bottom': float(gap_bottom),
-                            'gap_size': float(gap_size),
-                            'gap_percent': float(gap_size / candle2['Close'] * 100),
-                            'start_time': candle2.name,
-                            'end_time': recent_df.index[-1]
-                        })
-                
-                # Bearish FVG: High свечи 3 < Low свечи 1 (гэп вниз)
-                elif candle3['High'] < candle1['Low']:
-                    gap_top = candle1['Low']
-                    gap_bottom = candle3['High']
-                    gap_size = gap_top - gap_bottom
-                    
-                    # Фильтр: минимальный размер гэпа
-                    if gap_size > candle2['Close'] * 0.0005:
-                        fvg_list.append({
-                            'type': 'BEAR_FVG',
-                            'top': float(gap_top),
-                            'bottom': float(gap_bottom),
-                            'gap_size': float(gap_size),
-                            'gap_percent': float(gap_size / candle2['Close'] * 100),
-                            'start_time': candle2.name,
-                            'end_time': recent_df.index[-1]
-                        })
-            
-            # Сортируем по размеру гэпа и берем самые значимые (топ-3)
-            fvg_list = sorted(fvg_list, key=lambda x: x['gap_size'], reverse=True)[:3]
-            
-            logger.info(f"Detected {len(fvg_list)} FVG (gaps)")
-            
-        except Exception as e:
-            logger.error(f"Error detecting FVG: {str(e)}")
+        recent_df = df.tail(lookback)
+        current_price = df['Close'].iloc[-1]
         
-        return fvg_list
+        for i in range(1, len(recent_df) - 1):
+            candle1 = recent_df.iloc[i - 1]
+            candle2 = recent_df.iloc[i]      # Импульсная свеча
+            candle3 = recent_df.iloc[i + 1]
+            
+            # Минимальный размер гэпа (можно через ATR, но пока % ок для золота)
+            min_gap = candle2['Close'] * 0.0005 
+
+            # BULLISH FVG (Gap Up)
+            # Low третьей свечи все еще выше High первой
+            if candle3['Low'] > candle1['High']:
+                gap_size = candle3['Low'] - candle1['High']
+                if gap_size > min_gap:
+                    
+                    # ФИЛЬТР: Если цена уже ниже гэпа - он невалиден (или support стал resistance)
+                    # Для простоты пока просто отбрасываем
+                    if current_price < candle1['High']:
+                        continue
+                        
+                    fvg_list.append({
+                        'type': 'BULL_FVG',
+                        'top': float(candle3['Low']),
+                        'bottom': float(candle1['High']),
+                        'price': float((candle3['Low'] + candle1['High']) / 2), # Середина
+                        'gap_size': float(gap_size)
+                    })
+            
+            # BEARISH FVG (Gap Down)
+            elif candle3['High'] < candle1['Low']:
+                gap_size = candle1['Low'] - candle3['High']
+                if gap_size > min_gap:
+                    
+                    # ФИЛЬТР
+                    if current_price > candle1['Low']:
+                        continue
+                        
+                    fvg_list.append({
+                        'type': 'BEAR_FVG',
+                        'top': float(candle1['Low']),
+                        'bottom': float(candle3['High']),
+                        'price': float((candle1['Low'] + candle3['High']) / 2),
+                        'gap_size': float(gap_size)
+                    })
+                    
+        return fvg_list[-3:] # Топ-3 последних
     
     def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
         """
