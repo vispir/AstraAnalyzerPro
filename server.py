@@ -27,6 +27,7 @@ CORS(app)
 from routes.market_routes import market_bp
 from routes.analysis_routes import analysis_bp
 from routes.news_routes import news_bp
+from routes.chart_routes import chart_bp
 
 # Настройка логирования
 logging.basicConfig(
@@ -47,6 +48,7 @@ CORS(app)
 app.register_blueprint(market_bp, url_prefix='/api/market')
 app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
 app.register_blueprint(news_bp, url_prefix='/api/news')
+app.register_blueprint(chart_bp, url_prefix='/api/chart')
 
 
 # Корневой роут (для обратной совместимости)
