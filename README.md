@@ -18,6 +18,9 @@
 
 ### 🤖 AI и Новости
 - ✅ AI анализ сделок через Gemini API
+- ✅ **LLM анализ через OpenRouter** (Google Gemini 2.0 Flash - бесплатно!)
+- ✅ Автоматическая торговая сессия (London/NY overlap detection)
+- ✅ Комплексный анализ: графики + новости + SMC уровни
 - ✅ Экономический календарь (investpy)
 - ✅ Геополитические новости о золоте (gnews)
 - ✅ Комбинированная лента новостей
@@ -131,13 +134,18 @@ AstraAnalyzerPro/
 │   └── settings.py        # Конфигурация
 ├── services/
 │   ├── yfinance_service.py   # Получение данных золота
-│   ├── gemini_service.py     # AI анализ
+│   ├── gemini_service.py     # AI анализ (старый)
+│   ├── llm_service.py        # LLM анализ через OpenRouter ⭐ NEW
 │   ├── calculator.py         # Расчет лота и R:R
-│   └── news_service.py       # Экономические новости
+│   ├── news_service.py       # Экономические новости
+│   ├── chart_service.py      # Генерация графиков
+│   └── smc_detector.py       # SMC анализ
 └── routes/
     ├── market_routes.py      # API рынка
     ├── analysis_routes.py    # API анализа
-    └── news_routes.py        # API новостей
+    ├── news_routes.py        # API новостей
+    ├── chart_routes.py       # API графиков
+    └── llm_routes.py         # API LLM анализа ⭐ NEW
 ```
 
 ### API Endpoints
@@ -160,6 +168,18 @@ AstraAnalyzerPro/
 - `GET /api/news/today` - новости на сегодня
 - `GET /api/news/high-impact` - только High важности
 
+#### 📈 Charts (графики)
+- `GET /api/chart/generate?tf=M15` - генерация графика с SMC уровнями
+- Поддержка таймфреймов: M15, H1, H4
+- Возвращает изображение в base64 формате
+
+#### 🧠 LLM (AI анализ через OpenRouter) ⭐ NEW!
+- `GET /api/llm/analyze` - **полный анализ рынка с LLM**
+- `GET /api/llm/session` - текущая торговая сессия
+- `GET /api/llm/status` - статус LLM сервиса
+
+> 📖 Полная документация: [LLM_API.md](./LLM_API.md)
+
 ### Frontend (main.html)
 - **Lightweight Charts** для графиков
 - Чистый JavaScript (без фреймворков)
@@ -170,7 +190,8 @@ AstraAnalyzerPro/
 - **Yahoo Finance** (yfinance) - котировки золота
 - **Investing.com** (investpy) - экономический календарь
 - **Google News** (gnews) - геополитические новости
-- **Gemini API** - AI анализ
+- **Gemini API** - AI анализ (старый)
+- **OpenRouter** + Google Gemini 2.0 Flash - комплексный LLM анализ ⭐ NEW
 
 ## ⚙️ Конфигурация
 
@@ -179,6 +200,7 @@ AstraAnalyzerPro/
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `GEMINI_API_KEY` | API ключ для AI анализа | - |
+| `OPENROUTER_API_KEY` | API ключ для OpenRouter (опционально) | - |
 | `YAHOO_SYMBOL` | Тикер Yahoo Finance | GC=F (Gold Futures) |
 | `START_BALANCE` | Начальный баланс | 5000 |
 | `DAILY_LOSS_LIMIT` | Лимит дневной просадки | 250 |
@@ -186,6 +208,8 @@ AstraAnalyzerPro/
 | `RISK_PERCENT` | Процент риска на сделку | 0.005 (0.5%) |
 | `FLASK_PORT` | Порт сервера | 5000 |
 | `FLASK_DEBUG` | Режим отладки | False |
+
+> 💡 **Примечание:** `OPENROUTER_API_KEY` не требуется для бесплатной модели Google Gemini 2.0 Flash!
 
 ### Таймфреймы
 

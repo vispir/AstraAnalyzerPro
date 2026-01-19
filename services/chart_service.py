@@ -338,6 +338,140 @@ class ChartService:
                 bgcolor=self.colors['bg'],
                 opacity=0.8
             )
+        
+        # --- ADVANCED SMC LEVELS ---
+        if 'advanced' in data:
+            advanced = data['advanced']
+            key_levels = advanced.get('key_levels', {})
+            structure_points = advanced.get('structure_points', {})
+            
+            # DH (Daily High)
+            dh = key_levels.get('DH')
+            if dh and dh > 0:
+                fig.add_hline(
+                    y=dh,
+                    line_color="#E91E63",  # Розовый
+                    line_width=2.5,
+                    line_dash="solid",
+                    annotation_text="DH",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=11, color="white", family="Arial Black"),
+                        bgcolor="#E91E63",
+                        opacity=0.9
+                    )
+                )
+            
+            # DL (Daily Low)
+            dl = key_levels.get('DL')
+            if dl and dl > 0:
+                fig.add_hline(
+                    y=dl,
+                    line_color="#C2185B",  # Темно-розовый
+                    line_width=2.5,
+                    line_dash="solid",
+                    annotation_text="DL",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=11, color="white", family="Arial Black"),
+                        bgcolor="#C2185B",
+                        opacity=0.9
+                    )
+                )
+            
+            # PDH (Previous Day High)
+            pdh = key_levels.get('PDH')
+            if pdh and pdh > 0:
+                fig.add_hline(
+                    y=pdh,
+                    line_color="#9C27B0",  # Фиолетовый
+                    line_width=2,
+                    line_dash="longdash",
+                    annotation_text="PDH",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=10, color="white"),
+                        bgcolor="#9C27B0",
+                        opacity=0.85
+                    )
+                )
+            
+            # PDL (Previous Day Low)
+            pdl = key_levels.get('PDL')
+            if pdl and pdl > 0:
+                fig.add_hline(
+                    y=pdl,
+                    line_color="#673AB7",  # Темно-фиолетовый
+                    line_width=2,
+                    line_dash="longdash",
+                    annotation_text="PDL",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=10, color="white"),
+                        bgcolor="#673AB7",
+                        opacity=0.85
+                    )
+                )
+            
+            # Equilibrium (50% уровень)
+            eq_price = key_levels.get('Equilibrium_Price')
+            eq_zone = key_levels.get('Current_Zone', 'UNKNOWN')
+            if eq_price and eq_price > 0:
+                # Цвет зависит от зоны
+                if eq_zone == 'PREMIUM':
+                    eq_color = "#FF5252"  # Красный (дорого)
+                elif eq_zone == 'DISCOUNT':
+                    eq_color = "#00E676"  # Зеленый (дешево)
+                else:
+                    eq_color = "#FFD600"  # Желтый (равновесие)
+                
+                fig.add_hline(
+                    y=eq_price,
+                    line_color=eq_color,
+                    line_width=3,
+                    line_dash="dashdot",
+                    annotation_text=f"EQ ({eq_zone})",
+                    annotation_position="right",
+                    annotation=dict(
+                        font=dict(size=11, color="white", family="Arial Black"),
+                        bgcolor=eq_color,
+                        opacity=0.9
+                    )
+                )
+            
+            # Nearest Swing High
+            swing_high = structure_points.get('nearest_swing_high')
+            if swing_high and swing_high > 0:
+                fig.add_hline(
+                    y=swing_high,
+                    line_color="#00BCD4",  # Cyan
+                    line_width=1.5,
+                    line_dash="dot",
+                    annotation_text="Last Swing High",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=8, color="white"),
+                        bgcolor="#00BCD4",
+                        opacity=0.7
+                    )
+                )
+            
+            # Nearest Swing Low
+            swing_low = structure_points.get('nearest_swing_low')
+            if swing_low and swing_low > 0:
+                fig.add_hline(
+                    y=swing_low,
+                    line_color="#FF6E40",  # Оранжево-красный
+                    line_width=1.5,
+                    line_dash="dot",
+                    annotation_text="Last Swing Low",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=8, color="white"),
+                        bgcolor="#FF6E40",
+                        opacity=0.7
+                    )
+                )
 
     def save_to_file(self, df, filename, smc_data=None):
         """Утилита для отладки: сохраняет PNG на диск"""

@@ -39,7 +39,12 @@ class TradingCalculator:
                 "resistance": float(df['high'].max()),
                 "support": float(df['low'].min())
             },
-            "indicators": indicators
+            "indicators": indicators,
+            "advanced": smc_data.get('advanced', {}),  # Добавляем advanced данные
+            "choch": smc_data.get('choch', []),
+            "bos": smc_data.get('bos', []),
+            "eqh": smc_data.get('eqh', []),
+            "eql": smc_data.get('eql', [])
         }
         
         # 4. Формат для AI
@@ -149,6 +154,38 @@ class TradingCalculator:
             transcript += f"\nEqual Highs (Liquidity Above): {', '.join([f'{p:.2f}' for p in liq_legacy['EQH']])}\n"
         if liq_legacy['EQL']:
             transcript += f"Equal Lows (Liquidity Below): {', '.join([f'{p:.2f}' for p in liq_legacy['EQL']])}\n"
+        
+        # Advanced SMC Data (Critical for precise entries/exits)
+        if 'advanced' in smc_data:
+            advanced = smc_data['advanced']
+            key_levels = advanced.get('key_levels', {})
+            structure_points = advanced.get('structure_points', {})
+            range_data = advanced.get('range', {})
+            
+            transcript += f"\n=== CRITICAL LEVELS (for precise SL/TP) ===\n"
+            transcript += f"Daily High (DH): {key_levels.get('DH', 0):.2f}\n"
+            transcript += f"Daily Low (DL): {key_levels.get('DL', 0):.2f}\n"
+            transcript += f"Previous Day High (PDH): {key_levels.get('PDH', 0):.2f}\n"
+            transcript += f"Previous Day Low (PDL): {key_levels.get('PDL', 0):.2f}\n"
+            transcript += f"Equilibrium (50%): {key_levels.get('Equilibrium_Price', 0):.2f}\n"
+            transcript += f"Current Zone: {key_levels.get('Current_Zone', 'UNKNOWN')}\n"
+            
+            transcript += f"\nStructural Swing Points:\n"
+            transcript += f"- Nearest Swing High: {structure_points.get('nearest_swing_high', 0):.2f}\n"
+            transcript += f"- Nearest Swing Low: {structure_points.get('nearest_swing_low', 0):.2f}\n"
+            
+            # Дополнительные свинги для контекста
+            all_highs = structure_points.get('all_swing_highs', [])
+            all_lows = structure_points.get('all_swing_lows', [])
+            if all_highs:
+                transcript += f"- Recent Swing Highs: {', '.join([f'{h:.2f}' for h in all_highs[-3:]])}\n"
+            if all_lows:
+                transcript += f"- Recent Swing Lows: {', '.join([f'{l:.2f}' for l in all_lows[-3:]])}\n"
+            
+            transcript += f"\nRange (Last 50 bars):\n"
+            transcript += f"- High: {range_data.get('high', 0):.2f}\n"
+            transcript += f"- Low: {range_data.get('low', 0):.2f}\n"
+            transcript += f"- Size: ${range_data.get('size', 0):.2f}\n"
         
         # Indicators
         transcript += f"\n=== INDICATORS ===\n"

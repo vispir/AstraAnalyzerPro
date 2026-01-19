@@ -4,7 +4,6 @@
 from flask import Blueprint, jsonify, request
 import logging
 
-from services.gemini_service import gemini_service
 from services.calculator import calculator
 from services.yfinance_service import yfinance_service
 from config.settings import START_BALANCE
@@ -54,50 +53,30 @@ def calculate_trade():
 @analysis_bp.route('/analyze', methods=['POST'])
 def analyze_trade():
     """
-    AI анализ торговой сделки
+    AI анализ торговой сделки (DEPRECATED)
     
-    Body params:
-        entry: точка входа
-        sl: stop loss
-        tp: take profit
-        balance: баланс
-        equity: эквити
-        lot: размер лота
-        ai_context: контекст рынка (опционально)
+    ⚠️ DEPRECATED: Используйте новый endpoint /api/llm/analyze
+    
+    Этот endpoint был заменен на более мощный LLM сервис:
+    - GET /api/llm/analyze - Полный анализ с графиками, новостями и SMC уровнями
+    - GET /api/llm/analyze?model=gemini3 - Gemini 3 Pro
+    - GET /api/llm/analyze?model=openrouter - OpenRouter (по умолчанию)
     """
-    try:
-        data = request.get_json()
-        
-        entry = data.get('entry')
-        sl = data.get('sl')
-        tp = data.get('tp')
-        balance = data.get('balance')
-        equity = data.get('equity')
-        lot = data.get('lot', 0)
-        ai_context = data.get('ai_context')
-        
-        if not all([entry, sl, tp, balance, equity, ai_context]):
-            return jsonify({"error": "Недостаточно данных для анализа"}), 400
-        
-        result = gemini_service.analyze_trade(
-            float(entry),
-            float(sl),
-            float(tp),
-            float(balance),
-            float(equity),
-            float(lot),
-            ai_context
-        )
-        
-        if "error" in result:
-            status_code = result.get('status', 500)
-            return jsonify({"error": result["error"]}), status_code
-            
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"Error in /analyze: {str(e)}")
-        return jsonify({"error": f"Ошибка анализа: {str(e)}"}), 500
+    return jsonify({
+        "error": "This endpoint is deprecated",
+        "message": "Use /api/llm/analyze instead",
+        "new_endpoint": {
+            "url": "/api/llm/analyze",
+            "method": "GET",
+            "params": {
+                "model": "gemini3 or openrouter (default)"
+            },
+            "examples": [
+                "/api/llm/analyze",
+                "/api/llm/analyze?model=gemini3"
+            ]
+        }
+    }), 410  # 410 Gone - endpoint устарел
 
 
 @analysis_bp.route('/breakeven', methods=['POST'])
@@ -166,16 +145,12 @@ def calculate_drawdown():
 @analysis_bp.route('/ai-status')
 def ai_status():
     """
-    Проверка доступности AI сервиса
+    Проверка доступности AI сервиса (DEPRECATED)
+    
+    ⚠️ DEPRECATED: Используйте /api/llm/status
     """
-    try:
-        available = gemini_service.is_available()
-        
-        return jsonify({
-            "available": available,
-            "message": "AI сервис доступен" if available else "API ключ не настроен"
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in /ai-status: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "error": "This endpoint is deprecated",
+        "message": "Use /api/llm/status instead",
+        "new_endpoint": "/api/llm/status"
+    }), 410  # 410 Gone

@@ -14,6 +14,7 @@ from routes.market_routes import market_bp
 from routes.analysis_routes import analysis_bp
 from routes.news_routes import news_bp
 from routes.chart_routes import chart_bp
+from routes.llm_routes import llm_bp
 
 # Настройка логирования
 logging.basicConfig(
@@ -35,6 +36,7 @@ app.register_blueprint(market_bp, url_prefix='/api/market')
 app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
 app.register_blueprint(news_bp, url_prefix='/api/news')
 app.register_blueprint(chart_bp, url_prefix='/api/chart')
+app.register_blueprint(llm_bp, url_prefix='/api/llm')
 
 
 # Корневой роут (для обратной совместимости)
@@ -67,7 +69,16 @@ def index():
                 "upcoming": "/api/news/upcoming?hours=24",
                 "today": "/api/news/today",
                 "high_impact": "/api/news/high-impact",
-                "gold_relevant": "/api/news/gold-relevant"
+                "gold_relevant": "/api/news/gold-relevant",
+                "feed": "/api/news/feed"
+            },
+            "chart": {
+                "generate": "/api/chart/generate?tf=M15 (M15, H1, H4)"
+            },
+            "llm": {
+                "analyze": "/api/llm/analyze (GET/POST) - Full market analysis with LLM",
+                "session": "/api/llm/session - Current trading session info",
+                "status": "/api/llm/status - LLM service status"
             }
         }
     })
@@ -137,12 +148,18 @@ if __name__ == '__main__':
     
     # Проверка доступности сервисов
     from services.yfinance_service import yfinance_service
-    from services.gemini_service import gemini_service
+    from services.llm_service import llm_service
     
-    if not gemini_service.is_available():
-        logger.warning("WARNING: GEMINI_API_KEY not set! AI analysis will not work.")
+    # Проверяем доступность API ключей для LLM
+    if llm_service.gemini_key:
+        logger.info("OK: Gemini API key configured")
     else:
-        logger.info("OK: Gemini AI service available")
+        logger.warning("WARNING: GEMINI_API_KEY not set! Gemini3 model will not work.")
+    
+    if llm_service.openrouter_key:
+        logger.info("OK: OpenRouter API key configured")
+    else:
+        logger.warning("WARNING: OPENROUTER_API_KEY not set! OpenRouter model may have limitations.")
     
     if yfinance_service.validate_symbol():
         logger.info(f"OK: Yahoo Finance: {SYMBOL} is available")

@@ -64,6 +64,12 @@ def generate_chart():
         df = pd.DataFrame(candles)
         df['Date'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('Date', inplace=True)
+        
+        # Автоматический SMC анализ (до переименования колонок)
+        logger.info("Running SMC analysis...")
+        smc_data = smc_detector.analyze(df)
+        
+        # Переименовываем колонки для Plotly (после SMC анализа)
         df.rename(columns={
             'open': 'Open',
             'high': 'High',
@@ -71,10 +77,6 @@ def generate_chart():
             'close': 'Close',
             'volume': 'Volume'
         }, inplace=True)
-        
-        # Автоматический SMC анализ
-        logger.info("Running SMC analysis...")
-        smc_data = smc_detector.analyze(df)
         
         # Генерируем график
         logger.info(f"Generating chart image: {width}x{height}")
@@ -89,27 +91,7 @@ def generate_chart():
         logger.info(f"Chart generated successfully")
         
         return jsonify({
-            "success": True,
-            "image": base64_image,
-            "format": "png",
-            "size": {
-                "width": width,
-                "height": height
-            },
-            "timeframe": timeframe,
-            "candles_count": len(candles),
-            "market_structure": {
-                "trend": smc_data.get('trend', 'NEUTRAL'),
-                "choch": len(smc_data.get('choch', [])),
-                "bos": len(smc_data.get('bos', []))
-            },
-            "smc_levels": {
-                "order_blocks": len(smc_data.get('order_blocks', [])),
-                "fvg": len(smc_data.get('fvg', [])),
-                "liquidity": len(smc_data.get('liquidity', [])),
-                "eqh": len(smc_data.get('eqh', [])),
-                "eql": len(smc_data.get('eql', []))
-            }
+            "image": base64_image
         })
         
     except ValueError as ve:

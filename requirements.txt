@@ -8,3 +8,4 @@ investpy>=1.0.8
 gnews>=0.3.7
 plotly>=5.18.0
 kaleido>=0.2.1
+Pillow>=10.0.0

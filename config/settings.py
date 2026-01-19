@@ -9,6 +9,7 @@ load_dotenv()
 
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # Опционально для бесплатной модели
 
 # Trading Configuration
 SYMBOL = os.getenv('SYMBOL', 'XAUUSD')
