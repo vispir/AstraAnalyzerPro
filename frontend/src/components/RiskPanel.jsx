@@ -64,7 +64,6 @@ const CandleTimer = ({ tf }) => {
         />
       </svg>
       <div className="timer-info">
-        {/* Теперь шрифт всегда будет четким, так как символов меньше */}
         <span className="t-time">
           {format(timeLeft)}
         </span>
@@ -105,11 +104,7 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
 
   return (
     <aside className="glass-panel sidebar-left">
-      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-        <h3>Account & Risk</h3>
-        {/* ВСТАВЛЯЕМ ТАЙМЕР В УГОЛ */}
-        <CandleTimer tf={tf} />
-      </div>
+      <h3>Account & Risk</h3>
       
       <div className="account-inputs">
         <label><Wallet size={12} /> Account Balance ($)</label>
@@ -153,6 +148,11 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
         <input type="number" className="custom-input" value={levels.sl} onChange={(e) => setLevels({...levels, sl: e.target.value})} />
         <label>Take Profit</label>
         <input type="number" className="custom-input" value={levels.tp} onChange={(e) => setLevels({...levels, tp: e.target.value})} />
+      </div>
+
+      {/* ТАЙМЕР ПЕРЕД RECOMMENDED LOT */}
+      <div style={{display: 'flex', justifyContent: 'center', margin: '20px 0 16px 0'}}>
+        <CandleTimer tf={tf} />
       </div>
 
       <div className="lot-result-box">
