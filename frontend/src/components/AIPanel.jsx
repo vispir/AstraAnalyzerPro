@@ -17,7 +17,7 @@ const AIPanel = ({ analysis, levels, account }) => {
     setRawText('');
 
     try {
-      const res = await axios.post('http://127.0.0.1:5000/api/analysis/analyze', {
+      const res = await axios.post('http://192.168.1.55:5000/api/analysis/analyze', {
         entry: levels.entry,
         sl: levels.sl,
         tp: levels.tp,
