@@ -320,15 +320,15 @@
     border: 1px solid rgba(255, 255, 255, 0.05);
   }
 
- /* МИНИ ТАЙМЕР В САЙДБАРЕ - УВЕЛИЧЕННЫЙ */
+ /* ТАЙМЕР В САЙДБАРЕ - УВЕЛИЧЕННЫЙ */
 .candle-timer-mini {
     position: relative;
-    width: 58px; /* Был 42, стал 58 */
-    height: 58px;
+    width: 90px;
+    height: 90px;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0; /* Чтобы не сжимался */
+    flex-shrink: 0;
   }
   
   .timer-circle {
@@ -340,13 +340,13 @@
   .circle-bg {
     fill: none;
     stroke: rgba(255, 255, 255, 0.03);
-    stroke-width: 2.5; /* Сделали линию тоньше, чтобы освободить место */
+    stroke-width: 3;
   }
   
   .circle-fill {
     fill: none;
     stroke: var(--accent-blue);
-    stroke-width: 2.5;
+    stroke-width: 3;
     stroke-linecap: round;
     transition: stroke-dasharray 0.3s ease;
   }
@@ -358,31 +358,57 @@
     align-items: center;
     justify-content: center;
     width: 100%;
-    line-height: 1.1; /* Больше отступа между строк */
+    line-height: 1.2;
   }
   
   .t-time {
-    font-size: 13px; /* Вернули крупный размер */
+    font-size: 18px;
     font-weight: 800;
     font-family: 'JetBrains Mono', monospace;
     color: #fff;
     letter-spacing: -0.5px;
   }
   
-  /* Если есть часы, делаем шрифт чуть компактнее, но всё равно крупнее чем было */
+  /* Если есть часы, делаем шрифт чуть компактнее */
   .t-time.long {
-    font-size: 9px;
+    font-size: 14px;
   }
   
   .t-label {
-    font-size: 7px;
+    font-size: 10px;
     color: var(--text-dim);
     font-weight: 900;
-    margin-top: -2px; /* Чуть прижали к цифрам */
+    margin-top: 0px;
   }
   
-  /* Пульсация стала мягче, но заметнее */
+  /* Пульсация при завершении */
   .candle-timer-mini.urgent .circle-fill {
     stroke: var(--accent-red);
     animation: pulse-ring 1s infinite cubic-bezier(0.4, 0, 0.6, 1);
   }
+
+  .verdict-badge {
+    padding: 10px;
+    border-radius: 8px;
+    text-align: center;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .verdict-badge.входить { background: rgba(38, 166, 154, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+  .verdict-badge.ждать { background: rgba(251, 192, 45, 0.2); color: #fbc02d; border: 1px solid #fbc02d; }
+  .verdict-badge.отмена { background: rgba(239, 83, 80, 0.2); color: var(--accent-red); border: 1px solid var(--accent-red); }
+  
+  .analysis-section { margin-bottom: 15px; }
+  .analysis-section label { color: var(--accent-blue); font-weight: bold; margin-bottom: 4px; }
+  .analysis-section p { font-size: 13px; line-height: 1.5; margin: 0; }
+  .correction-text { color: #fff; font-style: italic; }
+  
+  .risk-meter { margin-top: 20px; }
+  .meter-bg { background: #2a2e39; height: 6px; border-radius: 3px; margin-top: 5px; }
+  .meter-fill { height: 100%; background: linear-gradient(to right, var(--accent-green), var(--accent-red)); border-radius: 3px; }
+  
+  .ai-text-fallback { white-space: pre-wrap; font-size: 13px; line-height: 1.6; }

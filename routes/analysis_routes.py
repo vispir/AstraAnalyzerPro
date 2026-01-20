@@ -56,30 +56,60 @@ def calculate_trade():
 @analysis_bp.route('/analyze', methods=['POST'])
 def analyze_trade():
     """
-    AI анализ торговой сделки (DEPRECATED)
+    AI анализ торговой сделки через Gemini
     
-    ⚠️ DEPRECATED: Используйте новый endpoint /api/llm/analyze
-    
-    Этот endpoint был заменен на более мощный LLM сервис:
-    - GET /api/llm/analyze - Полный анализ с графиками, новостями и SMC уровнями
-    - GET /api/llm/analyze?model=gemini3 - Gemini 3 Pro
-    - GET /api/llm/analyze?model=openrouter - OpenRouter (по умолчанию)
+    Body params:
+        entry: точка входа
+        sl: stop loss
+        tp: take profit
+        balance: баланс счета
+        equity: текущий эквити
+        ai_context: контекст рынка (опционально)
     """
-    return jsonify({
-        "error": "This endpoint is deprecated",
-        "message": "Use /api/llm/analyze instead",
-        "new_endpoint": {
-            "url": "/api/llm/analyze",
-            "method": "GET",
-            "params": {
-                "model": "gemini3 or openrouter (default)"
-            },
-            "examples": [
-                "/api/llm/analyze",
-                "/api/llm/analyze?model=gemini3"
-            ]
-        }
-    }), 410  # 410 Gone - endpoint устарел
+    try:
+        from services.gemini_service import gemini_service
+        
+        data = request.get_json()
+        
+        entry = float(data.get('entry', 0))
+        sl = float(data.get('sl', 0))
+        tp = float(data.get('tp', 0))
+        balance = float(data.get('balance', START_BALANCE))
+        equity = float(data.get('equity', balance))
+        ai_context = data.get('ai_context', {})
+        
+        if not all([entry, sl, tp]):
+            return jsonify({"error": "Недостаточно параметров"}), 400
+        
+        # Расчет лота
+        calc_result = calculator.calculate_trade_params(entry, sl, tp, balance)
+        lot = calc_result.get('lot', 0.01)
+        
+        # Анализ через Gemini
+        result = gemini_service.analyze_trade(
+            entry=entry,
+            sl=sl,
+            tp=tp,
+            balance=balance,
+            equity=equity,
+            lot=lot,
+            ai_context=ai_context
+        )
+        
+        if "error" in result:
+            return jsonify(result), 500
+            
+        return jsonify({
+            "success": True,
+            "analysis": result.get('analysis', 'Нет ответа')
+        })
+        
+    except ValueError as e:
+        logger.error(f"Invalid input in /analyze: {str(e)}")
+        return jsonify({"error": "Некорректные входные данные"}), 400
+    except Exception as e:
+        logger.error(f"Error in /analyze: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 @analysis_bp.route('/breakeven', methods=['POST'])

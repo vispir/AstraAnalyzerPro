@@ -10,12 +10,34 @@ const API_BASE = "http://127.0.0.1:5000/api";
 
 function App() {
   const [marketData, setMarketData] = useState({ candles: [], analysis: null });
-  const [account, setAccount] = useState({ balance: 5084.60, equity: 5084.60 });
+  
+  // Инициализация баланса из localStorage или дефолт
+  const [account, setAccount] = useState(() => {
+    const saved = localStorage.getItem('astra_account');
+    return saved ? JSON.parse(saved) : { balance: 5000.00, equity: 5000.00 };
+  });
+
   const [tf, setTf] = useState('M15');
   const [source, setSource] = useState('twelvedata');
-  const [levels, setLevels] = useState({ entry: '', sl: '', tp: '' });
+
+  // Инициализация уровней из localStorage или пусто
+  const [levels, setLevels] = useState(() => {
+    const saved = localStorage.getItem('astra_levels');
+    return saved ? JSON.parse(saved) : { entry: '', sl: '', tp: '' };
+  });
+
   const [activeMode, setActiveMode] = useState(null);
   const [serverConnected, setServerConnected] = useState(true);
+
+  // Сохраняем баланс при каждом изменении
+  useEffect(() => {
+    localStorage.setItem('astra_account', JSON.stringify(account));
+  }, [account]);
+
+  // Сохраняем уровни при каждом изменении
+  useEffect(() => {
+    localStorage.setItem('astra_levels', JSON.stringify(levels));
+  }, [levels]);
 
   useEffect(() => {
     let isMounted = true;
