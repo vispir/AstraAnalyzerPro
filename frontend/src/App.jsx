@@ -6,7 +6,7 @@ import TradingChart from './components/TradingChart';
 import AIPanel from './components/AIPanel';
 import './App.css';
 
-const API_BASE = "http://127.0.0.1:5000/api";
+const API_BASE = "http://192.168.1.55:5000/api";
 
 function App() {
   const [marketData, setMarketData] = useState({ candles: [], analysis: null });
