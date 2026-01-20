@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import kaleido
 from datetime import timedelta
 from typing import Dict, Optional
 
@@ -21,6 +22,14 @@ class ChartService:
         # Размеры по умолчанию (HD aspect ratio)
         self.default_height = 800
         self.default_width = 1200
+
+        # Автоматическая установка Chrome для Kaleido 1.0+
+        try:
+            logger.info("Checking/Installing Kaleido Chrome...")
+            kaleido.get_chrome_sync()
+            logger.info("Kaleido Chrome is ready.")
+        except Exception as e:
+            logger.warning(f"Kaleido Chrome setup warning: {str(e)}")
         
         # TTL для кэша графиков (без TTL, т.к. привязано к данным свечей)
         self.chart_cache_ttl = None  # Бессрочно, инвалидация по изменению данных
@@ -192,90 +201,7 @@ class ChartService:
         except Exception as e:
             logger.error(f"Error generating chart: {str(e)}")
             raise
-            
-        """
-        Генерирует изображение графика в формате Base64.
-        """
-        try:
-            if df is None or df.empty:
-                raise ValueError("DataFrame is empty")
-            
-            # Используем переданные размеры или дефолтные
-            chart_width = width or self.default_width
-            chart_height = height or self.default_height
-
-            # Гарантируем, что индекс - это Datetime
-            if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index)
-
-            # 1. Основной свечной график
-            fig = go.Figure(data=[go.Candlestick(
-                x=df.index,
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name='Price',
-                increasing_line_color=self.colors['candle_up'],
-                decreasing_line_color=self.colors['candle_down'],
-                increasing_fillcolor=self.colors['candle_up'], 
-                decreasing_fillcolor=self.colors['candle_down'],
-                showlegend=False
-            )])
-            
-            # 2. Вычисление отступа вправо (Future Padding)
-            if len(df) > 1:
-                avg_delta = df.index[-1] - df.index[-2]
-            else:
-                avg_delta = timedelta(hours=1)
-                
-            future_padding = df.index[-1] + (avg_delta * 15)
-
-            # 3. Настройка внешнего вида (Layout)
-            fig.update_layout(
-                xaxis_rangeslider_visible=False,
-                template="plotly_dark",
-                paper_bgcolor=self.colors['bg'],
-                plot_bgcolor=self.colors['bg'],
-                margin=dict(l=20, r=60, t=50, b=30),
-                height=chart_height,
-                width=chart_width,
-                title=dict(
-                    text=title, 
-                    x=0.05, 
-                    font=dict(size=20, color="white", family="Monospace")
-                ),
-                xaxis=dict(
-                    showgrid=True, 
-                    gridcolor=self.colors['grid'],
-                    range=[df.index[0], future_padding]
-                ),
-                yaxis=dict(
-                    showgrid=True, 
-                    gridcolor=self.colors['grid'], 
-                    side='right',
-                    showline=True
-                ),
-                font=dict(family="Monospace", size=11, color=self.colors['text'])
-            )
-            
-            # 4. Отрисовка SMC слоев
-            if smc_data:
-                self._draw_zones(fig, df, smc_data)
-                self._draw_structure(fig, df, smc_data)
-                self._draw_liquidity(fig, df, smc_data)
-
-            # 5. Экспорт
-            img_bytes = fig.to_image(format="png", engine="kaleido", scale=2)
-            base64_image = base64.b64encode(img_bytes).decode('utf-8')
-            
-            logger.info(f"Chart generated successfully. Size: {len(base64_image)} chars")
-            return base64_image
-            
-        except Exception as e:
-            logger.error(f"Error generating chart: {str(e)}")
-            raise
-
+    
     def _draw_zones(self, fig, df, data):
         """Рисует прямоугольные зоны (Order Blocks, FVG)"""
         last_time = df.index[-1]
