@@ -6,6 +6,9 @@ import logging
 
 from services.calculator import calculator
 from services.yfinance_service import yfinance_service
+from services.cache_service import cache_service
+from services.news_service import news_service
+from services.chart_service import chart_service
 from config.settings import START_BALANCE
 
 logger = logging.getLogger(__name__)
@@ -154,3 +157,111 @@ def ai_status():
         "message": "Use /api/llm/status instead",
         "new_endpoint": "/api/llm/status"
     }), 410  # 410 Gone
+
+
+@analysis_bp.route('/cache/stats')
+def cache_stats():
+    """
+    Получение статистики кэша
+    
+    Returns:
+        Общая статистика кэша (размер, попадания, промахи, hit rate)
+    """
+    try:
+        stats = cache_service.get_stats()
+        return jsonify({
+            "success": True,
+            "cache_stats": stats
+        })
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/cache/info')
+def cache_info():
+    """
+    Получение детальной информации о кэше
+    
+    Query params:
+        prefix: фильтр по префиксу (candles, news, chart_image, etc.)
+    
+    Returns:
+        Список записей в кэше с возрастом, TTL и количеством обращений
+    """
+    try:
+        prefix = request.args.get('prefix', None)
+        info = cache_service.get_info(prefix)
+        return jsonify({
+            "success": True,
+            "cache_info": info
+        })
+    except Exception as e:
+        logger.error(f"Error getting cache info: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/cache/clear', methods=['POST'])
+def clear_cache():
+    """
+    Очистка кэша
+    
+    Body params:
+        prefix: префикс для очистки (candles, news, chart_image, calendar, geopolitical)
+                если не указан - очищает весь кэш
+    
+    Returns:
+        Количество удаленных записей
+    """
+    try:
+        data = request.get_json() or {}
+        prefix = data.get('prefix', None)
+        
+        if prefix:
+            # Очищаем конкретный префикс
+            if prefix == 'candles':
+                yfinance_service.clear_cache()
+            elif prefix == 'chart_image':
+                chart_service.clear_cache()
+            elif prefix in ['calendar', 'geopolitical']:
+                news_service.clear_cache()
+            else:
+                count = cache_service.clear(prefix)
+                return jsonify({
+                    "success": True,
+                    "message": f"Cache cleared: {prefix}",
+                    "entries_removed": count
+                })
+        else:
+            # Очищаем весь кэш
+            count = cache_service.clear()
+        
+        return jsonify({
+            "success": True,
+            "message": "Cache cleared successfully",
+            "entries_removed": count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error clearing cache: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/cache/cleanup', methods=['POST'])
+def cleanup_cache():
+    """
+    Удаление истекших записей из кэша
+    
+    Returns:
+        Количество удаленных записей
+    """
+    try:
+        count = cache_service.cleanup_expired()
+        return jsonify({
+            "success": True,
+            "message": "Expired cache entries cleaned up",
+            "entries_removed": count
+        })
+    except Exception as e:
+        logger.error(f"Error cleaning up cache: {str(e)}")
+        return jsonify({"error": str(e)}), 500

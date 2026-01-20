@@ -10,6 +10,8 @@ load_dotenv()
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # Опционально для бесплатной модели
+AI_GATEWAY_URL = os.getenv('AI_GATEWAY_URL')  # URL для AI Gateway
+AI_GATEWAY_KEY = os.getenv('AI_GATEWAY_KEY')  # API ключ для AI Gateway (если требуется)
 
 # Trading Configuration
 SYMBOL = os.getenv('SYMBOL', 'XAUUSD')

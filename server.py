@@ -161,6 +161,13 @@ if __name__ == '__main__':
     else:
         logger.warning("WARNING: OPENROUTER_API_KEY not set! OpenRouter model may have limitations.")
     
+    if llm_service.gateway_url:
+        logger.info(f"OK: AI Gateway configured at {llm_service.gateway_url}")
+        if llm_service.gateway_key:
+            logger.info("OK: AI Gateway API key configured")
+    else:
+        logger.warning("WARNING: AI_GATEWAY_URL not set! Gateway model will not work.")
+    
     if yfinance_service.validate_symbol():
         logger.info(f"OK: Yahoo Finance: {SYMBOL} is available")
     else:

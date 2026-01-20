@@ -1,9 +1,13 @@
 import plotly.graph_objects as go
 import pandas as pd
 import base64
+import hashlib
+import json
 import logging
 from datetime import timedelta
 from typing import Dict, Optional
+
+from services.cache_service import cache_service
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -17,6 +21,9 @@ class ChartService:
         # Размеры по умолчанию (HD aspect ratio)
         self.default_height = 800
         self.default_width = 1200
+        
+        # TTL для кэша графиков (без TTL, т.к. привязано к данным свечей)
+        self.chart_cache_ttl = None  # Бессрочно, инвалидация по изменению данных
         
         # Палитра цветов (TradingView Dark Theme)
         self.colors = {
@@ -38,6 +45,44 @@ class ChartService:
             'text': "#B2B5BE"
         }
 
+    def _generate_data_hash(self, df: pd.DataFrame, smc_data: Optional[Dict] = None) -> str:
+        """
+        Генерирует хеш для данных графика (свечи + SMC данные)
+        
+        Args:
+            df: DataFrame со свечами
+            smc_data: SMC данные
+            
+        Returns:
+            MD5 хеш данных
+        """
+        # Берем последние 200 свечей для хеширования
+        limit_candles = 200
+        if len(df) > limit_candles:
+            df_hash = df.tail(limit_candles).copy()
+        else:
+            df_hash = df.copy()
+        
+        # Создаем строку для хеширования
+        hash_parts = []
+        
+        # Добавляем данные свечей (только OHLC, без Volume для стабильности)
+        for col in ['Open', 'High', 'Low', 'Close']:
+            if col in df_hash.columns:
+                hash_parts.append(df_hash[col].to_json())
+        
+        # Добавляем индекс (времена)
+        hash_parts.append(df_hash.index.astype(str).to_list().__str__())
+        
+        # Добавляем SMC данные (если есть)
+        if smc_data:
+            # Используем default=str для обработки pandas Timestamp и других нестандартных типов
+            hash_parts.append(json.dumps(smc_data, sort_keys=True, default=str))
+        
+        # Вычисляем хеш
+        hash_string = "|".join(hash_parts)
+        return hashlib.md5(hash_string.encode()).hexdigest()
+    
     def generate_chart_image(
         self,
         df: pd.DataFrame,
@@ -50,6 +95,25 @@ class ChartService:
             if df is None or df.empty:
                 raise ValueError("DataFrame is empty")
             
+            # Используем переданные размеры или дефолтные
+            chart_width = width or self.default_width
+            chart_height = height or self.default_height
+            
+            # Проверяем кэш
+            data_hash = self._generate_data_hash(df, smc_data)
+            cache_key = cache_service._generate_key(
+                'chart_image',
+                data_hash=data_hash,
+                title=title,
+                width=chart_width,
+                height=chart_height
+            )
+            
+            cached_image = cache_service.get(cache_key)
+            if cached_image is not None:
+                logger.info(f"Returning cached chart image (hash: {data_hash[:8]}...)")
+                return cached_image
+            
             # --- ЛОГИКА 200 СВЕЧЕЙ ---
             # Берем только последние 200 свечей для отрисовки
             limit_candles = 200
@@ -57,10 +121,6 @@ class ChartService:
                 df_plot = df.tail(limit_candles).copy()
             else:
                 df_plot = df.copy()
-
-            # Используем переданные размеры или дефолтные
-            chart_width = width or self.default_width
-            chart_height = height or self.default_height
 
             if not isinstance(df_plot.index, pd.DatetimeIndex):
                 df_plot.index = pd.to_datetime(df_plot.index)
@@ -123,7 +183,10 @@ class ChartService:
             img_bytes = fig.to_image(format="png", engine="kaleido", scale=2)
             base64_image = base64.b64encode(img_bytes).decode('utf-8')
             
-            logger.info(f"Chart generated successfully. Size: {len(base64_image)} chars")
+            # Сохраняем в кэш (бессрочно, т.к. привязано к хешу данных)
+            cache_service.set(cache_key, base64_image, self.chart_cache_ttl)
+            
+            logger.info(f"Chart generated successfully. Size: {len(base64_image)} chars (cached with hash: {data_hash[:8]}...)")
             return base64_image
             
         except Exception as e:
@@ -482,6 +545,11 @@ class ChartService:
             logger.info(f"Saved debug chart to {filename}")
         except Exception as e:
             logger.error(f"Failed to save file: {e}")
+    
+    def clear_cache(self):
+        """Очистка кэша изображений графиков"""
+        count = cache_service.clear('chart_image')
+        logger.info(f"Chart images cache cleared ({count} entries)")
 
 # Глобальный экземпляр для импорта
 chart_service = ChartService()

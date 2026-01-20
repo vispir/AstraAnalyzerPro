@@ -582,6 +582,13 @@ class SMCDetector:
         Рассчитывает Previous Day High/Low
         """
         try:
+            # Проверяем, что индекс является DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                # Если индекс не DatetimeIndex, используем фолбэк
+                pdh = df['high'].tail(50).max()
+                pdl = df['low'].tail(50).min()
+                return pdh, pdl
+            
             # Получаем дату последней свечи
             last_date = df.index[-1]
             
@@ -613,6 +620,13 @@ class SMCDetector:
         Рассчитывает Daily High/Low (максимум/минимум текущего дня)
         """
         try:
+            # Проверяем, что индекс является DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                # Если индекс не DatetimeIndex, используем фолбэк
+                dh = df['high'].tail(24).max()
+                dl = df['low'].tail(24).min()
+                return dh, dl
+            
             # Получаем дату последней свечи
             last_date = df.index[-1].date()
             

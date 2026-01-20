@@ -3,6 +3,8 @@
 """
 import yfinance as yf
 import logging
+import hashlib
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -11,6 +13,7 @@ from config.settings import (
     TIMEFRAME_MAP, 
     PERIOD_MAP
 )
+from services.cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ class YFinanceService:
     def __init__(self, symbol: str = YAHOO_SYMBOL):
         self.symbol = symbol
         self.ticker = yf.Ticker(symbol)
+        self.candles_cache_ttl = 300  # 5 минут (300 секунд)
         
     def get_candles(self, timeframe: str = 'M15', period: Optional[str] = None, limit: Optional[int] = None) -> Dict:
         """
@@ -34,12 +38,25 @@ class YFinanceService:
         Returns:
             Dict с данными свечей
         """
+        # Получаем интервал для Yahoo Finance
+        interval = TIMEFRAME_MAP.get(timeframe, '15m')
+        if period is None:
+            period = PERIOD_MAP.get(timeframe, '5d')
+        
+        # Проверяем кэш
+        cache_key = cache_service._generate_key(
+            'candles',
+            self.symbol,
+            timeframe=timeframe,
+            period=period,
+            limit=limit
+        )
+        cached_data = cache_service.get(cache_key)
+        if cached_data is not None:
+            logger.info(f"Returning cached candles data ({cached_data['count']} candles)")
+            return cached_data
+        
         try:
-            # Получаем интервал для Yahoo Finance
-            interval = TIMEFRAME_MAP.get(timeframe, '15m')
-            if period is None:
-                period = PERIOD_MAP.get(timeframe, '5d')
-            
             logger.info(f"Fetching {self.symbol} data: interval={interval}, period={period}, limit={limit}")
             
             # Получаем данные
@@ -97,13 +114,18 @@ class YFinanceService:
             
             logger.info(f"Successfully fetched {len(candles)} candles")
             
-            return {
+            result = {
                 "success": True,
                 "symbol": self.symbol,
                 "timeframe": timeframe,
                 "candles": candles,
                 "count": len(candles)
             }
+            
+            # Сохраняем в кэш с TTL 15 минут
+            cache_service.set(cache_key, result, self.candles_cache_ttl)
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error fetching candles: {str(e)}")
@@ -162,6 +184,32 @@ class YFinanceService:
             return not df.empty
         except Exception:
             return False
+    
+    def clear_cache(self):
+        """Очистка кэша свечных данных"""
+        count = cache_service.clear('candles')
+        logger.info(f"Candles cache cleared ({count} entries)")
+    
+    def get_candles_hash(self, timeframe: str = 'M15', period: Optional[str] = None, limit: Optional[int] = None) -> str:
+        """
+        Генерирует хеш для данных свечей (для проверки изменений)
+        
+        Args:
+            timeframe: Таймфрейм
+            period: Период данных
+            limit: Количество свечей
+            
+        Returns:
+            MD5 хеш параметров запроса
+        """
+        cache_key = cache_service._generate_key(
+            'candles',
+            self.symbol,
+            timeframe=timeframe,
+            period=period,
+            limit=limit
+        )
+        return hashlib.md5(cache_key.encode()).hexdigest()
 
 
 # Глобальный экземпляр сервиса

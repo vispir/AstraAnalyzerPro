@@ -19,7 +19,7 @@ def analyze_market():
     Комплексный анализ рынка с помощью LLM
     
     Query params:
-        model: Выбор модели - "openrouter" (по умолчанию) или "gemini3"
+        model: Выбор модели - "openrouter" (по умолчанию), "gemini3" или "gateway"
     
     Собирает данные из всех источников:
     - Технические данные (свечи + SMC анализ) с 3 таймфреймов
@@ -31,6 +31,7 @@ def analyze_market():
     Examples:
         /api/llm/analyze                  - OpenRouter (по умолчанию)
         /api/llm/analyze?model=gemini3    - Gemini 3 Pro
+        /api/llm/analyze?model=gateway    - AI Gateway (custom)
     
     Returns:
         {
@@ -46,10 +47,10 @@ def analyze_market():
         # Получаем параметр модели
         model = request.args.get('model', 'openrouter').lower()
         
-        if model not in ['openrouter', 'gemini3']:
+        if model not in ['openrouter', 'gemini3', 'gateway']:
             return jsonify({
                 "error": "Invalid model parameter",
-                "details": "Use 'openrouter' or 'gemini3'"
+                "details": "Use 'openrouter', 'gemini3' or 'gateway'"
             }), 400
         
         logger.info("=" * 60)

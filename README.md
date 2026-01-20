@@ -25,6 +25,14 @@
 - ✅ Геополитические новости о золоте (gnews)
 - ✅ Комбинированная лента новостей
 
+### ⚡ Кэширование
+- ✅ **In-memory кэширование** для оптимизации производительности
+- ✅ Кэширование данных свечей (TTL: 5 минут)
+- ✅ Кэширование новостей (TTL: 30-60 минут)
+- ✅ Умное кэширование графиков (инвалидация при изменении данных)
+- ✅ API для мониторинга и управления кэшем
+- ✅ Статистика использования (hit rate, размер, evictions)
+
 ### 🔐 Безопасность
 - ✅ Безопасное хранение API ключей (.env)
 - ✅ Модульная архитектура
@@ -173,12 +181,12 @@ AstraAnalyzerPro/
 - Поддержка таймфреймов: M15, H1, H4
 - Возвращает изображение в base64 формате
 
-#### 🧠 LLM (AI анализ через OpenRouter) ⭐ NEW!
+#### 🧠 LLM (AI анализ через OpenRouter/Gemini/Gateway) ⭐ NEW!
 - `GET /api/llm/analyze` - **полный анализ рынка с LLM**
+- `GET /api/llm/analyze?model=gemini3` - анализ через Gemini 3 Pro
+- `GET /api/llm/analyze?model=gateway` - анализ через AI Gateway (custom)
 - `GET /api/llm/session` - текущая торговая сессия
 - `GET /api/llm/status` - статус LLM сервиса
-
-> 📖 Полная документация: [LLM_API.md](./LLM_API.md)
 
 ### Frontend (main.html)
 - **Lightweight Charts** для графиков
@@ -199,8 +207,10 @@ AstraAnalyzerPro/
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `GEMINI_API_KEY` | API ключ для AI анализа | - |
+| `GEMINI_API_KEY` | API ключ для Gemini 3 Pro | - |
 | `OPENROUTER_API_KEY` | API ключ для OpenRouter (опционально) | - |
+| `AI_GATEWAY_URL` | URL для AI Gateway (опционально) | - |
+| `AI_GATEWAY_KEY` | API ключ для AI Gateway (опционально) | - |
 | `YAHOO_SYMBOL` | Тикер Yahoo Finance | GC=F (Gold Futures) |
 | `START_BALANCE` | Начальный баланс | 5000 |
 | `DAILY_LOSS_LIMIT` | Лимит дневной просадки | 250 |
@@ -209,7 +219,10 @@ AstraAnalyzerPro/
 | `FLASK_PORT` | Порт сервера | 5000 |
 | `FLASK_DEBUG` | Режим отладки | False |
 
-> 💡 **Примечание:** `OPENROUTER_API_KEY` не требуется для бесплатной модели Google Gemini 2.0 Flash!
+> 💡 **Примечания:**
+> - `OPENROUTER_API_KEY` не требуется для бесплатной модели Google Gemini 2.0 Flash
+> - `AI_GATEWAY_URL` позволяет использовать Gateway с моделью `google/gemini-3-pro-preview`
+> - Модель для Gateway: `google/gemini-3-pro-preview` (указана в коде)
 
 ### Таймфреймы
 
@@ -218,6 +231,53 @@ AstraAnalyzerPro/
 | M15 | 15 минут | Yahoo Finance (15m) |
 | H1 | 1 час | Yahoo Finance (1h) |
 | H4 | 4 часа | Агрегация из H1 (200→50 свечей) |
+
+## 📦 Кэширование
+
+Система использует in-memory кэширование для оптимизации производительности:
+
+### Типы кэшируемых данных
+
+| Тип данных | TTL | Описание |
+|------------|-----|----------|
+| Данные свечей | 5 минут | Кэширование рыночных данных |
+| Экономический календарь | 30 минут | События публикуются заранее |
+| Геополитические новости | 60 минут | Новости обновляются реже |
+| Изображения графиков | Бессрочно* | *Инвалидация при изменении данных |
+
+### API для управления кэшем
+
+```bash
+# Статистика кэша
+GET /api/analysis/cache/stats
+
+# Детальная информация
+GET /api/analysis/cache/info?prefix=candles
+
+# Очистка кэша
+POST /api/analysis/cache/clear
+Content-Type: application/json
+{"prefix": "candles"}
+
+# Удаление истекших записей
+POST /api/analysis/cache/cleanup
+```
+
+### Пример статистики
+
+```json
+{
+  "cache_stats": {
+    "size": 45,
+    "hits": 1234,
+    "misses": 56,
+    "hit_rate": 95.65,
+    "total_requests": 1290
+  }
+}
+```
+
+📖 Подробная документация: [CACHE_USAGE.md](CACHE_USAGE.md)
 
 ## 🐛 Устранение неполадок
 
@@ -232,6 +292,7 @@ AstraAnalyzerPro/
 - Проверьте интернет-соединение
 - Yahoo Finance может быть временно недоступен
 - Убедитесь, что `YAHOO_SYMBOL=GC=F` в `.env`
+- Попробуйте очистить кэш: `POST /api/analysis/cache/clear`
 
 ### "ЛИМИТ ЗАПРОСОВ AI"
 **Решение:**

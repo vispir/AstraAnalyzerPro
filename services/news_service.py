@@ -17,6 +17,8 @@ try:
 except ImportError:
     GNEWS_AVAILABLE = False
 
+from services.cache_service import cache_service
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,8 +26,9 @@ class NewsService:
     """Сервис для получения экономических новостей"""
     
     def __init__(self):
-        self.cache = {}
-        self.cache_timeout = 300  # 5 минут
+        # TTL для разных типов новостей
+        self.calendar_cache_ttl = 1800  # 30 минут для экономического календаря
+        self.geopolitical_cache_ttl = 3600  # 60 минут для геополитических новостей
         
         # Инициализация GNews
         if GNEWS_AVAILABLE:
@@ -52,6 +55,17 @@ class NewsService:
         if not INVESTPY_AVAILABLE:
             logger.error("investpy library is not installed")
             return []
+        
+        # Проверяем кэш
+        cache_key = cache_service._generate_key(
+            'calendar',
+            from_date.strftime('%Y-%m-%d'),
+            to_date.strftime('%Y-%m-%d')
+        )
+        cached_data = cache_service.get(cache_key)
+        if cached_data is not None:
+            logger.info(f"Returning cached calendar data ({len(cached_data)} events)")
+            return cached_data
         
         try:
             logger.info(f"Fetching economic calendar from {from_date.date()} to {to_date.date()}")
@@ -115,6 +129,10 @@ class NewsService:
                         continue
             
             logger.info(f"Successfully fetched {len(events)} events from investpy")
+            
+            # Сохраняем в кэш
+            cache_service.set(cache_key, events, self.calendar_cache_ttl)
+            
             return events
             
         except Exception as e:
@@ -357,6 +375,13 @@ class NewsService:
             logger.error("gnews library is not installed")
             return []
         
+        # Проверяем кэш
+        cache_key = cache_service._generate_key('geopolitical', days=days)
+        cached_data = cache_service.get(cache_key)
+        if cached_data is not None:
+            logger.info(f"Returning cached geopolitical news ({len(cached_data)} articles)")
+            return cached_data
+        
         try:
             logger.info(f"Fetching geopolitical news for last {days} days")
             
@@ -422,6 +447,10 @@ class NewsService:
             all_news = all_news[:20]
             
             logger.info(f"Found {len(all_news)} geopolitical news articles")
+            
+            # Сохраняем в кэш
+            cache_service.set(cache_key, all_news, self.geopolitical_cache_ttl)
+            
             return all_news
             
         except Exception as e:
@@ -485,8 +514,9 @@ class NewsService:
             }
     
     def clear_cache(self):
-        """Очистка кеша"""
-        self.cache = {}
+        """Очистка кеша новостей"""
+        count = cache_service.clear('calendar') + cache_service.clear('geopolitical')
+        logger.info(f"News cache cleared ({count} entries)")
 
 
 # Глобальный экземпляр сервиса
