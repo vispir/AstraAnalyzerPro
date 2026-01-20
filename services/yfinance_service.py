@@ -103,14 +103,20 @@ class YFinanceService:
             # Конвертируем в формат для frontend
             candles = []
             for index, row in df.iterrows():
-                candles.append({
+                candle_data = {
                     "time": int(index.timestamp()),
                     "open": round(float(row['Open']), 2),
                     "high": round(float(row['High']), 2),
                     "low": round(float(row['Low']), 2),
-                    "close": round(float(row['Close']), 2),
-                    "volume": int(row['Volume']) if 'Volume' in row else 0
-                })
+                    "close": round(float(row['Close']), 2)
+                }
+                
+                # Добавляем volume только если он не 0
+                volume = int(row['Volume']) if 'Volume' in row else 0
+                if volume > 0:
+                    candle_data["volume"] = volume
+                    
+                candles.append(candle_data)
             
             logger.info(f"Successfully fetched {len(candles)} candles")
             

@@ -12,6 +12,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # Опционально для бесплатной модели
 AI_GATEWAY_URL = os.getenv('AI_GATEWAY_URL')  # URL для AI Gateway
 AI_GATEWAY_KEY = os.getenv('AI_GATEWAY_KEY')  # API ключ для AI Gateway (если требуется)
+TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY') 
 
 # Trading Configuration
 SYMBOL = os.getenv('SYMBOL', 'XAUUSD')
@@ -51,4 +52,11 @@ PERIOD_MAP = {
     'D1': '1y',
     'W1': '2y',
     'MN': '5y'
+}
+
+# Количество свечей для AI контекста
+AI_CONTEXT_BARS = {
+    'M15': 30,
+    'H1': 20,
+    'H4': 15
 }

@@ -1,15 +1,73 @@
+"""
+Astra Analyzer Pro - Quantitative Analysis Module
+Математический расчет Price Action структур (BOS, FVG, Order Blocks) и нормализация для ИИ.
+"""
+import logging
 import pandas as pd
 import numpy as np
+import math
 from typing import Dict, List, Optional
 from services.smc_detector import smc_detector
+from config.settings import MAX_LOT_SIZE, RISK_PERCENT
+
+logger = logging.getLogger(__name__)
+
 
 class TradingCalculator:
     def __init__(self):
         self.smc_detector = smc_detector
 
+    # --- БЛОК 1: ТОРГОВЫЕ РАСЧЕТЫ (РИСК И ЛОТЫ) ---
+
+    def calculate_trade_params(self, entry: float, sl: float, tp: float, balance: float) -> Dict:
+        """
+        Расчет параметров сделки: лот, R:R и валидация риска.
+        """
+        try:
+            if not all([entry, sl, tp]) or entry == sl:
+                return {"error": "Некорректные уровни"}
+
+            stop_points = abs(entry - sl)
+            profit_points = abs(tp - entry)
+            rr_ratio = round(profit_points / stop_points, 2)
+
+            # Базовая цель риска 0.5%
+            risk_target_usd = balance * RISK_PERCENT
+            raw_lot = risk_target_usd / (stop_points * 100)
+
+            lot = "0.00"
+            # Логика блокировки по R:R (минимум 1:2)
+            if rr_ratio < 2.0:
+                lot = "0.00"
+            else:
+                if raw_lot < 0.01:
+                    # Стратегическое исключение: если RR хороший и риск лотом 0.01 не выше 1%
+                    if stop_points <= (balance * 0.01):
+                        lot = "0.01"
+                    else:
+                        lot = "0.00"
+                else:
+                    # Ограничиваем максимальный лот и округляем вниз (math.floor)
+                    calculated = min(MAX_LOT_SIZE, math.floor(raw_lot * 100) / 100)
+                    lot = f"{calculated:.2f}"
+
+            return {
+                "success": True,
+                "rr_ratio": rr_ratio,
+                "stop_points": round(stop_points, 2),
+                "lot": lot,
+                "direction": "BUY" if entry > sl else "SELL"
+            }
+        except Exception as e:
+            logger.error(f"Error in params calc: {e}")
+            return {"error": str(e)}
+
+    # --- БЛОК 2: АНАЛИЗ РЫНОЧНЫХ СТРУКТУР ---
+
     def get_market_analysis(self, candles: List[Dict]) -> Dict:
         """
-        Анализ рынка с использованием SMC детектора
+        Анализ рынка с использованием SMC детектора.
+        Нормализует колонки и запускает полный анализ структур.
         
         Args:
             candles: Список свечей (OHLC)
@@ -22,35 +80,45 @@ class TradingCalculator:
 
         df = pd.DataFrame(candles)
         
-        # 1. Используем новый SMC детектор для всех структур
-        smc_data = self.smc_detector.analyze(df)
-        
-        # 2. Считаем индикаторы
-        indicators = self._calculate_indicators(df)
-        
-        # 3. Формируем анализ в старом формате для совместимости
-        analysis = {
-            "order_blocks": smc_data.get('order_blocks', []),
-            "fvg": smc_data.get('fvg', []),
-            "liquidity": self._format_liquidity_legacy(smc_data),
-            "bos_choch": self._format_bos_choch_legacy(smc_data),
-            "trend": smc_data.get('trend', 'NEUTRAL'),
-            "levels": {
-                "resistance": float(df['high'].max()),
-                "support": float(df['low'].min())
-            },
-            "indicators": indicators,
-            "advanced": smc_data.get('advanced', {}),  # Добавляем advanced данные
-            "choch": smc_data.get('choch', []),
-            "bos": smc_data.get('bos', []),
-            "eqh": smc_data.get('eqh', []),
-            "eql": smc_data.get('eql', [])
-        }
-        
-        # 4. Формат для AI
-        analysis["ai_transcript"] = self._format_for_ai(df, analysis, smc_data)
-        
-        return analysis
+        # Убеждаемся что колонки в lowercase
+        df.columns = [str(c).lower() for c in df.columns]
+
+        try:
+            # 1. Используем новый SMC детектор для всех структур
+            smc_data = self.smc_detector.analyze(df)
+            
+            # 2. Считаем индикаторы
+            indicators = self._calculate_indicators(df)
+            
+            # 3. Формируем анализ с полными данными (приоритет HEAD)
+            analysis = {
+                "order_blocks": smc_data.get('order_blocks', []),
+                "fvg": smc_data.get('fvg', []),
+                "liquidity": self._format_liquidity_legacy(smc_data),
+                "bos_choch": self._format_bos_choch_legacy(smc_data),
+                "trend": smc_data.get('trend', 'NEUTRAL'),
+                "levels": {
+                    "resistance": float(df['high'].max()),
+                    "support": float(df['low'].min())
+                },
+                "indicators": indicators,
+                "advanced": smc_data.get('advanced', {}),  # Добавляем advanced данные
+                "choch": smc_data.get('choch', []),
+                "bos": smc_data.get('bos', []),
+                "eqh": smc_data.get('eqh', []),
+                "eql": smc_data.get('eql', [])
+            }
+            
+            # 4. Формат для AI
+            analysis["ai_transcript"] = self._format_for_ai(df, analysis, smc_data)
+            
+            return analysis
+
+        except Exception as e:
+            logger.error(f"Error in SMC analysis: {str(e)}")
+            return {"error": f"Ошибка анализа: {str(e)}"}
+    
+    # --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
     
     def _format_liquidity_legacy(self, smc_data: Dict) -> Dict:
         """
@@ -88,31 +156,34 @@ class TradingCalculator:
 
     def _calculate_indicators(self, df: pd.DataFrame) -> Dict:
         """
-        Расчёт технических индикаторов
+        Расчёт технических индикаторов (RSI, SMA)
         """
         closes = df['close']
         delta = closes.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rsi = 100 - (100 / (1 + (gain / loss)))
+        rs = gain / loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        
         return {
-            "rsi": round(float(rsi.iloc[-1]), 2), 
+            "rsi": round(float(rsi.fillna(50).iloc[-1]), 2), 
             "sma_20": round(float(closes.tail(20).mean()), 2)
         }
 
     def _format_for_ai(self, df: pd.DataFrame, analysis: Dict, smc_data: Dict) -> str:
         """
-        Форматирует данные для отправки в AI (Gemini)
+        Форматирует данные для отправки в AI (Gemini) с полной детализацией
         """
         transcript = "=== MARKET DATA (Last 15 candles) ===\n"
         transcript += "Open | High | Low | Close | Volume\n"
         for _, r in df.tail(15).iterrows():
-            transcript += f"{r['open']:.2f} | {r['high']:.2f} | {r['low']:.2f} | {r['close']:.2f} | {int(r['volume'])}\n"
+            volume_str = f"{int(r['volume'])}" if 'volume' in r and pd.notna(r['volume']) else "N/A"
+            transcript += f"{r['open']:.2f} | {r['high']:.2f} | {r['low']:.2f} | {r['close']:.2f} | {volume_str}\n"
         
         transcript += f"\n=== MARKET STRUCTURE ===\n"
         transcript += f"Trend: {smc_data.get('trend', 'NEUTRAL')}\n"
         
-        # BOS/CHOCH
+        # BOS/CHOCH Events
         if analysis['bos_choch']:
             transcript += "\nBOS/CHOCH Events:\n"
             for ev in analysis['bos_choch']:
@@ -196,4 +267,13 @@ class TradingCalculator:
         
         return transcript
 
-calculator = TradingCalculator() 
+    @staticmethod
+    def calculate_breakeven(entry: float, sl: float) -> float:
+        """
+        Расчет уровня безубыточности (breakeven) для частичного закрытия позиции
+        """
+        stop_points = abs(entry - sl)
+        return round(entry + (stop_points * 0.5), 2) if entry > sl else round(entry - (stop_points * 0.5), 2)
+
+
+calculator = TradingCalculator()

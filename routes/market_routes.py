@@ -1,10 +1,11 @@
 """
-Роуты для рыночных данных
+Роуты для рыночных данных с выбором источника (Twelve Data / Yahoo Finance)
 """
 from flask import Blueprint, jsonify, request
 import logging
 
 from services.yfinance_service import yfinance_service
+from services.twelvedata_service import twelvedata_service
 from services.calculator import calculator
 from config.settings import (
     SYMBOL,
@@ -34,74 +35,77 @@ def get_candles():
         tf: таймфрейм (M15, H1, H4, etc.)
         period: период (1d, 5d, 1mo, etc.) - опционально
         limit: количество последних свечей - опционально
+        source: источник данных (twelvedata/yfinance) - опционально
     """
     try:
         timeframe = request.args.get('tf')
-        
-        # Если таймфрейм не указан - возвращаем данные по всем ТФ
-        if not timeframe:
-            logger.info("Candles request: all timeframes (default)")
-            
-            # Получаем данные по трем таймфреймам
-            h4_data = yfinance_service.get_candles('H4', limit=10)
-            h1_data = yfinance_service.get_candles('H1', limit=20)
-            m15_data = yfinance_service.get_candles('M15', limit=50)
+        # Источник данных: по умолчанию twelvedata
+        source = request.args.get('source', 'twelvedata')
+        limit = request.args.get('limit', type=int)
+        period = request.args.get('period')
 
-            h4_raw = yfinance_service.get_candles('H4', limit=40)
-            h1_raw = yfinance_service.get_candles('H1', limit=40)
-            m15_raw = yfinance_service.get_candles('M15', limit=60)
+        # Выбираем сервис
+        market_service = twelvedata_service if source == 'twelvedata' else yfinance_service
+        
+        logger.info(f"Candles request: source={source}, tf={timeframe or 'ALL'}")
+
+        # ВАРИАНТ 1: Если таймфрейм не указан - возвращаем данные по всем ТФ (H4, H1, M15)
+        if not timeframe:
+            # Запрашиваем данные с запасом для анализа
+            h4_raw = market_service.get_candles('H4', limit=max(limit or 40, 40))
+            h1_raw = market_service.get_candles('H1', limit=max(limit or 40, 40))
+            m15_raw = market_service.get_candles('M15', limit=max(limit or 60, 60))
             
-            # Проверяем на ошибки
-            if "error" in h4_data or "error" in h1_data or "error" in m15_data or "error" in h4_raw or "error" in h1_raw or "error" in m15_raw:
+            if "error" in h4_raw or "error" in h1_raw or "error" in m15_raw:
                 return jsonify({
                     "error": "Ошибка получения данных",
+                    "source": source,
                     "details": {
-                        "H4": h4_data.get("error"),
-                        "H1": h1_data.get("error"),
-                        "M15": m15_data.get("error")
+                        "H4": h4_raw.get("error"), 
+                        "H1": h1_raw.get("error"), 
+                        "M15": m15_raw.get("error")
                     }
                 }), 500
 
+            # Прогоняем через калькулятор структур
             h4_analysis = calculator.get_market_analysis(h4_raw.get("candles", []))
             h1_analysis = calculator.get_market_analysis(h1_raw.get("candles", []))
             m15_analysis = calculator.get_market_analysis(m15_raw.get("candles", []))
             
-            # Формируем ответ
             return jsonify({
                 "success": True,
                 "symbol": SYMBOL,
+                "source": source,
                 "timeframes": {
                     "H4": {
-                        "candles": h4_data.get("candles", []),
-                        "count": len(h4_data.get("candles", [])),
+                        "candles": h4_raw.get("candles", [])[-10:],  # Отдаем 10 для легкого веса
                         "analysis": h4_analysis
                     },
                     "H1": {
-                        "candles": h1_data.get("candles", []),
-                        "count": len(h1_data.get("candles", [])),
+                        "candles": h1_raw.get("candles", [])[-20:],  # Отдаем 20
                         "analysis": h1_analysis
                     },
                     "M15": {
-                        "candles": m15_data.get("candles", []),
-                        "count": len(m15_data.get("candles", [])),
+                        "candles": m15_raw.get("candles", [])[-50:],  # Отдаем 50
                         "analysis": m15_analysis
                     }
                 }
             })
         
-        # Если таймфрейм указан - работаем как раньше
-        period = request.args.get('period')
-        limit = request.args.get('limit', type=int)
-        
-        logger.info(f"Candles request: tf={timeframe}, period={period}, limit={limit}")
-        
-        result = yfinance_service.get_candles(timeframe, period, limit)
+        # ВАРИАНТ 2: Запрос конкретного таймфрейма
+        calc_limit = max(limit or 100, 100)  # Минимум 100 для точности анализа
+        result = market_service.get_candles(timeframe, period, calc_limit)
         
         if "error" in result:
             return jsonify(result), 500
 
         if "candles" in result:
+            # Добавляем анализ структур
             result["analysis"] = calculator.get_market_analysis(result["candles"])
+            # Обрезаем свечи до того количества, которое просил юзер в limit
+            if limit:
+                result["candles"] = result["candles"][-limit:]
+            result["source"] = source
             
         return jsonify(result)
         
@@ -116,6 +120,7 @@ def get_ticker_info():
     Получение информации о тикере
     """
     try:
+        # Инфо о тикере пока оставим через Yahoo, там больше описательных данных
         info = yfinance_service.get_ticker_info()
         return jsonify(info)
         
@@ -127,10 +132,21 @@ def get_ticker_info():
 @market_bp.route('/current-price')
 def get_current_price():
     """
-    Получение текущей цены
+    Получение текущей цены с выбором источника
     """
     try:
-        price = yfinance_service.get_current_price()
+        source = request.args.get('source', 'twelvedata')
+        market_service = twelvedata_service if source == 'twelvedata' else yfinance_service
+        
+        # Пытаемся взять быструю цену
+        price = None
+        if source == 'twelvedata':
+            # У TwelveData есть быстрый эндпоинт для цены, но для простоты возьмем из свечей
+            res = twelvedata_service.get_candles(limit=1)
+            if "candles" in res:
+                price = res["candles"][-1]["close"]
+        else:
+            price = yfinance_service.get_current_price()
         
         if price is None:
             return jsonify({"error": "Не удалось получить цену"}), 500
@@ -138,6 +154,7 @@ def get_current_price():
         return jsonify({
             "symbol": SYMBOL,
             "price": price,
+            "source": source,
             "timestamp": int(__import__('time').time())
         })
         
@@ -171,12 +188,15 @@ def health_check():
     Проверка работоспособности сервиса
     """
     try:
-        is_valid = yfinance_service.validate_symbol()
+        # Проверяем оба сервиса
+        yf_ok = yfinance_service.validate_symbol()
+        td_ok = twelvedata_service.get_candles(limit=1).get("success", False)
         
         return jsonify({
-            "status": "healthy" if is_valid else "degraded",
-            "symbol": SYMBOL,
-            "symbol_available": is_valid
+            "status": "healthy" if td_ok else "degraded",
+            "twelvedata_active": td_ok,
+            "yfinance_active": yf_ok,
+            "symbol": SYMBOL
         })
         
     except Exception as e:

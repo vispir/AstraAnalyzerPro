@@ -211,10 +211,10 @@ class ChartService:
             # 1. Основной свечной график
             fig = go.Figure(data=[go.Candlestick(
                 x=df.index,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
                 name='Price',
                 increasing_line_color=self.colors['candle_up'],
                 decreasing_line_color=self.colors['candle_down'],
