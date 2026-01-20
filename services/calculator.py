@@ -8,7 +8,6 @@ import numpy as np
 import math
 from typing import Dict, List, Optional
 from services.smc_detector import smc_detector
-from config.settings import MAX_LOT_SIZE, RISK_PERCENT
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +18,16 @@ class TradingCalculator:
 
     # --- БЛОК 1: ТОРГОВЫЕ РАСЧЕТЫ (РИСК И ЛОТЫ) ---
 
-    def calculate_trade_params(self, entry: float, sl: float, tp: float, balance: float) -> Dict:
+    def calculate_trade_params(self, entry: float, sl: float, tp: float, balance: float, risk_percent: float = 0.5) -> Dict:
         """
         Расчет параметров сделки: лот, R:R и валидация риска.
+        
+        Args:
+            entry: Точка входа
+            sl: Stop Loss
+            tp: Take Profit
+            balance: Баланс счета
+            risk_percent: Процент риска на сделку (по умолчанию 0.5%)
         """
         try:
             if not all([entry, sl, tp]) or entry == sl:
@@ -31,8 +37,8 @@ class TradingCalculator:
             profit_points = abs(tp - entry)
             rr_ratio = round(profit_points / stop_points, 2)
 
-            # Базовая цель риска 0.5%
-            risk_target_usd = balance * RISK_PERCENT
+            # Базовая цель риска (используем переданный процент)
+            risk_target_usd = balance * (risk_percent / 100)
             raw_lot = risk_target_usd / (stop_points * 100)
 
             lot = "0.00"
@@ -47,8 +53,8 @@ class TradingCalculator:
                     else:
                         lot = "0.00"
                 else:
-                    # Ограничиваем максимальный лот и округляем вниз (math.floor)
-                    calculated = min(MAX_LOT_SIZE, math.floor(raw_lot * 100) / 100)
+                    # Округляем вниз (math.floor) - без максимального лота
+                    calculated = math.floor(raw_lot * 100) / 100
                     lot = f"{calculated:.2f}"
 
             return {
@@ -156,17 +162,36 @@ class TradingCalculator:
 
     def _calculate_indicators(self, df: pd.DataFrame) -> Dict:
         """
-        Расчёт технических индикаторов (RSI, SMA)
+        Расчёт технических индикаторов (RSI, SMA) с использованием сглаживания Уайлдера
         """
         closes = df['close']
         delta = closes.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, np.nan)
+        
+        # Разделяем прибыли и убытки
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        # Используем RMA (Running Moving Average), как в TradingView
+        # Это экспоненциальное среднее с alpha = 1/period
+        avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        
+        # Рассчитываем RS и RSI
+        rs = avg_gain / avg_loss.replace(0, np.nan)
         rsi = 100 - (100 / (1 + rs))
         
+        # Получаем последнее значение и обрабатываем крайние случаи (NaN/Inf)
+        last_rsi = rsi.iloc[-1]
+        if np.isnan(last_rsi):
+            # Если данных меньше 14, возвращаем нейтральные 50
+            # Если потерь 0, а прибыли есть - это RSI 100
+            if not avg_loss.empty and avg_loss.iloc[-1] == 0 and avg_gain.iloc[-1] > 0:
+                last_rsi = 100.0
+            else:
+                last_rsi = 50.0
+        
         return {
-            "rsi": round(float(rsi.fillna(50).iloc[-1]), 2), 
+            "rsi": round(float(last_rsi), 2), 
             "sma_20": round(float(closes.tail(20).mean()), 2)
         }
 

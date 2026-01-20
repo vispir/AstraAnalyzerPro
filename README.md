@@ -18,7 +18,7 @@
 
 ### 🤖 AI и Новости
 - ✅ AI анализ сделок через Gemini API
-- ✅ **LLM анализ через OpenRouter** (Google Gemini 2.0 Flash - бесплатно!)
+- ✅ **LLM анализ через OpenRouter** (DeepSeek R1 - бесплатно!)
 - ✅ Автоматическая торговая сессия (London/NY overlap detection)
 - ✅ Комплексный анализ: графики + новости + SMC уровни
 - ✅ Экономический календарь (investpy)
@@ -199,7 +199,7 @@ AstraAnalyzerPro/
 - **Investing.com** (investpy) - экономический календарь
 - **Google News** (gnews) - геополитические новости
 - **Gemini API** - AI анализ (старый)
-- **OpenRouter** + Google Gemini 2.0 Flash - комплексный LLM анализ ⭐ NEW
+- **OpenRouter** + DeepSeek R1 - комплексный LLM анализ ⭐ NEW
 
 ## ⚙️ Конфигурация
 
@@ -220,7 +220,7 @@ AstraAnalyzerPro/
 | `FLASK_DEBUG` | Режим отладки | False |
 
 > 💡 **Примечания:**
-> - `OPENROUTER_API_KEY` не требуется для бесплатной модели Google Gemini 2.0 Flash
+> - `OPENROUTER_API_KEY` не требуется для бесплатной модели DeepSeek R1
 > - `AI_GATEWAY_URL` позволяет использовать Gateway с моделью `google/gemini-3-pro-preview`
 > - Модель для Gateway: `google/gemini-3-pro-preview` (указана в коде)
 

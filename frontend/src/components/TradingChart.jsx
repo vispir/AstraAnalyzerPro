@@ -6,6 +6,7 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const linesRef = useRef({ entry: null, sl: null, tp: null });
+  const draggingRef = useRef(null);
 
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) return;
@@ -29,8 +30,80 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
     chartRef.current = chart;
     seriesRef.current = series;
 
+    // Обработка перетаскивания
+    const container = chartContainerRef.current;
+    
+    const onMouseDown = (e) => {
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      const price = series.coordinateToPrice(y);
+      if (!price) return;
+
+      // Проверяем близость к существующим линиям (в пикселях)
+      const threshold = 15;
+      let closest = null;
+      let minDiff = threshold;
+
+      ['entry', 'sl', 'tp'].forEach(mode => {
+        const levelPrice = parseFloat(levelsRef.current[mode]);
+        if (!isNaN(levelPrice)) {
+          const levelY = series.priceToCoordinate(levelPrice);
+          const diff = Math.abs(levelY - y);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = mode;
+          }
+        }
+      });
+
+      if (closest) {
+        draggingRef.current = closest;
+        chart.applyOptions({ handleScroll: false, handleScale: false }); // Отключаем скролл при перетаскивании
+      }
+    };
+
+    const onMouseMove = (e) => {
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      
+      if (draggingRef.current) {
+        const price = series.coordinateToPrice(y);
+        if (price) {
+          setLevels(prev => ({ ...prev, [draggingRef.current]: price.toFixed(2) }));
+        }
+        return;
+      }
+
+      // Подсветка при наведении
+      const threshold = 15;
+      let isNearLine = false;
+      ['entry', 'sl', 'tp'].forEach(mode => {
+        const levelPrice = parseFloat(levelsRef.current[mode]);
+        if (!isNaN(levelPrice)) {
+          const levelY = series.priceToCoordinate(levelPrice);
+          if (Math.abs(levelY - y) < threshold) {
+            isNearLine = true;
+          }
+        }
+      });
+      container.style.cursor = isNearLine ? 'ns-resize' : 'crosshair';
+    };
+
+    const onMouseUp = () => {
+      if (draggingRef.current) {
+        draggingRef.current = null;
+        chart.applyOptions({ handleScroll: true, handleScale: true });
+      }
+    };
+
+    container.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+
     chart.subscribeClick((param) => {
-      if (!param.point || !window.currentActiveMode) return;
+      if (!param.point || !window.currentActiveMode || draggingRef.current) return;
       const price = series.coordinateToPrice(param.point.y);
       if (price) window.updateLevel(window.currentActiveMode, price.toFixed(2));
     });
@@ -46,6 +119,9 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
     window.addEventListener('resize', handleResize);
 
     return () => {
+      container.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('resize', handleResize);
       if (chartRef.current) {
         chartRef.current.remove();
@@ -53,6 +129,12 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
       }
     };
   }, []);
+
+  // Используем ref для уровней, чтобы иметь к ним доступ в обработчиках без пересоздания useEffect
+  const levelsRef = useRef(levels);
+  useEffect(() => {
+    levelsRef.current = levels;
+  }, [levels]);
 
   useEffect(() => {
     window.currentActiveMode = activeMode;
@@ -73,12 +155,29 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
     if (!s) return;
 
     const updateLine = (key, price, color, title) => {
+      const parsedPrice = parseFloat(price);
+      const isValid = price && !isNaN(parsedPrice);
+
       if (linesRef.current[key]) {
-        try { s.removePriceLine(linesRef.current[key]); } catch (err) { console.log(err.message); }
-      }
-      if (price && !isNaN(parseFloat(price))) {
+        if (isValid) {
+          // Если линия уже есть и цена валидна — просто обновляем её
+          linesRef.current[key].applyOptions({ price: parsedPrice });
+        } else {
+          // Если цена стала невалидной (сброс) — удаляем
+          try { 
+            s.removePriceLine(linesRef.current[key]); 
+            linesRef.current[key] = null;
+          } catch (err) { console.log(err.message); }
+        }
+      } else if (isValid) {
+        // Если линии нет, но цена валидна — создаем
         linesRef.current[key] = s.createPriceLine({
-          price: parseFloat(price), color, lineWidth: 2, lineStyle: 2, title, axisLabelVisible: true
+          price: parsedPrice, 
+          color, 
+          lineWidth: 2, 
+          lineStyle: 2, 
+          title, 
+          axisLabelVisible: true
         });
       }
     };

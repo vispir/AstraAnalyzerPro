@@ -6,7 +6,7 @@ import TradingChart from './components/TradingChart';
 import AIPanel from './components/AIPanel';
 import './App.css';
 
-const API_BASE = "http://192.168.1.55:5000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
 
 function App() {
   const [marketData, setMarketData] = useState({ candles: [], analysis: null });
@@ -14,7 +14,11 @@ function App() {
   // Инициализация баланса из localStorage или дефолт
   const [account, setAccount] = useState(() => {
     const saved = localStorage.getItem('astra_account');
-    return saved ? JSON.parse(saved) : { balance: 5000.00, equity: 5000.00 };
+    return saved ? JSON.parse(saved) : { 
+      balance: 5000.00, 
+      dailyLossLimit: 250, 
+      riskPercent: 0.5 
+    };
   });
 
   const [tf, setTf] = useState('M15');
@@ -74,7 +78,17 @@ function App() {
       loadData();
     }, 0);
 
-    const interval = setInterval(loadData, 60000);
+    // Интервал обновления зависит от таймфрейма свечи
+    const getUpdateInterval = () => {
+      switch(tf) {
+        case 'M15': return 15 * 60 * 1000;  // 15 минут
+        case 'H1': return 60 * 60 * 1000;   // 1 час
+        case 'H4': return 240 * 60 * 1000;  // 4 часа
+        default: return 15 * 60 * 1000;     // По умолчанию 15 минут
+      }
+    };
+
+    const interval = setInterval(loadData, getUpdateInterval());
 
     return () => {
       isMounted = false;

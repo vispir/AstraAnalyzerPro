@@ -7,13 +7,7 @@ import logging
 from services.yfinance_service import yfinance_service
 from services.twelvedata_service import twelvedata_service
 from services.calculator import calculator
-from config.settings import (
-    SYMBOL,
-    START_BALANCE,
-    DAILY_LOSS_LIMIT,
-    MAX_LOT_SIZE,
-    RISK_PERCENT
-)
+from config.settings import SYMBOL
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +161,13 @@ def get_current_price():
 def get_config():
     """
     Получение конфигурации приложения
+    
+    Note: Trading parameters (balance, daily_loss_limit, risk_percent) 
+    are now managed on the client side. This endpoint returns only the symbol.
     """
     try:
         return jsonify({
-            "symbol": SYMBOL,
-            "start_balance": START_BALANCE,
-            "daily_loss_limit": DAILY_LOSS_LIMIT,
-            "max_lot_size": MAX_LOT_SIZE,
-            "risk_percent": RISK_PERCENT
+            "symbol": SYMBOL
         })
         
     except Exception as e:

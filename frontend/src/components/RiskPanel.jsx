@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Target, ShieldAlert, BadgeCheck, Wallet, Timer } from 'lucide-react';
+import { Target, ShieldAlert, BadgeCheck, Wallet, Timer, RefreshCcw, MoveVertical } from 'lucide-react';
 
 // Вспомогательный компонент для кругового таймера
 const CandleTimer = ({ tf }) => {
@@ -81,7 +81,10 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
     const e = parseFloat(levels.entry);
     const s = parseFloat(levels.sl);
     const t = parseFloat(levels.tp);
-    if (!e || !s || !t || e === s) return "0.00";
+    const balance = parseFloat(account.balance) || 0;
+    const riskPercent = parseFloat(account.riskPercent) || 0.5;
+    
+    if (!e || !s || !t || e === s || balance === 0) return "0.00";
 
     const stopPoints = Math.abs(e - s);
     const profitPoints = Math.abs(t - e);
@@ -89,19 +92,22 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
 
     if (rr < 2.0) return "0.00";
 
-    const riskTargetUSD = account.balance * 0.005; 
+    const riskTargetUSD = balance * (riskPercent / 100); 
     let rawLot = riskTargetUSD / (stopPoints * 100);
     
     if (rawLot < 0.01) {
-        if (stopPoints <= (account.balance * 0.01)) return "0.01";
+        if (stopPoints <= (balance * 0.01)) return "0.01";
         return "0.00";
     }
     return (Math.floor(rawLot * 100) / 100).toFixed(2);
   };
 
   const lotValue = calculateLot();
-  const dailyLoss = Math.max(0, 5000 - account.equity); 
-  const lossPercent = Math.min(100, (dailyLoss / 250) * 100);
+  const dailyLossLimit = parseFloat(account.dailyLossLimit) || 250;
+  const currentBalance = parseFloat(account.balance) || 5000;
+  const startBalance = 5000; // Начальный баланс дня (можно сохранять в localStorage)
+  const dailyLoss = Math.max(0, startBalance - currentBalance); 
+  const lossPercent = Math.min(100, (dailyLoss / dailyLossLimit) * 100);
 
   return (
     <aside className="glass-panel sidebar-left">
@@ -115,12 +121,20 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
           value={account.balance} 
           onChange={(e) => setAccount({...account, balance: e.target.value})} 
         />
-        <label>Current Equity ($)</label>
+        <label>Daily Loss Limit ($)</label>
         <input 
           type="number" 
           className="custom-input small" 
-          value={account.equity} 
-          onChange={(e) => setAccount({...account, equity: e.target.value})} 
+          value={account.dailyLossLimit} 
+          onChange={(e) => setAccount({...account, dailyLossLimit: e.target.value})} 
+        />
+        <label>Risk Percent (%)</label>
+        <input 
+          type="number" 
+          step="0.1"
+          className="custom-input small" 
+          value={account.riskPercent} 
+          onChange={(e) => setAccount({...account, riskPercent: e.target.value})} 
         />
         <div className="daily-bar-container">
            <div className="daily-bar-fill" style={{
@@ -143,16 +157,47 @@ const RiskPanel = ({ account, setAccount, levels, setLevels, activeMode, setActi
       </div>
 
       <div className="inputs-group">
-        <label>Entry Price</label>
-        <input type="number" className="custom-input" value={levels.entry} onChange={(e) => setLevels({...levels, entry: e.target.value})} />
-        <label>Stop Loss</label>
-        <input type="number" className="custom-input" value={levels.sl} onChange={(e) => setLevels({...levels, sl: e.target.value})} />
-        <label>Take Profit</label>
-        <input type="number" className="custom-input" value={levels.tp} onChange={(e) => setLevels({...levels, tp: e.target.value})} />
+        <div className="input-with-action">
+          <label>Entry Price</label>
+          <div className="input-row">
+            <input type="number" className="custom-input" value={levels.entry} onChange={(e) => setLevels({...levels, entry: e.target.value})} />
+            <button className="icon-btn" onClick={() => setLevels({...levels, entry: ''})} title="Reset Entry">
+              <RefreshCcw size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="input-with-action">
+          <label>Stop Loss</label>
+          <div className="input-row">
+            <input type="number" className="custom-input" value={levels.sl} onChange={(e) => setLevels({...levels, sl: e.target.value})} />
+            <button className="icon-btn" onClick={() => setLevels({...levels, sl: ''})} title="Reset SL">
+              <RefreshCcw size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="input-with-action">
+          <label>Take Profit</label>
+          <div className="input-row">
+            <input type="number" className="custom-input" value={levels.tp} onChange={(e) => setLevels({...levels, tp: e.target.value})} />
+            <button className="icon-btn" onClick={() => setLevels({...levels, tp: ''})} title="Reset TP">
+              <RefreshCcw size={14} />
+            </button>
+          </div>
+        </div>
+        
+        <button className="reset-all-btn" onClick={() => setLevels({entry: '', sl: '', tp: ''})}>
+          <RefreshCcw size={14} /> Reset All Levels
+        </button>
+        
+        <div className="drag-hint">
+          <MoveVertical size={12} /> Двигайте линии на графике
+        </div>
       </div>
 
       {/* ТАЙМЕР ПЕРЕД RECOMMENDED LOT */}
-      <div style={{display: 'flex', justifyContent: 'center', margin: '20px 0 16px 0'}}>
+      <div style={{display: 'flex', justifyContent: 'center', margin: '12px 0 8px 0'}}>
         <CandleTimer tf={tf} />
       </div>
 

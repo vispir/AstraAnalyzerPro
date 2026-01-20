@@ -19,10 +19,6 @@ SYMBOL = os.getenv('SYMBOL', 'XAUUSD')
 # Варианты символов для золота на Yahoo Finance:
 # 'GC=F' - Gold Futures
 YAHOO_SYMBOL = 'GC=F'
-START_BALANCE = float(os.getenv('START_BALANCE', 5000))
-DAILY_LOSS_LIMIT = float(os.getenv('DAILY_LOSS_LIMIT', 250))
-MAX_LOT_SIZE = float(os.getenv('MAX_LOT_SIZE', 0.10))
-RISK_PERCENT = float(os.getenv('RISK_PERCENT', 0.005))
 
 # Server Configuration
 FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))

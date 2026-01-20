@@ -9,8 +9,8 @@
   .main-layout {
     display: grid;
     grid-template-columns: 300px 1fr 400px;
-    gap: 12px;
-    padding: 0 12px 12px 12px;
+    gap: 8px;
+    padding: 0 8px 8px 8px;
     flex: 1;
     overflow: hidden;
   }
@@ -21,9 +21,9 @@
     flex-direction: row !important;
     justify-content: space-between;
     align-items: center;
-    margin: 15px;
-    padding: 8px 20px !important;
-    height: 60px;
+    margin: 8px 12px;
+    padding: 6px 16px !important;
+    height: 48px;
   }
 
   .controls-area {
@@ -143,29 +143,109 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    gap: 12px;
-    padding: 15px !important;
+    gap: 8px;
+    padding: 10px !important;
   }
 
   .sidebar-left h3, .sidebar-right h3 {
     text-align: center;
-    margin: 0 0 15px 0;
+    margin: 0 0 8px 0;
+    font-size: 16px;
   }
   
   /* ИНПУТЫ ЦЕН */
+  .inputs-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-with-action {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
   .custom-input {
     background: #161a25;
     border: 1px solid #2a2e39;
     color: #fff;
-    padding: 10px;
-    border-radius: 6px;
+    padding: 10px 12px;
+    border-radius: 8px;
     width: 100%;
     font-size: 14px;
     font-family: 'JetBrains Mono', monospace;
-    margin-bottom: 8px;
+    margin-bottom: 0;
     text-align: left;
+    transition: border-color 0.2s;
   }
-  .custom-input:focus { border-color: var(--accent-blue); }
+  .custom-input:focus { 
+    border-color: var(--accent-blue);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.1);
+  }
+
+  .icon-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-dim);
+    padding: 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    height: 40px;
+    width: 40px;
+    flex-shrink: 0;
+  }
+
+  .icon-btn:hover {
+    background: rgba(239, 83, 80, 0.1);
+    color: var(--accent-red);
+    border-color: rgba(239, 83, 80, 0.4);
+    transform: rotate(90deg);
+  }
+
+  .reset-all-btn {
+    margin-top: 4px;
+    background: transparent;
+    border: 1px dashed rgba(239, 83, 80, 0.3);
+    color: var(--accent-red);
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+
+  .reset-all-btn:hover {
+    background: rgba(239, 83, 80, 0.1);
+    border-color: var(--accent-red);
+  }
+
+  .drag-hint {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    opacity: 0.7;
+  }
   
   /* МЕТКИ ПОЛЕЙ ВВОДА */
   label {
@@ -180,21 +260,21 @@
   .mode-selector-group {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: 6px;
+    margin-bottom: 6px;
   }
 
   .mode-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 12px 16px;
+    gap: 6px;
+    padding: 8px 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
+    border-radius: 6px;
     background: rgba(22, 26, 37, 0.6);
     color: var(--text-main);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -246,8 +326,8 @@
   .lot-result-box {
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.03);
-    padding: 12px;
-    border-radius: 8px;
+    padding: 8px;
+    border-radius: 6px;
     text-align: center;
     margin-top: auto;
     display: flex;
@@ -256,17 +336,17 @@
     gap: 4px;
   }
   .lot-label {
-    font-size: 16px;
+    font-size: 13px;
     color: var(--text-dim);
     font-weight: 600;
   }
   .lot-separator {
     color: var(--text-dim);
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 600;
   }
   .lot-value { 
-    font-size: 24px; 
+    font-size: 18px; 
     font-weight: 800; 
   }
   
@@ -281,12 +361,12 @@
   .ai-placeholder {
     text-align: center;
     color: var(--text-dim);
-    font-size: 13px;
-    margin-top: 40px;
+    font-size: 12px;
+    margin-top: 20px;
   }
 
   .panel-footer {
-    padding-top: 15px;
+    padding-top: 8px;
     display: flex;
     justify-content: center;
   }
@@ -296,14 +376,15 @@
     background: linear-gradient(135deg, var(--accent-blue), #6a1b9a);
     border: none;
     color: white;
-    padding: 14px;
-    border-radius: 10px;
+    padding: 10px;
+    border-radius: 8px;
     font-weight: 700;
+    font-size: 13px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 8px;
     transition: 0.3s;
   }
 
@@ -323,8 +404,8 @@
  /* ТАЙМЕР В САЙДБАРЕ - УВЕЛИЧЕННЫЙ */
 .candle-timer-mini {
     position: relative;
-    width: 90px;
-    height: 90px;
+    width: 70px;
+    height: 70px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -388,27 +469,72 @@
   }
 
   .verdict-badge {
-    padding: 10px;
-    border-radius: 8px;
+    padding: 8px;
+    border-radius: 6px;
     text-align: center;
     font-weight: 800;
+    font-size: 13px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    margin-bottom: 20px;
+    gap: 8px;
+    margin-bottom: 12px;
   }
   .verdict-badge.входить { background: rgba(38, 166, 154, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
   .verdict-badge.ждать { background: rgba(251, 192, 45, 0.2); color: #fbc02d; border: 1px solid #fbc02d; }
   .verdict-badge.отмена { background: rgba(239, 83, 80, 0.2); color: var(--accent-red); border: 1px solid var(--accent-red); }
   
-  .analysis-section { margin-bottom: 15px; }
-  .analysis-section label { color: var(--accent-blue); font-weight: bold; margin-bottom: 4px; }
-  .analysis-section p { font-size: 13px; line-height: 1.5; margin: 0; }
+  /* Английские варианты для LLM анализа */
+  .verdict-badge.buy { background: rgba(38, 166, 154, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+  .verdict-badge.sell { background: rgba(38, 166, 154, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+  .verdict-badge.wait { background: rgba(251, 192, 45, 0.2); color: #fbc02d; border: 1px solid #fbc02d; }
+  
+  .analysis-section { margin-bottom: 10px; }
+  .analysis-section label { color: var(--accent-blue); font-weight: bold; margin-bottom: 3px; font-size: 12px; }
+  .analysis-section p { font-size: 12px; line-height: 1.4; margin: 0; }
   .correction-text { color: #fff; font-style: italic; }
   
-  .risk-meter { margin-top: 20px; }
-  .meter-bg { background: #2a2e39; height: 6px; border-radius: 3px; margin-top: 5px; }
+  .risk-meter { margin-top: 12px; }
+  .meter-bg { background: #2a2e39; height: 5px; border-radius: 3px; margin-top: 4px; }
   .meter-fill { height: 100%; background: linear-gradient(to right, var(--accent-green), var(--accent-red)); border-radius: 3px; }
   
   .ai-text-fallback { white-space: pre-wrap; font-size: 13px; line-height: 1.6; }
+  
+  /* AI Loading Animation */
+  .ai-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 10px;
+    gap: 12px;
+  }
+  
+  .ai-loading .spinner {
+    animation: spin 1s linear infinite;
+    color: var(--accent-blue);
+  }
+  
+  .ai-loading p {
+    font-size: 13px;
+    color: #b0b0b0;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 1;
+    }
+  }

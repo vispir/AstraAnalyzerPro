@@ -4,6 +4,7 @@
 from flask import Blueprint, jsonify, request
 import logging
 import requests
+import json
 
 from services.llm_service import llm_service
 from config.settings import SYMBOL
@@ -18,8 +19,13 @@ def analyze_market():
     """
     Комплексный анализ рынка с помощью LLM
     
-    Query params:
-        model: Выбор модели - "openrouter" (по умолчанию), "gemini3" или "gateway"
+    Query/Body params:
+        model: Выбор модели - "openrouter" (по умолчанию), "gemini" или "gateway"
+        entry: точка входа (опционально для POST)
+        sl: stop loss (опционально для POST)
+        tp: take profit (опционально для POST)
+        balance: баланс счета (опционально)
+        equity: эквити (опционально)
     
     Собирает данные из всех источников:
     - Технические данные (свечи + SMC анализ) с 3 таймфреймов
@@ -29,14 +35,15 @@ def analyze_market():
     Отправляет в LLM для принятия торгового решения
     
     Examples:
-        /api/llm/analyze                  - OpenRouter (по умолчанию)
-        /api/llm/analyze?model=gemini3    - Gemini 3 Pro
-        /api/llm/analyze?model=gateway    - AI Gateway (custom)
+        GET  /api/llm/analyze                  - OpenRouter DeepSeek R1 (по умолчанию)
+        GET  /api/llm/analyze?model=gemini     - Gemini 2.5 Flash
+        GET  /api/llm/analyze?model=gateway    - Gateway Gemini 3 Pro Preview
+        POST /api/llm/analyze {model: "openrouter", entry: 2650, sl: 2645, tp: 2660}
     
     Returns:
         {
             "success": true,
-            "model": "google/gemini-2.0-flash-exp:free",
+            "model": "deepseek/deepseek-r1-0528:free",
             "session_info": {...},
             "timestamp": "2026-01-20 14:30 UTC",
             "response": "LLM ответ...",
@@ -44,13 +51,36 @@ def analyze_market():
         }
     """
     try:
-        # Получаем параметр модели
-        model = request.args.get('model', 'openrouter').lower()
+        # Получаем параметр модели из query или body
+        if request.method == 'POST':
+            data = request.get_json() or {}
+            model = data.get('model', request.args.get('model', 'openrouter')).lower()
+            # Извлекаем параметры счета
+            balance = float(data.get('balance', 5000))
+            daily_loss_limit = float(data.get('daily_loss_limit', 250))
+            risk_percent = float(data.get('risk_percent', 0.5))
+            
+            # Новые параметры: язык и идея пользователя
+            language = data.get('language', 'ru')
+            user_idea = data.get('user_idea', '')
+            manual_entry = data.get('entry')
+            manual_sl = data.get('sl')
+            manual_tp = data.get('tp')
+        else:
+            model = request.args.get('model', 'openrouter').lower()
+            balance = 5000
+            daily_loss_limit = 250
+            risk_percent = 0.5
+            language = request.args.get('language', 'ru')
+            user_idea = ''
+            manual_entry = request.args.get('entry')
+            manual_sl = request.args.get('sl')
+            manual_tp = request.args.get('tp')
         
-        if model not in ['openrouter', 'gemini3', 'gateway']:
+        if model not in ['openrouter', 'gemini', 'gateway']:
             return jsonify({
                 "error": "Invalid model parameter",
-                "details": "Use 'openrouter', 'gemini3' or 'gateway'"
+                "details": "Use 'openrouter', 'gemini' or 'gateway'"
             }), 400
         
         logger.info("=" * 60)
@@ -149,15 +179,48 @@ def analyze_market():
             news_data=news_data,
             computed_levels=computed_levels,
             chart_images=chart_images,
-            model=model
+            model=model,
+            balance=balance,
+            daily_loss_limit=daily_loss_limit,
+            risk_percent=risk_percent,
+            language=language,
+            user_idea=user_idea,
+            manual_entry=manual_entry,
+            manual_sl=manual_sl,
+            manual_tp=manual_tp
         )
         
         if 'error' in result:
             logger.error(f"✗ LLM analysis failed: {result['error']}")
+            if 'details' in result:
+                logger.error(f"  Details: {result['details']}")
             return jsonify(result), 500
         
+        # Логируем ответ
         logger.info("=" * 60)
         logger.info("✓ LLM ANALYSIS COMPLETED SUCCESSFULLY")
+        logger.info("=" * 60)
+        
+        # Логируем основные данные ответа
+        if 'response' in result:
+            response_text = result['response']
+            logger.info(f"Model: {result.get('model', 'unknown')}")
+            logger.info(f"Response length: {len(response_text)} characters")
+            
+            # Логируем первые 500 символов ответа
+            preview = response_text[:500] + "..." if len(response_text) > 500 else response_text
+            logger.info(f"Response preview:\n{preview}")
+            
+            # Если есть parsed_decision, логируем его
+            if 'parsed_decision' in result:
+                import json
+                logger.info("Parsed JSON decision:")
+                logger.info(json.dumps(result['parsed_decision'], indent=2, ensure_ascii=False))
+            
+            # Логируем usage если есть
+            if 'usage' in result:
+                logger.info(f"Token usage: {result['usage']}")
+        
         logger.info("=" * 60)
         
         return jsonify(result)
@@ -200,7 +263,7 @@ def get_status():
     Returns:
         {
             "status": "available",
-            "model": "google/gemini-2.0-flash-exp:free",
+            "model": "deepseek/deepseek-r1-0528:free",
             "session": {...}
         }
     """

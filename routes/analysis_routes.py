@@ -6,10 +6,10 @@ import logging
 
 from services.calculator import calculator
 from services.yfinance_service import yfinance_service
+from services.twelvedata_service import twelvedata_service
 from services.cache_service import cache_service
 from services.news_service import news_service
 from services.chart_service import chart_service
-from config.settings import START_BALANCE
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def calculate_trade():
         entry = float(data.get('entry', 0))
         sl = float(data.get('sl', 0))
         tp = float(data.get('tp', 0))
-        balance = float(data.get('balance', START_BALANCE))
+        balance = float(data.get('balance', 5000))
         
         if not all([entry, sl, tp]):
             return jsonify({"error": "Недостаточно параметров"}), 400
@@ -56,60 +56,17 @@ def calculate_trade():
 @analysis_bp.route('/analyze', methods=['POST'])
 def analyze_trade():
     """
-    AI анализ торговой сделки через Gemini
+    AI анализ торговой сделки (DEPRECATED - используйте /api/llm/analyze)
     
-    Body params:
-        entry: точка входа
-        sl: stop loss
-        tp: take profit
-        balance: баланс счета
-        equity: текущий эквити
-        ai_context: контекст рынка (опционально)
+    ⚠️ DEPRECATED: Этот роут оставлен для обратной совместимости.
+    Используйте /api/llm/analyze для полноценного анализа через LLM Service
     """
-    try:
-        from services.gemini_service import gemini_service
-        
-        data = request.get_json()
-        
-        entry = float(data.get('entry', 0))
-        sl = float(data.get('sl', 0))
-        tp = float(data.get('tp', 0))
-        balance = float(data.get('balance', START_BALANCE))
-        equity = float(data.get('equity', balance))
-        ai_context = data.get('ai_context', {})
-        
-        if not all([entry, sl, tp]):
-            return jsonify({"error": "Недостаточно параметров"}), 400
-        
-        # Расчет лота
-        calc_result = calculator.calculate_trade_params(entry, sl, tp, balance)
-        lot = calc_result.get('lot', 0.01)
-        
-        # Анализ через Gemini
-        result = gemini_service.analyze_trade(
-            entry=entry,
-            sl=sl,
-            tp=tp,
-            balance=balance,
-            equity=equity,
-            lot=lot,
-            ai_context=ai_context
-        )
-        
-        if "error" in result:
-            return jsonify(result), 500
-            
-        return jsonify({
-            "success": True,
-            "analysis": result.get('analysis', 'Нет ответа')
-        })
-        
-    except ValueError as e:
-        logger.error(f"Invalid input in /analyze: {str(e)}")
-        return jsonify({"error": "Некорректные входные данные"}), 400
-    except Exception as e:
-        logger.error(f"Error in /analyze: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "error": "This endpoint is deprecated",
+        "message": "Use /api/llm/analyze instead",
+        "new_endpoint": "/api/llm/analyze",
+        "docs": "POST /api/llm/analyze?model=openrouter (or gemini3/gateway)"
+    }), 410  # 410 Gone
 
 
 @analysis_bp.route('/breakeven', methods=['POST'])
@@ -158,8 +115,8 @@ def calculate_drawdown():
     try:
         data = request.get_json()
         
-        start_balance = float(data.get('start_balance', START_BALANCE))
-        current_equity = float(data.get('current_equity', START_BALANCE))
+        start_balance = float(data.get('start_balance', 5000))
+        current_equity = float(data.get('current_equity', 5000))
         daily_limit = float(data.get('daily_limit', 250))
         
         result = calculator.calculate_daily_drawdown(
@@ -251,6 +208,7 @@ def clear_cache():
             # Очищаем конкретный префикс
             if prefix == 'candles':
                 yfinance_service.clear_cache()
+                twelvedata_service.clear_cache()
             elif prefix == 'chart_image':
                 chart_service.clear_cache()
             elif prefix in ['calendar', 'geopolitical']:

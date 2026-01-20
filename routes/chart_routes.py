@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 
 from services.chart_service import chart_service
-from services.yfinance_service import yfinance_service
+from services.twelvedata_service import twelvedata_service
 from services.smc_detector import smc_detector
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,8 @@ def generate_chart():
         
         logger.info(f"Chart generation request: tf={timeframe}, limit={limit}")
         
-        # Получаем данные свечей
-        candles_response = yfinance_service.get_candles(timeframe, limit=limit)
+        # Получаем данные свечей из TwelveData
+        candles_response = twelvedata_service.get_candles(timeframe, limit=limit)
         
         if 'error' in candles_response:
             return jsonify({"error": candles_response['error']}), 500

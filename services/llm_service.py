@@ -15,11 +15,7 @@ from config.settings import (
     OPENROUTER_API_KEY,
     GEMINI_API_KEY,
     AI_GATEWAY_URL,
-    AI_GATEWAY_KEY,
-    START_BALANCE,
-    DAILY_LOSS_LIMIT,
-    MAX_LOT_SIZE,
-    RISK_PERCENT
+    AI_GATEWAY_KEY
 )
 
 logger = logging.getLogger(__name__)
@@ -133,21 +129,22 @@ class LLMService:
     Сервис для работы с LLM через OpenRouter, Gemini API или AI Gateway
     
     Поддерживаемые модели:
-    - openrouter: google/gemini-2.0-flash-exp:free (требует OPENROUTER_API_KEY)
-    - gemini3: gemini-3-pro-preview (Gemini 3 Pro через прямой API, требует GEMINI_API_KEY)
-    - gateway: google/gemini-3-pro-preview через AI Gateway (требует AI_GATEWAY_URL)
+    - openrouter: DeepSeek R1 через OpenRouter (требует OPENROUTER_API_KEY)
+    - gemini: Gemini 2.0 Flash Experimental через прямой Gemini API (требует GEMINI_API_KEY)
+    - gateway: Gemini 3 Pro Preview через AI Gateway (требует AI_GATEWAY_URL)
     """
     
-    # OpenRouter настройки
+    # OpenRouter настройки (DeepSeek R1)
     OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    OPENROUTER_MODEL = "google/gemini-2.0-flash-exp:free"
+    OPENROUTER_MODEL = "deepseek/deepseek-r1-0528:free"
+    MODEL = OPENROUTER_MODEL  # Default model name for backward compatibility
     
-    # Gemini настройки (прямой API)
+    # Gemini настройки (прямой API - Gemini 3 Flash Preview)
     GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-    GEMINI_MODEL = "gemini-3-pro-preview"  # Gemini 3 Pro
+    GEMINI_MODEL = "gemini-3-flash-preview"  # Gemini 3 Flash Preview
     
-    # AI Gateway настройки
-    GATEWAY_MODEL = "google/gemini-3-pro-preview"  # Модель для Gateway
+    # AI Gateway настройки (Gemini 3 Pro Preview)
+    GATEWAY_MODEL = "google/gemini-3-pro-preview"  # Gemini 3 Pro Preview
     
     # Системный промпт
     SYSTEM_PROMPT = (
@@ -155,6 +152,17 @@ class LLMService:
     "You are a Senior Intraday Trader specializing in Gold (XAUUSD). \n"
     "Your task is to execute high-probability trades by synthesizing Visual Price Action with Raw Data precision.\n"
     "Your operation mode is mechanical: Assess Context -> Identify Setup -> Validate Math -> Execute.\n"
+    "\n"
+    "# LANGUAGE REQUIREMENT\n"
+    "IMPORTANT: You MUST respond in the language specified in the '<environment>' section of the user prompt (RU or EN).\n"
+    "This applies to 'executive_summary', 'invalidation_condition', 'trigger_condition', and any other descriptive text.\n"
+    "\n"
+    "# USER IDEA VALIDATION\n"
+    "If the user provides a '<user_trading_idea>', you MUST prioritize validating it:\n"
+    "1. Check any provided parameters (Entry, SL, and/or TP) even if some are missing. Validate them against current market structure and liquidity.\n"
+    "2. If the user idea is viable (even if partial), acknowledge it and provide professional confirmation or suggestions for the missing parts.\n"
+    "3. If the provided parts of the idea are dangerous (e.g., SL is too tight, or TP is unrealistic), explicitly warn the user and suggest better alternatives.\n"
+    "4. If 'user_idea' text is provided, incorporate those thoughts into your validation.\n"
     "\n"
     "# INPUT DATA CONTEXT\n"
     "<visuals>\n"
@@ -274,7 +282,15 @@ class LLMService:
         news_data: Dict,
         technical_data: Dict,
         computed_levels: Dict,
-        chart_images_b64: Dict[str, str]
+        chart_images_b64: Dict[str, str],
+        balance: float = 5000,
+        daily_loss_limit: float = 250,
+        risk_percent: float = 0.5,
+        language: str = 'ru',
+        user_idea: str = '',
+        manual_entry: Optional[str] = None,
+        manual_sl: Optional[str] = None,
+        manual_tp: Optional[str] = None
     ) -> List[Any]:
         """
         Формирует payload для LLM модели
@@ -286,12 +302,39 @@ class LLMService:
             technical_data: JSON с OHLCV и Algo-SMC
             computed_levels: JSON с PDH/PDL и свингами
             chart_images_b64: Словарь с base64 картинками {'H4': '...', 'H1': '...', 'M15': '...'}
+            balance: Баланс счета
+            daily_loss_limit: Дневной лимит убытков
+            risk_percent: Процент риска на сделку
+            language: Язык ответа ('ru' или 'en')
+            user_idea: Торговая идея пользователя
+            manual_entry: Точка входа пользователя
+            manual_sl: Stop Loss пользователя
+            manual_tp: Take Profit пользователя
         
         Returns:
             List с текстовым контекстом и изображениями
         """
         
         # 1. Формируем текстовую часть (контекст)
+        risk_amount = balance * (risk_percent / 100)
+        
+        # Секция с пользовательской идеей, если она есть
+        user_idea_context = ""
+        if user_idea or manual_entry or manual_sl or manual_tp:
+            user_idea_context = f"""
+<user_trading_idea>
+The user has proposed their own trading idea:
+Idea/Thoughts: {user_idea if user_idea else "No text provided"}
+Proposed Entry: {manual_entry if manual_entry else "Not specified"}
+Proposed Stop Loss: {manual_sl if manual_sl else "Not specified"}
+Proposed Take Profit: {manual_tp if manual_tp else "Not specified"}
+
+TASK: You MUST validate this user idea. Compare it with your own market analysis. 
+If the user idea is dangerous or contradicts the technical/news data, explain why in the 'executive_summary'.
+If the user idea is good, you can use it as a basis for your trade plan.
+</user_trading_idea>
+"""
+
         user_prompt_text = f"""
 REPORT GENERATION REQUEST for XAUUSD
 
@@ -299,14 +342,16 @@ REPORT GENERATION REQUEST for XAUUSD
 Current Time (UTC): {current_time_utc}
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
+Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
 </environment>
 
 <account_config>
-Balance: ${START_BALANCE}
-Daily Loss Limit: ${DAILY_LOSS_LIMIT}
-Max Lot Size: {MAX_LOT_SIZE}
-Risk Per Trade: {RISK_PERCENT * 100}% (${START_BALANCE * RISK_PERCENT})
+Balance: ${balance}
+Daily Loss Limit: ${daily_loss_limit}
+Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
 </account_config>
+
+{user_idea_context}
 
 <news_context>
 {json.dumps(news_data, indent=2)}
@@ -372,7 +417,15 @@ The following images are attached to this request in order:
         news_data: Dict,
         computed_levels: Dict,
         chart_images: Dict[str, str],
-        model: str = "openrouter"
+        model: str = "openrouter",
+        balance: float = 5000,
+        daily_loss_limit: float = 250,
+        risk_percent: float = 0.5,
+        language: str = 'ru',
+        user_idea: str = '',
+        manual_entry: Optional[str] = None,
+        manual_sl: Optional[str] = None,
+        manual_tp: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Отправляет данные в LLM для анализа торгового решения
@@ -382,24 +435,55 @@ The following images are attached to this request in order:
             news_data: Новости
             computed_levels: Вычисленные уровни (PDH/PDL, свинги)
             chart_images: Изображения графиков в base64
-            model: Выбор модели - "openrouter", "gemini3" или "gateway"
+            model: Выбор модели - "openrouter", "gemini" или "gateway"
+            balance: Баланс счета
+            daily_loss_limit: Дневной лимит убытков
+            risk_percent: Процент риска на сделку
+            language: Язык ответа ('ru' или 'en')
+            user_idea: Торговая идея пользователя
+            manual_entry: Точка входа пользователя
+            manual_sl: Stop Loss пользователя
+            manual_tp: Take Profit пользователя
         
         Returns:
             Ответ от LLM модели
         """
-        if model == "gemini3":
-            return self._analyze_with_gemini(technical_data, news_data, computed_levels, chart_images)
+        params = {
+            "technical_data": technical_data,
+            "news_data": news_data,
+            "computed_levels": computed_levels,
+            "chart_images": chart_images,
+            "balance": balance,
+            "daily_loss_limit": daily_loss_limit,
+            "risk_percent": risk_percent,
+            "language": language,
+            "user_idea": user_idea,
+            "manual_entry": manual_entry,
+            "manual_sl": manual_sl,
+            "manual_tp": manual_tp
+        }
+        
+        if model == "gemini":
+            return self._analyze_with_gemini(**params)
         elif model == "gateway":
-            return self._analyze_with_gateway(technical_data, news_data, computed_levels, chart_images)
+            return self._analyze_with_gateway(**params)
         else:
-            return self._analyze_with_openrouter(technical_data, news_data, computed_levels, chart_images)
+            return self._analyze_with_openrouter(**params)
     
     def _analyze_with_openrouter(
         self,
         technical_data: Dict,
         news_data: Dict,
         computed_levels: Dict,
-        chart_images: Dict[str, str]
+        chart_images: Dict[str, str],
+        balance: float = 5000,
+        daily_loss_limit: float = 250,
+        risk_percent: float = 0.5,
+        language: str = 'ru',
+        user_idea: str = '',
+        manual_entry: Optional[str] = None,
+        manual_sl: Optional[str] = None,
+        manual_tp: Optional[str] = None
     ) -> Dict[str, Any]:
         """Анализ через OpenRouter API"""
         try:
@@ -415,7 +499,15 @@ The following images are attached to this request in order:
                 news_data=news_data,
                 technical_data=technical_data,
                 computed_levels=computed_levels,
-                chart_images_b64=chart_images
+                chart_images_b64=chart_images,
+                balance=balance,
+                daily_loss_limit=daily_loss_limit,
+                risk_percent=risk_percent,
+                language=language,
+                user_idea=user_idea,
+                manual_entry=manual_entry,
+                manual_sl=manual_sl,
+                manual_tp=manual_tp
             )
             
             if user_content is None:
@@ -424,6 +516,8 @@ The following images are attached to this request in order:
             # Формируем запрос к OpenRouter
             headers = {
                 "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/astra-analyzer-pro",
+                "X-Title": "Astra Analyzer Pro - Trading Bot"
             }
             
             # Добавляем API ключ если есть
@@ -431,9 +525,6 @@ The following images are attached to this request in order:
                 headers["Authorization"] = f"Bearer {self.openrouter_key}"
                 logger.info("Using OpenRouter API key for authentication")
             else:
-                # Для работы без API ключа добавляем идентификационные заголовки
-                headers["HTTP-Referer"] = "https://github.com/astra-analyzer-pro"
-                headers["X-Title"] = "Astra Analyzer Pro - Trading Bot"
                 logger.warning("No OpenRouter API key found! Using free tier with referrer headers")
             
             payload = {
@@ -469,6 +560,9 @@ The following images are attached to this request in order:
             if 'choices' in result and len(result['choices']) > 0:
                 assistant_message = result['choices'][0]['message']['content']
                 
+                # Логируем длину ответа
+                logger.info(f"Response received: {len(assistant_message)} characters")
+                
                 # Пытаемся распарсить JSON из ответа (если LLM вернул JSON)
                 parsed_json = parse_json_response(assistant_message)
                 
@@ -485,7 +579,10 @@ The following images are attached to this request in order:
                 # Добавляем распарсенный JSON если удалось
                 if parsed_json:
                     response_data["parsed_decision"] = parsed_json
-                    logger.info("Successfully parsed JSON from LLM response")
+                    logger.info("✓ Successfully parsed JSON from LLM response")
+                    logger.debug(f"Parsed decision: {json.dumps(parsed_json, indent=2, ensure_ascii=False)}")
+                else:
+                    logger.warning("⚠ Failed to parse JSON from LLM response - returning raw text")
                 
                 return response_data
             else:
@@ -512,7 +609,15 @@ The following images are attached to this request in order:
         technical_data: Dict,
         news_data: Dict,
         computed_levels: Dict,
-        chart_images: Dict[str, str]
+        chart_images: Dict[str, str],
+        balance: float = 5000,
+        daily_loss_limit: float = 250,
+        risk_percent: float = 0.5,
+        language: str = 'ru',
+        user_idea: str = '',
+        manual_entry: Optional[str] = None,
+        manual_sl: Optional[str] = None,
+        manual_tp: Optional[str] = None
     ) -> Dict[str, Any]:
         """Анализ через Gemini API"""
         try:
@@ -525,6 +630,25 @@ The following images are attached to this request in order:
             time_str = current_time.strftime("%Y-%m-%d %H:%M UTC")
             
             # Формируем текстовый промпт (без изображений для Gemini)
+            risk_amount = balance * (risk_percent / 100)
+            
+            # Секция с пользовательской идеей
+            user_idea_context = ""
+            if user_idea or manual_entry or manual_sl or manual_tp:
+                user_idea_context = f"""
+<user_trading_idea>
+The user has proposed their own trading idea:
+Idea/Thoughts: {user_idea if user_idea else "No text provided"}
+Proposed Entry: {manual_entry if manual_entry else "Not specified"}
+Proposed Stop Loss: {manual_sl if manual_sl else "Not specified"}
+Proposed Take Profit: {manual_tp if manual_tp else "Not specified"}
+
+TASK: You MUST validate this user idea. Compare it with your own market analysis. 
+If the user idea is dangerous or contradicts the technical/news data, explain why in the 'executive_summary'.
+If the user idea is good, you can use it as a basis for your trade plan.
+</user_trading_idea>
+"""
+
             user_prompt_text = f"""
 REPORT GENERATION REQUEST for XAUUSD
 
@@ -532,14 +656,16 @@ REPORT GENERATION REQUEST for XAUUSD
 Current Time (UTC): {time_str}
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
+Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
 </environment>
 
 <account_config>
-Balance: ${START_BALANCE}
-Daily Loss Limit: ${DAILY_LOSS_LIMIT}
-Max Lot Size: {MAX_LOT_SIZE}
-Risk Per Trade: {RISK_PERCENT * 100}% (${START_BALANCE * RISK_PERCENT})
+Balance: ${balance}
+Daily Loss Limit: ${daily_loss_limit}
+Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
 </account_config>
+
+{user_idea_context}
 
 <news_context>
 {json.dumps(news_data, indent=2)}
@@ -571,9 +697,15 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             # Запрос к Gemini API
             url = f"{self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
             
+            # Логируем URL (без ключа)
+            logger.debug(f"Gemini API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
+            
+            payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+            logger.info(f"Payload size: {len(full_prompt)} characters")
+            
             response = requests.post(
                 url,
-                json={"contents": [{"parts": [{"text": full_prompt}]}]},
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=60
             )
@@ -584,7 +716,13 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             
             if response.status_code != 200:
                 logger.error(f"Gemini API error: {response.status_code}")
-                return {"error": f"Gemini API error: {response.status_code}", "status": response.status_code}
+                try:
+                    error_details = response.json()
+                    logger.error(f"Gemini Error Details: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
+                except:
+                    logger.error(f"Gemini Error Raw Body: {response.text}")
+                
+                return {"error": f"Gemini API error: {response.status_code}", "status": response.status_code, "details": response.text}
             
             result = response.json()
             
@@ -593,6 +731,9 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             # Извлекаем ответ модели
             if result.get('candidates') and result['candidates'][0].get('content'):
                 assistant_message = result['candidates'][0]['content']['parts'][0]['text']
+                
+                # Логируем длину ответа
+                logger.info(f"Response received: {len(assistant_message)} characters")
                 
                 # Пытаемся распарсить JSON из ответа
                 parsed_json = parse_json_response(assistant_message)
@@ -610,7 +751,10 @@ Use this data to find the specific High/Low/Close of the trigger candle.
                 # Добавляем распарсенный JSON если удалось
                 if parsed_json:
                     response_data["parsed_decision"] = parsed_json
-                    logger.info("Successfully parsed JSON from Gemini response")
+                    logger.info("✓ Successfully parsed JSON from Gemini response")
+                    logger.debug(f"Parsed decision: {json.dumps(parsed_json, indent=2, ensure_ascii=False)}")
+                else:
+                    logger.warning("⚠ Failed to parse JSON from Gemini response - returning raw text")
                 
                 return response_data
             else:
@@ -638,7 +782,15 @@ Use this data to find the specific High/Low/Close of the trigger candle.
         technical_data: Dict,
         news_data: Dict,
         computed_levels: Dict,
-        chart_images: Dict[str, str]
+        chart_images: Dict[str, str],
+        balance: float = 5000,
+        daily_loss_limit: float = 250,
+        risk_percent: float = 0.5,
+        language: str = 'ru',
+        user_idea: str = '',
+        manual_entry: Optional[str] = None,
+        manual_sl: Optional[str] = None,
+        manual_tp: Optional[str] = None
     ) -> Dict[str, Any]:
         """Анализ через AI Gateway"""
         try:
@@ -665,7 +817,15 @@ Use this data to find the specific High/Low/Close of the trigger candle.
                 news_data=news_data,
                 technical_data=technical_data,
                 computed_levels=computed_levels,
-                chart_images_b64=chart_images
+                chart_images_b64=chart_images,
+                balance=balance,
+                daily_loss_limit=daily_loss_limit,
+                risk_percent=risk_percent,
+                language=language,
+                user_idea=user_idea,
+                manual_entry=manual_entry,
+                manual_sl=manual_sl,
+                manual_tp=manual_tp
             )
             
             if user_content is None:
@@ -716,6 +876,9 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             if 'choices' in result and len(result['choices']) > 0:
                 assistant_message = result['choices'][0]['message']['content']
                 
+                # Логируем длину ответа
+                logger.info(f"Response received: {len(assistant_message)} characters")
+                
                 # Пытаемся распарсить JSON из ответа
                 parsed_json = parse_json_response(assistant_message)
                 
@@ -732,7 +895,10 @@ Use this data to find the specific High/Low/Close of the trigger candle.
                 # Добавляем распарсенный JSON если удалось
                 if parsed_json:
                     response_data["parsed_decision"] = parsed_json
-                    logger.info("Successfully parsed JSON from AI Gateway response")
+                    logger.info("✓ Successfully parsed JSON from AI Gateway response")
+                    logger.debug(f"Parsed decision: {json.dumps(parsed_json, indent=2, ensure_ascii=False)}")
+                else:
+                    logger.warning("⚠ Failed to parse JSON from AI Gateway response - returning raw text")
                 
                 return response_data
             else:

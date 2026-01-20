@@ -29,7 +29,27 @@ logger = logging.getLogger(__name__)
 
 # Создание приложения Flask
 app = Flask(__name__)
-CORS(app)
+
+# Настройка CORS для разрешения запросов с любых источников
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",  # Разрешить все origins
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": False,
+        "max_age": 3600
+    }
+})
+
+# Дополнительный middleware для явной установки CORS заголовков
+@app.after_request
+def after_request(response):
+    """Добавляем CORS заголовки ко всем ответам"""
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # Регистрация blueprints
 app.register_blueprint(market_bp, url_prefix='/api/market')
