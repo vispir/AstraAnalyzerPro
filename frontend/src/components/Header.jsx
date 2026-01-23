@@ -1,20 +1,54 @@
-import React, { useState, useEffect } from 'react';
-import { User, Clock } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { User, Clock, LogOut, ChevronDown } from 'lucide-react'; // Добавили новые иконки
 import { LoginModal } from './LoginModal';
 
 const Header = ({ tf, setTf, source, setSource }) => {
   const [time, setTime] = useState(new Date());
   const [showLoginModal, setShowLoginModal] = useState(false);
+  
+  // 1. СОСТОЯНИЕ АВТОРИЗАЦИИ (с проверкой памяти при загрузке)
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('astra_user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
 
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const menuRef = useRef(null); // Нужно, чтобы закрывать меню при клике мимо
+
+  // 2. ТАЙМЕР И КЛИК ВНЕ МЕНЮ
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(timer);
+
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setShowUserMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
+
+  // 3. ФУНКЦИИ ВХОДА И ВЫХОДА
+  const handleLoginSuccess = useCallback((userData) => {
+    setUser(userData);
+    localStorage.setItem('astra_user', JSON.stringify(userData));
+    setShowLoginModal(false);
+  }, []);
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('astra_user'); // Удаляем из браузера
+    setShowUserMenu(false);
+  };
 
   return (
     <>
       <header className="header-container glass-panel">
-        {/* ЛЕВО: ЛОГОТИП (ВСТРОЕННЫЙ SVG) */}
+        {/* ЛЕВО: ЛОГОТИП */}
         <div className="header-section logo-area">
           <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
               <rect width="100" height="100" rx="22" fill="#0B0E14"/>
@@ -51,18 +85,49 @@ const Header = ({ tf, setTf, source, setSource }) => {
             <option value="yfinance">Yahoo Finance</option>
           </select>
 
-          <button 
-            className="login-badge" 
-            onClick={() => setShowLoginModal(true)}
-          >
-            <span>Log in</span>
-            <User size={14} />
-          </button>
+          {/* ЛОГИКА АВТОРИЗАЦИИ: ПОКАЗЫВАЕМ АВУ ИЛИ КНОПКУ */}
+          {user ? (
+            <div className="user-profile-wrapper" ref={menuRef} style={{ position: 'relative' }}>
+              <div 
+                className={`user-avatar-badge ${showUserMenu ? 'active' : ''}`}
+                onClick={() => setShowUserMenu(!showUserMenu)}
+              >
+                <img src={user.photo} alt="User" className="header-avatar" />
+                <ChevronDown size={14} className={`arrow-icon ${showUserMenu ? 'rotate' : ''}`} />
+              </div>
+
+              {/* ВЫПАДАЮЩЕЕ МЕНЮ ПРИ КЛИКЕ НА АВУ */}
+              {showUserMenu && (
+                <div className="user-dropdown-menu glass-panel animate-fade-in">
+                  <div className="dropdown-info">
+                    <span className="dropdown-name">{user.name}</span>
+                    <span className="dropdown-status">Active Trader</span>
+                  </div>
+                  <div className="dropdown-divider"></div>
+                  <button className="logout-button" onClick={handleLogout}>
+                    <LogOut size={14} />
+                    <span>Log out</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button 
+              className="login-badge" 
+              onClick={() => setShowLoginModal(true)}
+            >
+              <span>Log in</span>
+              <User size={14} />
+            </button>
+          )}
         </div>
       </header>
 
       {showLoginModal && (
-        <LoginModal onClose={() => setShowLoginModal(false)} />
+        <LoginModal 
+          onClose={() => setShowLoginModal(false)} 
+          onLoginSuccess={handleLoginSuccess} 
+        />
       )}
     </>
   );
