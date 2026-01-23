@@ -3,6 +3,7 @@
 """
 from flask import Blueprint, jsonify, request
 import logging
+import requests
 
 from services.yfinance_service import yfinance_service
 from services.twelvedata_service import twelvedata_service
@@ -178,23 +179,100 @@ def get_config():
 @market_bp.route('/health')
 def health_check():
     """
-    Проверка работоспособности сервиса
+    Network Health Check - проверка работоспособности сервисов и сетевого подключения
     """
+    import time
+    from services.llm_service import get_current_ip, llm_service
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": int(time.time()),
+        "symbol": SYMBOL,
+        "services": {},
+        "network": {}
+    }
+    
+    # Проверка сетевого подключения
     try:
-        # Проверяем оба сервиса
-        yf_ok = yfinance_service.validate_symbol()
-        td_ok = twelvedata_service.get_candles(limit=1).get("success", False)
-        
-        return jsonify({
-            "status": "healthy" if td_ok else "degraded",
-            "twelvedata_active": td_ok,
-            "yfinance_active": yf_ok,
-            "symbol": SYMBOL
-        })
-        
+        current_ip = get_current_ip()
+        health_status["network"]["external_ip"] = current_ip if current_ip else "unavailable"
+        health_status["network"]["ip_check"] = current_ip is not None
     except Exception as e:
-        logger.error(f"Error in /health: {str(e)}")
-        return jsonify({
-            "status": "unhealthy",
+        logger.error(f"IP check failed: {e}")
+        health_status["network"]["ip_check"] = False
+        health_status["network"]["error"] = str(e)
+    
+    # Проверка Yahoo Finance
+    try:
+        yf_start = time.time()
+        yf_ok = yfinance_service.validate_symbol()
+        yf_time = time.time() - yf_start
+        health_status["services"]["yfinance"] = {
+            "active": yf_ok,
+            "response_time_ms": round(yf_time * 1000, 2)
+        }
+    except Exception as e:
+        logger.error(f"Yahoo Finance health check failed: {e}")
+        health_status["services"]["yfinance"] = {
+            "active": False,
             "error": str(e)
-        }), 500
+        }
+    
+    # Проверка TwelveData
+    try:
+        td_start = time.time()
+        td_result = twelvedata_service.get_candles(limit=1)
+        td_time = time.time() - td_start
+        td_ok = td_result.get("success", False)
+        health_status["services"]["twelvedata"] = {
+            "active": td_ok,
+            "response_time_ms": round(td_time * 1000, 2)
+        }
+    except Exception as e:
+        logger.error(f"TwelveData health check failed: {e}")
+        health_status["services"]["twelvedata"] = {
+            "active": False,
+            "error": str(e)
+        }
+    
+    # Проверка Gemini API (если настроен)
+    try:
+        if llm_service.gemini_key:
+            gemini_start = time.time()
+            # Простой тест - проверяем доступность API
+            test_url = f"https://generativelanguage.googleapis.com/v1beta/models/{llm_service.GEMINI_MODEL}:generateContent"
+            test_response = requests.get(test_url, timeout=5)
+            gemini_time = time.time() - gemini_start
+            health_status["services"]["gemini"] = {
+                "configured": True,
+                "reachable": test_response.status_code < 500,
+                "response_time_ms": round(gemini_time * 1000, 2)
+            }
+        else:
+            health_status["services"]["gemini"] = {
+                "configured": False,
+                "note": "GEMINI_API_KEY not set"
+            }
+    except Exception as e:
+        logger.debug(f"Gemini health check failed: {e}")
+        if llm_service.gemini_key:
+            health_status["services"]["gemini"] = {
+                "configured": True,
+                "reachable": False,
+                "error": str(e)
+            }
+    
+    # Определяем общий статус
+    all_critical_ok = (
+        health_status["services"].get("twelvedata", {}).get("active", False) or
+        health_status["services"].get("yfinance", {}).get("active", False)
+    )
+    
+    if not all_critical_ok:
+        health_status["status"] = "unhealthy"
+    elif not health_status["network"].get("ip_check", False):
+        health_status["status"] = "degraded"
+    
+    status_code = 200 if health_status["status"] == "healthy" else (503 if health_status["status"] == "unhealthy" else 200)
+    
+    return jsonify(health_status), status_code

@@ -21,6 +21,22 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 
+def get_current_ip() -> Optional[str]:
+    """
+    Получает текущий внешний IP адрес для логирования
+    
+    Returns:
+        IP адрес в виде строки или None при ошибке
+    """
+    try:
+        response = requests.get('https://api.ipify.org', timeout=5)
+        if response.status_code == 200:
+            return response.text.strip()
+    except Exception as e:
+        logger.debug(f"Failed to get IP address: {e}")
+    return None
+
+
 def parse_json_response(response_text: str) -> Optional[Dict]:
     """
     Очищает ответ LLM от Markdown обёрток и парсит JSON
@@ -541,14 +557,20 @@ The following images are attached to this request in order:
                 ]
             }
             
-            logger.info(f"Sending request to OpenRouter (model: {self.OPENROUTER_MODEL})")
+            # Логируем IP адрес перед запросом
+            current_ip = get_current_ip()
+            if current_ip:
+                logger.info(f"Current external IP: {current_ip}")
             
-            # Отправляем запрос
+            logger.info(f"Sending request to OpenRouter (model: {self.OPENROUTER_MODEL})")
+            logger.debug(f"Request URL: {self.OPENROUTER_API_URL}")
+            
+            # Отправляем запрос с увеличенным таймаутом
             response = requests.post(
                 self.OPENROUTER_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=120  # Увеличено до 120 секунд для VPN окружения
             )
             
             response.raise_for_status()
@@ -703,11 +725,19 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
             logger.info(f"Payload size: {len(full_prompt)} characters")
             
+            # Логируем IP адрес перед запросом
+            current_ip = get_current_ip()
+            if current_ip:
+                logger.info(f"Current external IP: {current_ip}")
+            
+            logger.info(f"Sending request to Gemini API (model: {self.GEMINI_MODEL})")
+            logger.debug(f"Request URL: {url}")
+            
             response = requests.post(
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=60
+                timeout=120  # Увеличено до 120 секунд для VPN окружения
             )
             
             if response.status_code == 429:
@@ -857,14 +887,20 @@ Use this data to find the specific High/Low/Close of the trigger candle.
                 ]
             }
             
-            logger.info(f"Sending request to AI Gateway ({gateway_url}) with model: {self.GATEWAY_MODEL}")
+            # Логируем IP адрес перед запросом
+            current_ip = get_current_ip()
+            if current_ip:
+                logger.info(f"Current external IP: {current_ip}")
             
-            # Отправляем запрос
+            logger.info(f"Sending request to AI Gateway ({gateway_url}) with model: {self.GATEWAY_MODEL}")
+            logger.debug(f"Request URL: {gateway_url}")
+            
+            # Отправляем запрос с увеличенным таймаутом
             response = requests.post(
                 gateway_url,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=120  # Увеличено до 120 секунд для VPN окружения
             )
             
             response.raise_for_status()

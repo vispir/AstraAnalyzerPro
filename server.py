@@ -156,50 +156,166 @@ def handle_exception(e):
     }), 500
 
 
+def check_network_connectivity():
+    """Проверка сетевого подключения и получение внешнего IP"""
+    try:
+        import requests
+        response = requests.get('https://api.ipify.org', timeout=5)
+        if response.status_code == 200:
+            return response.text.strip()
+    except Exception as e:
+        logger.debug(f"Network connectivity check failed: {e}")
+    return None
+
+
+def initialize_services():
+    """Инициализация и проверка сервисов с обработкой ошибок"""
+    from services.yfinance_service import yfinance_service
+    from services.llm_service import llm_service
+    
+    services_status = {
+        "llm": {},
+        "yfinance": False,
+        "network": None
+    }
+    
+    # Проверка сетевого подключения
+    logger.info("Checking network connectivity...")
+    external_ip = check_network_connectivity()
+    if external_ip:
+        logger.info(f"✓ Network: External IP = {external_ip}")
+        services_status["network"] = external_ip
+    else:
+        logger.warning("⚠ Network: Could not determine external IP (VPN may be required)")
+    
+    # Проверка LLM сервисов
+    logger.info("Checking LLM services configuration...")
+    
+    if llm_service.gemini_key:
+        logger.info("✓ Gemini API key configured")
+        services_status["llm"]["gemini"] = True
+    else:
+        logger.warning("⚠ GEMINI_API_KEY not set! Gemini3 model will not work.")
+        logger.info("  → Add GEMINI_API_KEY to .env file to enable Gemini")
+        services_status["llm"]["gemini"] = False
+    
+    if llm_service.openrouter_key:
+        logger.info("✓ OpenRouter API key configured")
+        services_status["llm"]["openrouter"] = True
+    else:
+        logger.warning("⚠ OPENROUTER_API_KEY not set! OpenRouter model may have limitations.")
+        logger.info("  → Add OPENROUTER_API_KEY to .env file to enable OpenRouter")
+        services_status["llm"]["openrouter"] = False
+    
+    if llm_service.gateway_url:
+        logger.info(f"✓ AI Gateway configured at {llm_service.gateway_url}")
+        services_status["llm"]["gateway"] = True
+        if llm_service.gateway_key:
+            logger.info("✓ AI Gateway API key configured")
+        else:
+            logger.warning("⚠ AI_GATEWAY_KEY not set (may be optional)")
+    else:
+        logger.warning("⚠ AI_GATEWAY_URL not set! Gateway model will not work.")
+        logger.info("  → Add AI_GATEWAY_URL to .env file to enable AI Gateway")
+        services_status["llm"]["gateway"] = False
+    
+    # Проверка Yahoo Finance с детальной обработкой ошибок
+    logger.info(f"Validating Yahoo Finance symbol: {SYMBOL}...")
+    try:
+        yf_valid = yfinance_service.validate_symbol()
+        if yf_valid:
+            logger.info(f"✓ Yahoo Finance: {SYMBOL} is available")
+            services_status["yfinance"] = True
+        else:
+            logger.warning(f"⚠ Yahoo Finance: {SYMBOL} validation failed")
+            logger.info("  → This may be due to VPN/network issues. Try using source=twelvedata")
+            services_status["yfinance"] = False
+    except Exception as e:
+        logger.error(f"✗ Yahoo Finance validation error: {type(e).__name__}: {str(e)}")
+        logger.debug("Full error traceback:", exc_info=True)
+        services_status["yfinance"] = False
+    
+    return services_status
+
+
 if __name__ == '__main__':
+    import socket
+    
     logger.info("=" * 60)
     logger.info("ASTRA ANALYZER PRO - SERVER STARTING")
     logger.info("=" * 60)
     logger.info(f"Symbol: {SYMBOL}")
     logger.info(f"Port: {FLASK_PORT}")
     logger.info(f"Debug: {FLASK_DEBUG}")
-    logger.info(f"Data Source: Yahoo Finance API")
+    logger.info(f"Host: 0.0.0.0 (listening on all interfaces)")
+    logger.info(f"Data Source: Yahoo Finance API / TwelveData")
     logger.info("=" * 60)
     
-    # Проверка доступности сервисов
-    from services.yfinance_service import yfinance_service
-    from services.llm_service import llm_service
-    
-    # Проверяем доступность API ключей для LLM
-    if llm_service.gemini_key:
-        logger.info("OK: Gemini API key configured")
-    else:
-        logger.warning("WARNING: GEMINI_API_KEY not set! Gemini3 model will not work.")
-    
-    if llm_service.openrouter_key:
-        logger.info("OK: OpenRouter API key configured")
-    else:
-        logger.warning("WARNING: OPENROUTER_API_KEY not set! OpenRouter model may have limitations.")
-    
-    if llm_service.gateway_url:
-        logger.info(f"OK: AI Gateway configured at {llm_service.gateway_url}")
-        if llm_service.gateway_key:
-            logger.info("OK: AI Gateway API key configured")
-    else:
-        logger.warning("WARNING: AI_GATEWAY_URL not set! Gateway model will not work.")
-    
-    if yfinance_service.validate_symbol():
-        logger.info(f"OK: Yahoo Finance: {SYMBOL} is available")
-    else:
-        logger.warning(f"WARNING: Yahoo Finance: {SYMBOL} validation failed")
+    # Инициализация сервисов
+    try:
+        services_status = initialize_services()
+    except Exception as e:
+        logger.error(f"Critical error during service initialization: {e}", exc_info=True)
+        logger.warning("Server will start anyway, but some features may not work")
+        services_status = {}
     
     logger.info("=" * 60)
-    logger.info("Server ready! Access API at http://127.0.0.1:{}/".format(FLASK_PORT))
+    
+    # Определяем доступные адреса
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        
+        logger.info("Server ready! Access API at:")
+        logger.info(f"  - http://127.0.0.1:{FLASK_PORT}/ (localhost)")
+        logger.info(f"  - http://{local_ip}:{FLASK_PORT}/ (local network)")
+        
+        # Пытаемся найти VPN интерфейс (172.18.x.x)
+        try:
+            import netifaces  # type: ignore
+            for interface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(interface)
+                if netifaces.AF_INET in addrs:
+                    for addr_info in addrs[netifaces.AF_INET]:
+                        ip = addr_info.get('addr', '')
+                        if ip.startswith('172.18.'):
+                            logger.info(f"  - http://{ip}:{FLASK_PORT}/ (VPN)")
+        except ImportError:
+            # netifaces не установлен, пробуем другой способ
+            try:
+                import subprocess
+                result = subprocess.run(['ipconfig'], capture_output=True, text=True, timeout=2)
+                if '172.18.' in result.stdout:
+                    # Извлекаем IP из вывода
+                    for line in result.stdout.split('\n'):
+                        if '172.18.' in line:
+                            # Простой поиск IP адреса
+                            import re
+                            ip_match = re.search(r'172\.18\.\d+\.\d+', line)
+                            if ip_match:
+                                logger.info(f"  - http://{ip_match.group()}:{FLASK_PORT}/ (VPN)")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Could not determine all network addresses: {e}")
+        logger.info(f"Server ready! Access API at http://0.0.0.0:{FLASK_PORT}/")
+    
+    logger.info("=" * 60)
+    logger.info("Health check endpoint: /api/market/health")
     logger.info("=" * 60)
     
     # Запуск сервера
-    app.run(
-        host='0.0.0.0',
-        port=FLASK_PORT,
-        debug=FLASK_DEBUG
-    )
+    try:
+        app.run(
+            host='0.0.0.0',  # Слушаем на всех интерфейсах
+            port=FLASK_PORT,
+            debug=FLASK_DEBUG,
+            threaded=True  # Включаем многопоточность для обработки параллельных запросов
+        )
+    except OSError as e:
+        if "Address already in use" in str(e):
+            logger.error(f"Port {FLASK_PORT} is already in use!")
+            logger.error("Please stop the other service or change FLASK_PORT in .env")
+        else:
+            logger.error(f"Failed to start server: {e}")
+        raise
