@@ -13,6 +13,8 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # Опционально �
 AI_GATEWAY_URL = os.getenv('AI_GATEWAY_URL')  # URL для AI Gateway
 AI_GATEWAY_KEY = os.getenv('AI_GATEWAY_KEY')  # API ключ для AI Gateway (если требуется)
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY') 
+OANDA_API_KEY = os.getenv("OANDA_API_KEY")
+OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
 
 # Trading Configuration
 SYMBOL = os.getenv('SYMBOL', 'XAUUSD')

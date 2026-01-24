@@ -1,5 +1,5 @@
 """
-Роуты для рыночных данных с выбором источника (Twelve Data / Yahoo Finance)
+Роуты для рыночных данных с выбором источника (OANDA / Twelve Data / Yahoo Finance)
 """
 from flask import Blueprint, jsonify, request
 import logging
@@ -7,6 +7,7 @@ import requests
 
 from services.yfinance_service import yfinance_service
 from services.twelvedata_service import twelvedata_service
+from services.oanda_service import oanda_service  # Добавили наш новый сервис
 from services.calculator import calculator
 from config.settings import SYMBOL
 
@@ -30,17 +31,22 @@ def get_candles():
         tf: таймфрейм (M15, H1, H4, etc.)
         period: период (1d, 5d, 1mo, etc.) - опционально
         limit: количество последних свечей - опционально
-        source: источник данных (twelvedata/yfinance) - опционально
+        source: источник данных (oanda/twelvedata/yfinance) - опционально
     """
     try:
         timeframe = request.args.get('tf')
         # Источник данных: по умолчанию twelvedata
-        source = request.args.get('source', 'twelvedata')
+        source = request.args.get('source', 'twelvedata').lower()
         limit = request.args.get('limit', type=int)
         period = request.args.get('period')
 
-        # Выбираем сервис
-        market_service = twelvedata_service if source == 'twelvedata' else yfinance_service
+        # Выбираем сервис (Добавлена поддержка OANDA)
+        if source == 'oanda':
+            market_service = oanda_service
+        elif source == 'twelvedata':
+            market_service = twelvedata_service
+        else:
+            market_service = yfinance_service
         
         logger.info(f"Candles request: source={source}, tf={timeframe or 'ALL'}")
 
@@ -130,15 +136,22 @@ def get_current_price():
     Получение текущей цены с выбором источника
     """
     try:
-        source = request.args.get('source', 'twelvedata')
-        market_service = twelvedata_service if source == 'twelvedata' else yfinance_service
+        source = request.args.get('source', 'twelvedata').lower()
+        
+        # Выбираем сервис
+        if source == 'oanda':
+            market_service = oanda_service
+        elif source == 'twelvedata':
+            market_service = twelvedata_service
+        else:
+            market_service = yfinance_service
         
         # Пытаемся взять быструю цену
         price = None
-        if source == 'twelvedata':
-            # У TwelveData есть быстрый эндпоинт для цены, но для простоты возьмем из свечей
-            res = twelvedata_service.get_candles(limit=1)
-            if "candles" in res:
+        if source in ['twelvedata', 'oanda']:
+            # Оба сервиса используют одинаковую логику получения последней цены из свечи
+            res = market_service.get_candles(limit=1)
+            if "candles" in res and res["candles"]:
                 price = res["candles"][-1]["close"]
         else:
             price = yfinance_service.get_current_price()
@@ -162,15 +175,11 @@ def get_current_price():
 def get_config():
     """
     Получение конфигурации приложения
-    
-    Note: Trading parameters (balance, daily_loss_limit, risk_percent) 
-    are now managed on the client side. This endpoint returns only the symbol.
     """
     try:
         return jsonify({
             "symbol": SYMBOL
         })
-        
     except Exception as e:
         logger.error(f"Error in /config: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -234,12 +243,28 @@ def health_check():
             "active": False,
             "error": str(e)
         }
+
+    # Проверка OANDA
+    try:
+        oa_start = time.time()
+        oa_result = oanda_service.get_candles(limit=1)
+        oa_time = time.time() - oa_start
+        oa_ok = oa_result.get("success", False)
+        health_status["services"]["oanda"] = {
+            "active": oa_ok,
+            "response_time_ms": round(oa_time * 1000, 2)
+        }
+    except Exception as e:
+        logger.error(f"OANDA health check failed: {e}")
+        health_status["services"]["oanda"] = {
+            "active": False,
+            "error": str(e)
+        }
     
     # Проверка Gemini API (если настроен)
     try:
         if llm_service.gemini_key:
             gemini_start = time.time()
-            # Простой тест - проверяем доступность API
             test_url = f"https://generativelanguage.googleapis.com/v1beta/models/{llm_service.GEMINI_MODEL}:generateContent"
             test_response = requests.get(test_url, timeout=5)
             gemini_time = time.time() - gemini_start
@@ -262,10 +287,11 @@ def health_check():
                 "error": str(e)
             }
     
-    # Определяем общий статус
+    # Определяем общий статус (теперь учитываем и OANDA)
     all_critical_ok = (
         health_status["services"].get("twelvedata", {}).get("active", False) or
-        health_status["services"].get("yfinance", {}).get("active", False)
+        health_status["services"].get("yfinance", {}).get("active", False) or
+        health_status["services"].get("oanda", {}).get("active", False)
     )
     
     if not all_critical_ok:
