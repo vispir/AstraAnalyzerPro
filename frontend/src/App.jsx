@@ -22,7 +22,7 @@ function App() {
   });
 
   const [tf, setTf] = useState('M15');
-  const [source, setSource] = useState('twelvedata');
+  const [source, setSource] = useState('oanda');
 
   // Инициализация уровней из localStorage или пусто
   const [levels, setLevels] = useState(() => {
@@ -79,14 +79,20 @@ function App() {
     }, 0);
 
     // Интервал обновления зависит от таймфрейма свечи
-    const getUpdateInterval = () => {
-      switch(tf) {
-        case 'M15': return 15 * 60 * 1000;  // 15 минут
-        case 'H1': return 60 * 60 * 1000;   // 1 час
-        case 'H4': return 240 * 60 * 1000;  // 4 часа
-        default: return 15 * 60 * 1000;     // По умолчанию 15 минут
+
+     const getUpdateInterval = () => {
+      // БЕЗОПАСНЫЙ РЕЖИМ ДЛЯ OANDA
+      if (source === 'oanda') {
+        return 30 * 1000; // 30 секунд (всего 2 запроса в минуту)
       }
-    };
+      // ЭКОНОМНЫЙ РЕЖИМ ДЛЯ ОСТАЛЬНЫХ
+      switch(tf) {
+      case 'M15': return 15 * 60 * 1000; // 15 минут
+      case 'H1': return 60 * 60 * 1000; // 1 час
+      case 'H4': return 240 * 60 * 1000; // 4 часа
+      default: return 15 * 60 * 1000; // По умолчанию 15 минут
+      }
+      };
 
     const interval = setInterval(loadData, getUpdateInterval());
 

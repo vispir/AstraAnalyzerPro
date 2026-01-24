@@ -81,6 +81,7 @@ const Header = ({ tf, setTf, source, setSource }) => {
           </select>
           
           <select value={source} onChange={(e) => setSource(e.target.value)} className="select-modern src-select">
+            <option value="oanda">OANDA</option>
             <option value="twelvedata">Twelve Data</option>
             <option value="yfinance">Yahoo Finance</option>
           </select>

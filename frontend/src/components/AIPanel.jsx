@@ -4,7 +4,7 @@ import { BrainCircuit, Loader2, AlertTriangle, CheckCircle2, Clock } from 'lucid
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
 
-const AIPanel = ({ levels, account }) => {
+const AIPanel = ({ levels, account, analysis }) => {
   const [loading, setLoading] = useState(false);
   const [aiData, setAiData] = useState(null);
   const [rawText, setRawText] = useState('');
@@ -95,8 +95,50 @@ const AIPanel = ({ levels, account }) => {
   };
 
   return (
+    
     <aside className="glass-panel sidebar-right" style={{display: 'flex', flexDirection: 'column'}}>
       <h3>AI Market Analysis</h3>
+      {/* Быстрый SMC Радар (Обновляется каждые 30 сек бесплатно) */}
+    {analysis && (
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.03)',
+        borderRadius: '8px',
+        padding: '10px',
+        marginBottom: '15px',
+        border: '1px solid rgba(255, 255, 255, 0.05)'
+      }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+      <span style={{ fontSize: '11px', color: '#888' }}>TREND</span>
+      <span style={{ 
+        fontSize: '11px', 
+        fontWeight: 'bold', 
+        color: analysis.trend === 'UPTREND' ? '#4ade80' : '#f87171' 
+      }}>
+        {analysis.trend}
+      </span>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+      <span style={{ fontSize: '11px', color: '#888' }}>ZONE</span>
+      <span style={{ 
+        fontSize: '11px', 
+        fontWeight: 'bold', 
+        color: analysis.advanced?.key_levels?.Current_Zone === 'PREMIUM' ? '#fbbf24' : '#60a5fa' 
+      }}>
+        {analysis.advanced?.key_levels?.Current_Zone}
+      </span>
+    </div>
+    {analysis.bos && analysis.bos.length > 0 && (
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: '11px', color: '#888' }}>LAST BOS</span>
+        <span style={{ fontSize: '11px', color: '#fff' }}>
+          {analysis.bos[analysis.bos.length - 1].price}
+        </span>
+      </div>
+    )}
+  </div>
+)}
+
+      
       
       <div style={{display: 'flex', gap: '8px', marginBottom: '8px'}}>
         <div style={{flex: 1}}>
