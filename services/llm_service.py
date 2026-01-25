@@ -197,8 +197,9 @@ class LLMService:
     "# EXECUTION ALGORITHM\n"
     "\n"
     "## 1. Global Filters (Safety Protocols)\n"
-    "*   **Time Lock:** Check upcoming High Impact USD News. If time to news is < 45 minutes, STOP. Signal is **WAIT**.\n"
-    "*   **Liquidity Check:** If current time is End of Asia or Late NY (low vol), STOP. Signal is **WAIT**.\n"
+    "* **Market Status:** Check 'Current Time' in environment. If it is Saturday or Sunday, market is CLOSED. Signal MUST be **WAIT**. In 'executive_summary', explain that the market is closed and provide a strategic outlook for Monday open instead.\n"
+    "* **Time Lock:** Check upcoming High Impact USD News. If time to news is < 45 minutes, STOP. Signal is **WAIT**.\n"
+    "* **Liquidity Check:** If current time is End of Asia or Late NY (low vol), STOP. Signal is **WAIT**.\n"
     "\n"
     "## 2. Narrative & Bias\n"
     "*   **Conflict Resolution:** Chart Structure > News Sentiment.\n"
@@ -960,6 +961,41 @@ Use this data to find the specific High/Low/Close of the trigger candle.
         """Получить информацию о текущей торговой сессии"""
         return self.session.get_current_session()
 
+    def get_signal_verdict(self, analysis_data: Dict) -> str:
+        """
+        Специальный метод для Наблюдателя.
+        Использует ПОЛНЫЙ системный промт и Gemini 3 Flash для авто-анализа.
+        """
+        try:
+            time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            
+            # Мы вызываем уже существующий метод _analyze_with_gemini.
+            # Он внутри сам склеит self.SYSTEM_PROMPT и данные.
+            result = self._analyze_with_gemini(
+                technical_data=analysis_data,
+                news_data={"info": "Automated Watcher Alert - No high impact news checked"},
+                computed_levels=analysis_data.get('levels', {}),
+                chart_images={}, # В фоновом режиме пока без картинок для скорости
+                language='ru'
+            )
+
+            if result.get("success"):
+                # Возвращаем executive_summary из распарсенного JSON или сырой ответ
+                decision = result.get("parsed_decision", {})
+                summary = decision.get("executive_summary", result.get("response"))
+                
+                signal_info = ""
+                if "signal" in decision:
+                    sig = decision["signal"]
+                    signal_info = f"\n🎯 *РЕШЕНИЕ: {sig.get('action')} ({sig.get('confidence')}% confidence)*"
+
+                return f"🤖 *ASTRA WATCHER AI ANALYSIS*\n{summary}\n{signal_info}"
+            
+            return "⚠️ ИИ не смог сформировать четкий вердикт по сигналу."
+
+        except Exception as e:
+            logger.error(f"Error in automated verdict: {e}")
+            return f"❌ Ошибка анализа: {str(e)}"
 
 # Синглтон инстанс
 llm_service = LLMService(

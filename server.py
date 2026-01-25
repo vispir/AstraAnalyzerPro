@@ -5,9 +5,41 @@ Astra Analyzer Pro - Backend Server
 from flask import Flask, jsonify
 from flask_cors import CORS
 import logging
+import threading  # для запуска Наблюдателя в фоне
+import sys
+import io
+import os 
+
+# Принудительно ставим кодировку UTF-8 для вывода в консоль
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+log_file = os.path.join(base_dir, 'astra_server.log')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        # Добавляем encoding='utf-8', чтобы не было пустых файлов и кракозябр
+        logging.FileHandler(log_file, encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+# -------------------------------------
 
 # Импорт конфигурации
 from config.settings import FLASK_PORT, FLASK_DEBUG, SYMBOL
+
+# Импорт Наблюдателя
+try:
+    from watcher import start_watcher
+except ImportError:
+    # Если файла еще нет, сервер не упадет
+    start_watcher = None
 
 # Импорт роутов
 from routes.market_routes import market_bp
@@ -262,6 +294,16 @@ if __name__ == '__main__':
     
     logger.info("=" * 60)
     
+    # --- ДОБАВЛЕНО: ЗАПУСК WATCHER В ФОНЕ ---
+    if start_watcher:
+        try:
+            watcher_thread = threading.Thread(target=start_watcher, daemon=True)
+            watcher_thread.start()
+            logger.info("🚀 ASTRA WATCHER STARTED IN BACKGROUND THREAD")
+        except Exception as e:
+            logger.error(f"Failed to start Watcher: {e}")
+    # ----------------------------------------
+
     # Определяем доступные адреса
     try:
         hostname = socket.gethostname()
