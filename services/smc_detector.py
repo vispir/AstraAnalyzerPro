@@ -939,11 +939,59 @@ class SMCDetector:
             "zones": self._get_empty_zones()
         }
     
-    def analyze(self, df: pd.DataFrame) -> Dict:
+    def _get_empty_result(self) -> Dict:
+        """Полная пустая структура результата для ошибок"""
+        return {
+            'order_blocks': [],
+            'order_blocks_internal': [],
+            'order_blocks_swing': [],
+            'fvg': [],
+            'liquidity': [],
+            'choch': [],
+            'bos': [],
+            'internal_choch': [],
+            'internal_bos': [],
+            'swing_choch': [],
+            'swing_bos': [],
+            'eqh': [],
+            'eql': [],
+            'trend': 'NEUTRAL',
+            'internal_trend': 'NEUTRAL',
+            'advanced': self._get_empty_advanced_data(),
+            'signals_count': 0
+        }
+    
+    def analyze(self, df) -> Dict:
         """
         Полный SMC анализ с улучшенной логикой из Pine Script
+        
+        Args:
+            df: DataFrame или список словарей с OHLC данными
         """
         try:
+            # Преобразуем list в DataFrame, если необходимо
+            if isinstance(df, list):
+                if not df:
+                    return self._get_empty_result()
+                df = pd.DataFrame(df)
+            
+            # Проверяем, что это DataFrame
+            if not isinstance(df, pd.DataFrame):
+                logger.error(f"Invalid data type: {type(df)}")
+                return self._get_empty_result()
+            
+            # Проверяем наличие необходимых колонок
+            required_columns = ['open', 'high', 'low', 'close']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                logger.error(f"Missing required columns: {missing_columns}")
+                return self._get_empty_result()
+            
+            # Проверяем минимальное количество данных
+            if len(df) < 10:
+                logger.warning("Insufficient data for SMC analysis")
+                return self._get_empty_result()
             # Order Blocks (Internal + Swing)
             order_blocks_data = self.detect_order_blocks(df)
             
@@ -1003,25 +1051,9 @@ class SMCDetector:
             
         except Exception as e:
             logger.error(f"Error in SMC analysis: {e}")
-            return {
-                'order_blocks': [],
-                'order_blocks_internal': [],
-                'order_blocks_swing': [],
-                'fvg': [],
-                'liquidity': [],
-                'choch': [],
-                'bos': [],
-                'internal_choch': [],
-                'internal_bos': [],
-                'swing_choch': [],
-                'swing_bos': [],
-                'eqh': [],
-                'eql': [],
-                'trend': 'NEUTRAL',
-                'internal_trend': 'NEUTRAL',
-                'advanced': self._get_empty_advanced_data(),
-                'signals_count': 0
-            }
+            import traceback
+            logger.error(traceback.format_exc())
+            return self._get_empty_result()
 
 
 # Глобальный экземпляр
