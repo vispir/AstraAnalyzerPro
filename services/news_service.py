@@ -68,7 +68,17 @@ class NewsService:
             return cached_data
         
         try:
-            logger.info(f"Fetching economic calendar from {from_date.date()} to {to_date.date()}")
+            # Убеждаемся, что даты различаются хотя бы на один день
+            # investpy требует, чтобы to_date > from_date после форматирования в dd/mm/yyyy
+            from_date_only = from_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            to_date_only = to_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Если даты одинаковые, добавляем один день к to_date
+            if from_date_only >= to_date_only:
+                to_date_only = from_date_only + timedelta(days=1)
+                logger.info(f"Adjusting to_date to ensure it's greater than from_date")
+            
+            logger.info(f"Fetching economic calendar from {from_date_only.date()} to {to_date_only.date()}")
             
             # Получаем календарь через investpy
             # investpy.news.economic_calendar возвращает DataFrame
@@ -78,8 +88,8 @@ class NewsService:
                 countries=None,  # Все страны
                 importances=None,  # Все уровни важности
                 categories=None,
-                from_date=from_date.strftime('%d/%m/%Y'),
-                to_date=to_date.strftime('%d/%m/%Y')
+                from_date=from_date_only.strftime('%d/%m/%Y'),
+                to_date=to_date_only.strftime('%d/%m/%Y')
             )
             
             events = []

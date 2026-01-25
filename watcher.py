@@ -27,17 +27,38 @@ except ImportError as e:
 logger = logging.getLogger("AstraWatcher")
 
 def is_market_active():
-    """Проверка активности рынка по Астраханскому времени (GMT+4)"""
-    # ФИКС ПУНКТА А: Принудительно используем UTC+4 для точности в облаке
-    astrakhan_tz = timezone(timedelta(hours=4))
-    now = datetime.now(astrakhan_tz)
+    """
+    Проверка активности рынка
+    Рынок золота работает: воскресенье 23:00 UTC - пятница 22:00 UTC
+    """
+    # Используем UTC для точности
+    now = datetime.now(timezone.utc)
     
-    weekday = now.weekday()
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
     hour = now.hour
-    if weekday == 5: return False 
-    if weekday == 6: return False 
-    if weekday == 0 and hour < 2: return False 
-    if hour == 1: return False 
+    
+    # Суббота - рынок полностью закрыт
+    if weekday == 5:
+        logger.debug(f"Market CLOSED: Saturday (UTC: {now.strftime('%Y-%m-%d %H:%M')})")
+        return False
+    
+    # Воскресенье - рынок открывается в 23:00 UTC
+    if weekday == 6:
+        if hour < 23:
+            logger.debug(f"Market CLOSED: Sunday before 23:00 UTC (now: {hour}:00)")
+            return False
+        else:
+            logger.debug(f"Market OPEN: Sunday after 23:00 UTC (now: {hour}:00)")
+            return True
+    
+    # Пятница - рынок закрывается в 22:00 UTC
+    if weekday == 4:
+        if hour >= 22:
+            logger.debug(f"Market CLOSED: Friday after 22:00 UTC (now: {hour}:00)")
+            return False
+    
+    # Понедельник утро - рынок открыт с 00:00 UTC (после открытия в воскресенье 23:00)
+    logger.debug(f"Market OPEN: Weekday={weekday}, Hour={hour}:00 UTC")
     return True
 
 def is_news_blockactive():
@@ -463,6 +484,9 @@ def run_analysis_cycle():
         logger.info("🔥 КОНСЕНСУС ДОСТИГНУТ! BUY/SELL сигнал")
         
         # 1. СОХРАНЯЕМ ТОРГОВЫЙ СИГНАЛ (BUY/SELL) В БД
+        # Получаем полную причину без обрезания
+        llm_reason_full = signal_json.get('REASON') or signal_json.get('executive_summary') or ai_response
+        
         signal_data = {
             'symbol': 'XAU_USD',
             'signal_type': signal_json.get('ACTION', 'N/A').upper(),
@@ -475,7 +499,7 @@ def run_analysis_cycle():
             'patterns': found_signals,
             'near_structures': near_description,
             'smc_summary': status_data.get('smc_summary', {}),
-            'llm_reason': signal_json.get('REASON', ''),
+            'llm_reason': llm_reason_full,  # Сохраняем полное описание без обрезания
             'llm_confidence': signal_json.get('CONFIDENCE'),
             'llm_full_response': ai_response
         }
@@ -506,6 +530,9 @@ def run_analysis_cycle():
         logger.info("⚖️ ИИ отклонил вход или выдал WAIT.")
         
         # СОХРАНЯЕМ WAIT СИГНАЛ В БД (тоже важно для аналитики)
+        # Получаем полную причину без обрезания
+        llm_reason_full = signal_json.get('REASON') or signal_json.get('executive_summary') or ai_response
+        
         wait_signal_data = {
             'symbol': 'XAU_USD',
             'signal_type': 'WAIT',
@@ -518,16 +545,16 @@ def run_analysis_cycle():
             'patterns': found_signals,
             'near_structures': near_description,
             'smc_summary': status_data.get('smc_summary', {}),
-            'llm_reason': signal_json.get('REASON', ai_response[:500]),
+            'llm_reason': llm_reason_full,  # Сохраняем полное описание без обрезания
             'llm_confidence': signal_json.get('CONFIDENCE'),
             'llm_full_response': ai_response
         }
         
         wait_signal_id = db_service.save_signal(wait_signal_data)
         
-        # Отправляем debug отчет о WAIT решении
+        # Отправляем debug отчет о WAIT решении с полным текстом
         status_data['status'] = 'wait_decision'
-        status_data['reason'] = f'⚖️ LLM рекомендует WAIT - ID: {wait_signal_id}\n\n' + (signal_json.get('REASON', ai_response[:200]))
+        status_data['reason'] = f'⚖️ LLM рекомендует WAIT - ID: {wait_signal_id}\n\n{llm_reason_full}'  # Убрали обрезание
         send_debug_notification(status_data)
 
 def start_watcher():

@@ -965,6 +965,7 @@ Use this data to find the specific High/Low/Close of the trigger candle.
         """
         Специальный метод для Наблюдателя.
         Использует ПОЛНЫЙ системный промт и Gemini 3 Flash для авто-анализа.
+        Возвращает сырой JSON ответ от LLM для дальнейшей обработки.
         """
         try:
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -974,28 +975,40 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             result = self._analyze_with_gemini(
                 technical_data=analysis_data,
                 news_data={"info": "Automated Watcher Alert - No high impact news checked"},
-                computed_levels=analysis_data.get('levels', {}),
+                computed_levels=analysis_data.get('advanced', {}).get('key_levels', {}),
                 chart_images={}, # В фоновом режиме пока без картинок для скорости
                 language='ru'
             )
 
             if result.get("success"):
-                # Возвращаем executive_summary из распарсенного JSON или сырой ответ
-                decision = result.get("parsed_decision", {})
-                summary = decision.get("executive_summary", result.get("response"))
-                
-                signal_info = ""
-                if "signal" in decision:
-                    sig = decision["signal"]
-                    signal_info = f"\n🎯 *РЕШЕНИЕ: {sig.get('action')} ({sig.get('confidence')}% confidence)*"
-
-                return f"🤖 *ASTRA WATCHER AI ANALYSIS*\n{summary}\n{signal_info}"
+                # Возвращаем ПОЛНЫЙ сырой ответ для парсинга в watcher.py
+                # Это позволит сохранить полное описание без обрезания
+                return result.get("response", "")
             
-            return "⚠️ ИИ не смог сформировать четкий вердикт по сигналу."
+            # Если ошибка, возвращаем JSON с WAIT
+            error_response = {
+                "executive_summary": "ИИ не смог сформировать четкий вердикт по сигналу.",
+                "signal": {"action": "WAIT"},
+                "wait_metadata": {
+                    "trigger_condition": "N/A",
+                    "estimated_wait_time": "N/A",
+                    "wait_reason_code": "NO_SETUP"
+                }
+            }
+            return json.dumps(error_response, ensure_ascii=False)
 
         except Exception as e:
             logger.error(f"Error in automated verdict: {e}")
-            return f"❌ Ошибка анализа: {str(e)}"
+            error_response = {
+                "executive_summary": f"Ошибка анализа: {str(e)}",
+                "signal": {"action": "WAIT"},
+                "wait_metadata": {
+                    "trigger_condition": "N/A",
+                    "estimated_wait_time": "N/A",
+                    "wait_reason_code": "NO_SETUP"
+                }
+            }
+            return json.dumps(error_response, ensure_ascii=False)
 
 # Синглтон инстанс
 llm_service = LLMService(
