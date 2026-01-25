@@ -61,6 +61,25 @@ class DBService:
             logger.error(f"❌ Ошибка сохранения в облако: {e}")
             return False
 
+    def deactivate_user(self, user_id):
+        """Деактивирует пользователя (когда он блокирует бота)"""
+        if not self.url:
+            logger.warning("⚠️ Деактивация невозможна: SUPABASE_URL не настроен")
+            return False
+        
+        try:
+            target_url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+            payload = {"is_active": False}
+            
+            response = requests.patch(target_url, json=payload, headers=self.headers)
+            response.raise_for_status()
+            
+            logger.info(f"🚫 Пользователь {user_id} деактивирован")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка деактивации пользователя {user_id}: {e}")
+            return False
+    
     def get_all_active_users(self):
         """Для рассылки сигналов всем активным юзерам из облака"""
         if not self.url: return []
@@ -120,6 +139,230 @@ class DBService:
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка обновления кулдауна в Supabase: {e}")
+            return False
+
+    # --- МЕТОДЫ ДЛЯ РАБОТЫ С СИГНАЛАМИ ---
+
+    def save_signal(self, signal_data):
+        """
+        Сохраняет сигнал в таблицу signals
+        
+        Args:
+            signal_data: Dict с данными сигнала
+                {
+                    'symbol': 'XAU_USD',
+                    'signal_type': 'BUY', 'SELL' или 'WAIT',
+                    'entry_price': 2650.00,
+                    'stop_loss': 2645.00,
+                    'take_profit': 2660.00,
+                    'trend': 'UPTREND',
+                    'zone': 'DISCOUNT',
+                    'current_price': 2649.50,
+                    'patterns': ['BOS', 'CHOCH', 'OB_RETEST'],
+                    'near_structures': 'BULL_OB [2649-2650], PDL @ 2648.50',
+                    'smc_summary': {...},
+                    'llm_reason': 'Бычий Order Block в зоне Discount...',
+                    'llm_confidence': 85,
+                    'llm_full_response': 'полный ответ LLM'
+                }
+        
+        Returns:
+            int: ID созданного сигнала или None при ошибке
+        """
+        if not self.url:
+            logger.error("❌ Сохранение сигнала невозможно: SUPABASE_URL не настроен")
+            return None
+        
+        target_url = f"{self.url}/rest/v1/signals"
+        
+        try:
+            response = requests.post(
+                target_url,
+                json=signal_data,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation"  # Возвращает созданную запись
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            signal_id = result[0]['id'] if result else None
+            
+            signal_type = signal_data.get('signal_type', 'N/A')
+            price = signal_data.get('entry_price') or signal_data.get('current_price', 0)
+            logger.info(f"✅ Сигнал {signal_type} @ {price} сохранен в БД (ID: {signal_id})")
+            return signal_id
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения сигнала: {e}")
+            return None
+
+    def get_last_signal(self, signal_type=None):
+        """
+        Получает последний сигнал из БД
+        
+        Args:
+            signal_type: Фильтр по типу ('BUY', 'SELL', 'WAIT') или None для любого типа
+        
+        Returns:
+            Dict с данными сигнала или None
+        """
+        if not self.url:
+            return None
+        
+        # Формируем URL с фильтром если нужно
+        if signal_type:
+            target_url = f"{self.url}/rest/v1/signals?select=*&signal_type=eq.{signal_type}&order=timestamp.desc&limit=1"
+        else:
+            target_url = f"{self.url}/rest/v1/signals?select=*&order=timestamp.desc&limit=1"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения последнего сигнала: {e}")
+            return None
+
+    def get_last_trade_signal_time(self):
+        """
+        Получает время последнего ТОРГОВОГО сигнала (только BUY/SELL, исключая WAIT)
+        Используется для кулдауна
+        
+        Returns:
+            datetime: Время последнего BUY/SELL сигнала
+        """
+        if not self.url:
+            return datetime(2020, 1, 1, tzinfo=timezone.utc)
+        
+        # Фильтруем только BUY и SELL, исключая WAIT
+        target_url = f"{self.url}/rest/v1/signals?select=timestamp&signal_type=in.(BUY,SELL)&order=timestamp.desc&limit=1"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and data[0].get('timestamp'):
+                ts_str = data[0]['timestamp']
+                return datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения времени последнего торгового сигнала: {e}")
+        
+        return datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    def get_signals_history(self, limit=10, signal_type=None):
+        """
+        Получает историю сигналов
+        
+        Args:
+            limit: Количество сигналов (по умолчанию 10)
+            signal_type: Фильтр по типу ('BUY', 'SELL', 'WAIT') или None
+        
+        Returns:
+            List[Dict]: Список сигналов
+        """
+        if not self.url:
+            return []
+        
+        if signal_type:
+            target_url = f"{self.url}/rest/v1/signals?select=*&signal_type=eq.{signal_type}&order=timestamp.desc&limit={limit}"
+        else:
+            target_url = f"{self.url}/rest/v1/signals?select=*&order=timestamp.desc&limit={limit}"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории сигналов: {e}")
+            return []
+
+    def get_signals_stats(self):
+        """
+        Получает статистику по сигналам через представление signals_stats
+        
+        Returns:
+            Dict: Статистика сигналов
+        """
+        if not self.url:
+            return {}
+        
+        target_url = f"{self.url}/rest/v1/signals_stats?select=*"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статистики сигналов: {e}")
+            return {}
+
+    def update_signal_result(self, signal_id, result_pnl, close_price, status='closed'):
+        """
+        Обновляет результат сигнала (для будущего использования)
+        
+        Args:
+            signal_id: ID сигнала
+            result_pnl: Результат в пунктах
+            close_price: Цена закрытия
+            status: Статус ('closed', 'cancelled')
+        
+        Returns:
+            bool: Успешность операции
+        """
+        if not self.url:
+            return False
+        
+        target_url = f"{self.url}/rest/v1/signals?id=eq.{signal_id}"
+        
+        try:
+            response = requests.patch(
+                target_url,
+                json={
+                    'result_pnl': result_pnl,
+                    'close_price': close_price,
+                    'close_timestamp': datetime.now(timezone.utc).isoformat(),
+                    'status': status
+                },
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Результат сигнала {signal_id} обновлен: {result_pnl} pips")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления результата сигнала: {e}")
             return False
 
 # Создаем экземпляр сервиса

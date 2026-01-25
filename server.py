@@ -8,9 +8,7 @@ import logging
 import threading
 import sys
 import io
-import os 
-import requests # Добавили для работы с API Telegram напрямую
-from datetime import datetime, timedelta, timezone # Добавили для работы с временем в боте
+import os
 
 # Принудительно ставим кодировку UTF-8
 if sys.platform == "win32":
@@ -33,14 +31,8 @@ logger = logging.getLogger(__name__)
 # Импорт конфигурации
 from config.settings import FLASK_PORT, FLASK_DEBUG, SYMBOL
 
-# Импорт сервисов для работы бота
+# Импорт Telegram сервиса
 from services.telegram_service import telegram_service
-from services.oanda_service import oanda_service
-from services.db_service import db_service
-try:
-    from services.smc_detector import smc_detector
-except ImportError:
-    smc_detector = None
 
 # --- ИСПРАВЛЕННЫЙ БЛОК ИМПОРТА WATCHER (Файл в корне) ---
 try:
@@ -99,114 +91,80 @@ def trigger_watcher():
     
     return jsonify({"success": False, "error": "Watcher service not available"}), 500
 
-# --- НОВЫЙ ЭНДПОИНТ: TELEGRAM WEBHOOK ---
-@app.route('/api/tg/webhook', methods=['POST'])
+# --- TELEGRAM WEBHOOK ENDPOINT ---
+@app.route('/api/tg/webhook', methods=['POST', 'GET'])
 def telegram_webhook():
-    """Обработчик входящих сообщений и нажатий кнопок в Telegram"""
+    """
+    Webhook endpoint для Telegram бота
+    POST - обработка updates от Telegram
+    GET - проверка что endpoint доступен
+    """
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "message": "Telegram webhook endpoint is ready"
+        }), 200
+    
     update = request.json
     if not update:
         return "OK", 200
-
-    chat_id = None
-    text = ""
-
-    # ЛОГИКА ОБРАБОТКИ НАЖАТИЙ КРАСИВЫХ КНОПОК (Inline Buttons)
-    if "callback_query" in update:
-        query = update["callback_query"]
-        chat_id = query["message"]["chat"]["id"]
-        callback_data = query["data"]
-        
-        # 1. Сразу отвечаем Телеграму, чтобы убрать крутилку на кнопке
-        try:
-            requests.post(f"{telegram_service.api_url}/answerCallbackQuery", 
-                          json={"callback_query_id": query["id"]})
-        except:
-            pass
-
-        # Перенаправляем сигнал в переменную text, чтобы сработала старая логика
-        if callback_data == "price": text = "📊 Курс Gold"
-        elif callback_data == "trend": text = "📈 Тренд M15"
-        elif callback_data == "status": text = "🛡️ Статус системы"
-        elif callback_data == "last": text = "🔔 Последний сигнал"
     
-    # ЛОГИКА ОБРАБОТКИ ОБЫЧНОГО ТЕКСТА
-    elif "message" in update:
-        message = update["message"]
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "")
+    try:
+        telegram_service.process_webhook_update(update)
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки Telegram webhook: {e}")
     
-    if not chat_id:
-        return "OK", 200
-
-    # 1. Команда /start
-    if text == "/start":
-        welcome = (
-            "<b>💎 ASTRA ANALYZER PRO</b>\n"
-            "————————————————\n"
-            "Привет, Трейдер! 🚀\n\n"
-            "Я твой автономный терминал для торговли золотом. "
-            "Я использую <b>SMC структуру</b> и <b>AI</b> для поиска снайперских входов.\n\n"
-            "<b>Доступные функции:</b>\n"
-            "🔹 <code>Курс</code> — Живая цена OANDA\n"
-            "🔹 <code>Анализ</code> — Тренд и уровни M15\n"
-            "🔹 <code>Статус</code> — Мониторинг систем\n"
-            "————————————————\n"
-            "<b>Выбери действие:</b>"
-        )
-        telegram_service.send_message(chat_id, welcome, reply_markup=telegram_service.get_inline_menu())
-
-    # 2. Кнопка: 📊 Курс Gold
-    elif text == "📊 Курс Gold":
-        data = oanda_service.get_candles(timeframe='M15', limit=1)
-        if "candles" in data and len(data["candles"]) > 0:
-            price = data["candles"][-1]["close"]
-            telegram_service.send_message(chat_id, f"<b>💰 Текущая цена XAU/USD (Live):</b> <code>{price}</code>")
-        else:
-            telegram_service.send_message(chat_id, "❌ Ошибка получения котировок из OANDA.")
-
-    # 3. Кнопка: 📈 Тренд M15
-    elif text == "📈 Тренд M15":
-        data = oanda_service.get_candles(timeframe='M15', limit=100)
-        if "candles" in data and smc_detector:
-            analysis = smc_detector.analyze(data["candles"])
-            trend = analysis.get('trend', 'N/A')
-            emoji = "🐂 BULLISH" if "UP" in trend.upper() else "🐻 BEARISH" if "DOWN" in trend.upper() else "↔️ RANGING"
-            
-            resp = (
-                f"<b>📈 Структура рынка (M15):</b>\n\n"
-                f"Тренд: <b>{emoji}</b>\n"
-                f"Сигналов SMC: <code>{analysis.get('signals_count', 0)}</code>\n"
-                f"Зона: <code>{analysis.get('advanced', {}).get('key_levels', {}).get('Current_Zone', 'N/A')}</code>"
-            )
-            telegram_service.send_message(chat_id, resp)
-        else:
-            telegram_service.send_message(chat_id, "❌ SMC детектор временно недоступен.")
-
-    # 4. Кнопка: 🛡️ Статус системы
-    elif text == "🛡️ Статус системы":
-        last_sig = db_service.get_last_signal_time()
-        # Время в Астрахани (UTC+4)
-        local_now = datetime.now(timezone.utc) + timedelta(hours=4)
-        last_sig_local = last_sig + timedelta(hours=4)
-        
-        status_msg = (
-            f"<b>🛡️ Статус Astra Analyzer:</b>\n\n"
-            f"✅ Система: <b>ONLINE</b>\n"
-            f"🛰️ Наблюдатель: <b>ACTIVE</b>\n"
-            f"🔔 Последний сигнал: <code>{last_sig_local.strftime('%H:%M:%S')}</code>\n"
-            f"📍 Время сервера: <code>{local_now.strftime('%H:%M:%S')} (UTC+4)</code>"
-        )
-        telegram_service.send_message(chat_id, status_msg)
-        
-    # 5. Кнопка: 🔔 Последний сигнал
-    elif text == "🔔 Последний сигнал":
-        last_sig = db_service.get_last_signal_time()
-        diff = datetime.now(timezone.utc) - last_sig
-        minutes = int(diff.total_seconds() // 60)
-        
-        telegram_service.send_message(chat_id, f"🔔 Последний подтвержденный сигнал был отправлен <b>{minutes} мин. назад</b>.\n\nСледующий анализ через 15 минут.")
-
     return "OK", 200
+
+@app.route('/api/tg/webhook/info', methods=['GET'])
+def telegram_webhook_info():
+    """Получение информации о текущем webhook"""
+    # Эта функция временно недоступна для pyTelegramBotAPI
+    return jsonify({"success": False, "error": "Not implemented for pyTelegramBotAPI"}), 501
+
+@app.route('/api/tg/webhook/setup', methods=['POST'])
+def telegram_webhook_setup():
+    """Ручная установка webhook (требует авторизации)"""
+    auth_header = request.headers.get('Authorization')
+    cron_secret = os.getenv('CRON_SECRET')
+    
+    # Защита от несанкционированного доступа
+    if cron_secret and auth_header != f"Bearer {cron_secret}":
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    
+    # Опционально: перезагрузить конфигурацию перед установкой
+    if request.json and request.json.get('reload_config'):
+        telegram_service.reload_config()
+    
+    # Для pyTelegramBotAPI webhook настраивается вручную через Telegram API
+    return jsonify({
+        "success": False,
+        "error": "Not implemented",
+        "message": "Используйте команду: curl -X POST 'https://api.telegram.org/bot<TOKEN>/setWebhook' -d 'url=<WEBHOOK_URL>'"
+    }), 501
+
+@app.route('/api/tg/config/reload', methods=['POST'])
+def telegram_config_reload():
+    """Перезагрузка конфигурации из .env (требует авторизации)"""
+    auth_header = request.headers.get('Authorization')
+    cron_secret = os.getenv('CRON_SECRET')
+    
+    # Защита от несанкционированного доступа
+    if cron_secret and auth_header != f"Bearer {cron_secret}":
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    
+    try:
+        telegram_service.reload_config()
+        return jsonify({
+            "success": True,
+            "message": "Конфигурация перезагружена",
+            "webhook_url": telegram_service.webhook_url
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 # Регистрация blueprints
 app.register_blueprint(market_bp, url_prefix='/api/market')
@@ -294,6 +252,35 @@ if __name__ == '__main__':
     logger.info("ASTRA ANALYZER PRO - SERVER STARTING")
     
     initialize_services()
+    
+    # Настройка Telegram бота (polling или webhook)
+    use_polling = os.getenv('USE_TELEGRAM_POLLING', 'false').lower() == 'true'
+    webhook_url = os.getenv('TELEGRAM_WEBHOOK_URL')
+    
+    if use_polling:
+        # POLLING РЕЖИМ (для локальной разработки)
+        logger.info("🤖 Запуск Telegram бота в POLLING режиме...")
+        logger.info("   Webhook не требуется!")
+        
+        def start_polling_thread():
+            """Запускает polling в отдельном потоке"""
+            try:
+                telegram_service.start_polling()
+            except Exception as e:
+                logger.error(f"❌ Ошибка polling: {e}")
+        
+        polling_thread = threading.Thread(target=start_polling_thread, daemon=True)
+        polling_thread.start()
+        
+    elif webhook_url:
+        # WEBHOOK РЕЖИМ (для продакшена)
+        logger.info(f"📱 Telegram webhook URL: {webhook_url}")
+        logger.info("   ⚠️ Webhook нужно настроить вручную через Telegram API:")
+        logger.info(f"   curl -X POST 'https://api.telegram.org/bot<TOKEN>/setWebhook' -d 'url={webhook_url}'")
+    else:
+        logger.info("📱 Telegram бот не настроен")
+        logger.info("   Установите USE_TELEGRAM_POLLING=true для polling режима")
+        logger.info("   Или TELEGRAM_WEBHOOK_URL для webhook режима")
     
     # Запуск Watcher в фоне (только если НЕ на Vercel)
     if start_watcher and not os.getenv('VERCEL'):

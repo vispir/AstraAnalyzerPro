@@ -12,3 +12,5 @@ Pillow>=10.0.0
 numpy>=1.24.0
 python-dateutil>=2.8.2
 google-generativeai
+APScheduler>=3.10.4
+pyTelegramBotAPI>=4.14.0

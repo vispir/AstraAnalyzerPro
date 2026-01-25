@@ -53,22 +53,6 @@ def calculate_trade():
         return jsonify({"error": str(e)}), 500
 
 
-@analysis_bp.route('/analyze', methods=['POST'])
-def analyze_trade():
-    """
-    AI анализ торговой сделки (DEPRECATED - используйте /api/llm/analyze)
-    
-    ⚠️ DEPRECATED: Этот роут оставлен для обратной совместимости.
-    Используйте /api/llm/analyze для полноценного анализа через LLM Service
-    """
-    return jsonify({
-        "error": "This endpoint is deprecated",
-        "message": "Use /api/llm/analyze instead",
-        "new_endpoint": "/api/llm/analyze",
-        "docs": "POST /api/llm/analyze?model=openrouter (or gemini3/gateway)"
-    }), 410  # 410 Gone
-
-
 @analysis_bp.route('/breakeven', methods=['POST'])
 def calculate_breakeven():
     """
@@ -130,20 +114,6 @@ def calculate_drawdown():
     except Exception as e:
         logger.error(f"Error in /drawdown: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-
-@analysis_bp.route('/ai-status')
-def ai_status():
-    """
-    Проверка доступности AI сервиса (DEPRECATED)
-    
-    ⚠️ DEPRECATED: Используйте /api/llm/status
-    """
-    return jsonify({
-        "error": "This endpoint is deprecated",
-        "message": "Use /api/llm/status instead",
-        "new_endpoint": "/api/llm/status"
-    }), 410  # 410 Gone
 
 
 @analysis_bp.route('/cache/stats')
@@ -252,4 +222,167 @@ def cleanup_cache():
         })
     except Exception as e:
         logger.error(f"Error cleaning up cache: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# --- ЭНДПОИНТЫ ДЛЯ РАБОТЫ С СИГНАЛАМИ ---
+
+@analysis_bp.route('/signals/history')
+def get_signals_history():
+    """
+    Получение истории сигналов
+    
+    Query params:
+        limit: количество сигналов (по умолчанию 10, макс 100)
+        type: фильтр по типу ('BUY', 'SELL', 'WAIT')
+    
+    Returns:
+        Список сигналов с полной информацией
+    """
+    try:
+        from services.db_service import db_service
+        
+        limit = min(int(request.args.get('limit', 10)), 100)
+        signal_type = request.args.get('type', None)
+        
+        if signal_type:
+            signal_type = signal_type.upper()
+            if signal_type not in ['BUY', 'SELL', 'WAIT']:
+                return jsonify({"error": "Invalid signal type. Use: BUY, SELL, or WAIT"}), 400
+        
+        signals = db_service.get_signals_history(limit=limit, signal_type=signal_type)
+        
+        return jsonify({
+            "success": True,
+            "count": len(signals),
+            "signals": signals
+        })
+    except Exception as e:
+        logger.error(f"Error getting signals history: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/signals/last')
+def get_last_signal():
+    """
+    Получение последнего сигнала
+    
+    Query params:
+        type: фильтр по типу ('BUY', 'SELL', 'WAIT')
+    
+    Returns:
+        Последний сигнал или null
+    """
+    try:
+        from services.db_service import db_service
+        
+        signal_type = request.args.get('type', None)
+        
+        if signal_type:
+            signal_type = signal_type.upper()
+            if signal_type not in ['BUY', 'SELL', 'WAIT']:
+                return jsonify({"error": "Invalid signal type. Use: BUY, SELL, or WAIT"}), 400
+        
+        signal = db_service.get_last_signal(signal_type=signal_type)
+        
+        return jsonify({
+            "success": True,
+            "signal": signal
+        })
+    except Exception as e:
+        logger.error(f"Error getting last signal: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/signals/stats')
+def get_signals_stats():
+    """
+    Получение статистики по сигналам
+    
+    Returns:
+        {
+            "total_signals": 156,
+            "buy_signals": 78,
+            "sell_signals": 65,
+            "wait_signals": 13,
+            "closed_trades": 120,
+            "wins": 72,
+            "losses": 48,
+            "win_rate_percent": 60.00,
+            "avg_pnl": 2.5,
+            "total_pnl": 300.0
+        }
+    """
+    try:
+        from services.db_service import db_service
+        
+        stats = db_service.get_signals_stats()
+        
+        return jsonify({
+            "success": True,
+            "stats": stats
+        })
+    except Exception as e:
+        logger.error(f"Error getting signals stats: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@analysis_bp.route('/signals/<int:signal_id>/result', methods=['PATCH'])
+def update_signal_result(signal_id):
+    """
+    Обновление результата сигнала
+    
+    Path params:
+        signal_id: ID сигнала
+    
+    Body params:
+        result_pnl: результат в пунктах (обязательно)
+        close_price: цена закрытия (обязательно)
+        status: статус ('closed' или 'cancelled', по умолчанию 'closed')
+    
+    Returns:
+        Статус операции
+    """
+    try:
+        from services.db_service import db_service
+        
+        data = request.get_json()
+        
+        result_pnl = data.get('result_pnl')
+        close_price = data.get('close_price')
+        status = data.get('status', 'closed')
+        
+        if result_pnl is None or close_price is None:
+            return jsonify({
+                "error": "Missing required parameters: result_pnl and close_price"
+            }), 400
+        
+        if status not in ['closed', 'cancelled']:
+            return jsonify({
+                "error": "Invalid status. Use: closed or cancelled"
+            }), 400
+        
+        success = db_service.update_signal_result(
+            signal_id=signal_id,
+            result_pnl=float(result_pnl),
+            close_price=float(close_price),
+            status=status
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Signal {signal_id} result updated"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to update signal result"
+            }), 500
+            
+    except ValueError as e:
+        logger.error(f"Invalid input in /signals/<id>/result: {str(e)}")
+        return jsonify({"error": "Invalid numeric values"}), 400
+    except Exception as e:
+        logger.error(f"Error updating signal result: {str(e)}")
         return jsonify({"error": str(e)}), 500
