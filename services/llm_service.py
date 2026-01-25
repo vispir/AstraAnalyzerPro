@@ -197,7 +197,13 @@ class LLMService:
     "# EXECUTION ALGORITHM\n"
     "\n"
     "## 1. Global Filters (Safety Protocols)\n"
-    "* **Market Status:** Check 'Current Time' in environment. If it is Saturday or Sunday, market is CLOSED. Signal MUST be **WAIT**. In 'executive_summary', explain that the market is closed and provide a strategic outlook for Monday open instead.\n"
+    "* **Market Status:** Check 'Current Time' in environment (must be in UTC timezone):\n"
+    "  - If Saturday (any time): market is CLOSED → Signal MUST be **WAIT**\n"
+    "  - If Sunday before 23:00 UTC: market is CLOSED → Signal MUST be **WAIT**\n"
+    "  - If Sunday 23:00 UTC or later: market is OPEN → Continue analysis\n"
+    "  - If Friday 22:00 UTC or later: market is CLOSED → Signal MUST be **WAIT**\n"
+    "  - Monday-Thursday: market is OPEN → Continue analysis\n"
+    "  IMPORTANT: Gold market opens Sunday 23:00 UTC and closes Friday 22:00 UTC.\n"
     "* **Time Lock:** Check upcoming High Impact USD News. If time to news is < 45 minutes, STOP. Signal is **WAIT**.\n"
     "* **Liquidity Check:** If current time is End of Asia or Late NY (low vol), STOP. Signal is **WAIT**.\n"
     "\n"
@@ -351,12 +357,30 @@ If the user idea is dangerous or contradicts the technical/news data, explain wh
 If the user idea is good, you can use it as a basis for your trade plan.
 </user_trading_idea>
 """
+        
+        # Определяем статус рынка для LLM
+        from datetime import datetime as dt_module
+        try:
+            utc_now = dt_module.strptime(current_time_utc, "%Y-%m-%d %H:%M UTC")
+            weekday = utc_now.weekday()  # 0=Monday, 6=Sunday
+            hour = utc_now.hour
+            
+            market_status = "OPEN"
+            if weekday == 5:  # Saturday
+                market_status = "CLOSED"
+            elif weekday == 6 and hour < 23:  # Sunday before 23:00
+                market_status = "CLOSED"
+            elif weekday == 4 and hour >= 22:  # Friday after 22:00
+                market_status = "CLOSED"
+        except:
+            market_status = "UNKNOWN"
 
         user_prompt_text = f"""
 REPORT GENERATION REQUEST for XAUUSD
 
 <environment>
 Current Time (UTC): {current_time_utc}
+Market Status: {market_status} (Gold market opens Sunday 23:00 UTC, closes Friday 22:00 UTC)
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
 Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
@@ -671,12 +695,25 @@ If the user idea is dangerous or contradicts the technical/news data, explain wh
 If the user idea is good, you can use it as a basis for your trade plan.
 </user_trading_idea>
 """
+            
+            # Определяем статус рынка для LLM
+            weekday = current_time.weekday()  # 0=Monday, 6=Sunday
+            hour = current_time.hour
+            
+            market_status = "OPEN"
+            if weekday == 5:  # Saturday
+                market_status = "CLOSED"
+            elif weekday == 6 and hour < 23:  # Sunday before 23:00
+                market_status = "CLOSED"
+            elif weekday == 4 and hour >= 22:  # Friday after 22:00
+                market_status = "CLOSED"
 
             user_prompt_text = f"""
 REPORT GENERATION REQUEST for XAUUSD
 
 <environment>
 Current Time (UTC): {time_str}
+Market Status: {market_status} (Gold market opens Sunday 23:00 UTC, closes Friday 22:00 UTC)
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
 Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
