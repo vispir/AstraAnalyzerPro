@@ -9,6 +9,7 @@ import threading
 import sys
 import io
 import os 
+import requests # Добавили для работы с API Telegram напрямую
 from datetime import datetime, timedelta, timezone # Добавили для работы с временем в боте
 
 # Принудительно ставим кодировку UTF-8
@@ -106,25 +107,35 @@ def telegram_webhook():
     if not update:
         return "OK", 200
 
+    chat_id = None
+    text = ""
+
     # ЛОГИКА ОБРАБОТКИ НАЖАТИЙ КРАСИВЫХ КНОПОК (Inline Buttons)
     if "callback_query" in update:
         query = update["callback_query"]
         chat_id = query["message"]["chat"]["id"]
         callback_data = query["data"]
         
+        # 1. Сразу отвечаем Телеграму, чтобы убрать крутилку на кнопке
+        try:
+            requests.post(f"{telegram_service.api_url}/answerCallbackQuery", 
+                          json={"callback_query_id": query["id"]})
+        except:
+            pass
+
         # Перенаправляем сигнал в переменную text, чтобы сработала старая логика
         if callback_data == "price": text = "📊 Курс Gold"
         elif callback_data == "trend": text = "📈 Тренд M15"
         elif callback_data == "status": text = "🛡️ Статус системы"
         elif callback_data == "last": text = "🔔 Последний сигнал"
-        else: text = ""
     
     # ЛОГИКА ОБРАБОТКИ ОБЫЧНОГО ТЕКСТА
     elif "message" in update:
         message = update["message"]
         chat_id = message["chat"]["id"]
         text = message.get("text", "")
-    else:
+    
+    if not chat_id:
         return "OK", 200
 
     # 1. Команда /start
@@ -142,8 +153,6 @@ def telegram_webhook():
             "————————————————\n"
             "<b>Выбери действие:</b>"
         )
-            
-        # ЗАТЕМ отправляем красивое Inline-меню
         telegram_service.send_message(chat_id, welcome, reply_markup=telegram_service.get_inline_menu())
 
     # 2. Кнопка: 📊 Курс Gold
@@ -161,13 +170,13 @@ def telegram_webhook():
         if "candles" in data and smc_detector:
             analysis = smc_detector.analyze(data["candles"])
             trend = analysis.get('trend', 'N/A')
-            emoji = "🐂 BULLISH" if trend == "BULLISH" else "🐻 BEARISH" if trend == "BEARISH" else "↔️ RANGING"
+            emoji = "🐂 BULLISH" if "UP" in trend.upper() else "🐻 BEARISH" if "DOWN" in trend.upper() else "↔️ RANGING"
             
             resp = (
                 f"<b>📈 Структура рынка (M15):</b>\n\n"
                 f"Тренд: <b>{emoji}</b>\n"
                 f"Сигналов SMC: <code>{analysis.get('signals_count', 0)}</code>\n"
-                f"Зона: <code>{analysis.get('current_zone', 'N/A')}</code>"
+                f"Зона: <code>{analysis.get('advanced', {}).get('key_levels', {}).get('Current_Zone', 'N/A')}</code>"
             )
             telegram_service.send_message(chat_id, resp)
         else:
@@ -189,7 +198,7 @@ def telegram_webhook():
         )
         telegram_service.send_message(chat_id, status_msg)
         
-    # 5. Кнопка: 🔔 Последний сигнал (пока показываем статус, так как текст сигнала не храним в БД)
+    # 5. Кнопка: 🔔 Последний сигнал
     elif text == "🔔 Последний сигнал":
         last_sig = db_service.get_last_signal_time()
         diff = datetime.now(timezone.utc) - last_sig
