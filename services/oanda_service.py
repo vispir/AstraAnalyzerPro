@@ -15,7 +15,7 @@ class OandaService:
         # Для OANDA золото — это XAU_USD
         self.symbol = "XAU_USD"
         self.base_url = "https://api-fxpractice.oanda.com/v3" # Demo URL
-        self.candles_cache_ttl = 300  # 5 минут
+        self.candles_cache_ttl = 30  # 30 секунд
 
     def get_candles(self, timeframe: str = 'M15', period: Optional[str] = None, limit: int = 100) -> Dict:
         """
@@ -68,7 +68,7 @@ class OandaService:
 
             # OANDA отдает данные от СТАРЫХ к НОВЫМ (уже в нужном для графика порядке)
             for item in data.get("candles", []):
-                if not item.get("complete"): continue # Пропускаем неполные свечи если нужно
+                # if not item.get("complete"): continue # Пропускаем неполные свечи если нужно
 
                 mid = item["mid"]
                 open_price = round(float(mid["o"]), 2)

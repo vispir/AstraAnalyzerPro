@@ -141,33 +141,46 @@ class DBService:
             logger.error(f"❌ Ошибка обновления кулдауна в Supabase: {e}")
             return False
 
+    def get_last_wait_time(self):
+        """Получает время последнего вердикта WAIT из Supabase"""
+        if not self.url: return datetime(2020, 1, 1, tzinfo=timezone.utc)
+        target_url = f"{self.url}/rest/v1/bot_metadata?select=value_timestamp&key=eq.last_wait_time"
+        try:
+            response = requests.get(target_url, headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"})
+            response.raise_for_status()
+            data = response.json()
+            if data and data[0].get('value_timestamp'):
+                return datetime.fromisoformat(data[0]['value_timestamp'].replace('Z', '+00:00'))
+        except: pass
+        return datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    def update_last_wait_time(self):
+        """Записывает время вердикта WAIT в облако"""
+        if not self.url: return False
+        now_iso = datetime.now(timezone.utc).isoformat()
+        target_url = f"{self.url}/rest/v1/bot_metadata?key=eq.last_wait_time"
+        try:
+            requests.patch(target_url, json={"value_timestamp": now_iso}, headers=self.headers)
+            logger.info("⚖️ Кулдаун WAIT обновлен в облаке")
+            return True
+        except: return False
+
+    def get_website_authorized_users(self):
+        """Берет ID только тех, кто реально авторизовался через виджет на сайте (есть photo_url)"""
+        if not self.url: return []
+        # photo_url=not.is.null — это признак того, что юзер прошел через сайт
+        target_url = f"{self.url}/rest/v1/users?select=id&is_active=eq.true&photo_url=not.is.null"
+        try:
+            response = requests.get(target_url, headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"})
+            response.raise_for_status()
+            return [row['id'] for row in response.json()]
+        except: return []
+
     # --- МЕТОДЫ ДЛЯ РАБОТЫ С СИГНАЛАМИ ---
 
     def save_signal(self, signal_data):
         """
         Сохраняет сигнал в таблицу signals
-        
-        Args:
-            signal_data: Dict с данными сигнала
-                {
-                    'symbol': 'XAU_USD',
-                    'signal_type': 'BUY', 'SELL' или 'WAIT',
-                    'entry_price': 2650.00,
-                    'stop_loss': 2645.00,
-                    'take_profit': 2660.00,
-                    'trend': 'UPTREND',
-                    'zone': 'DISCOUNT',
-                    'current_price': 2649.50,
-                    'patterns': ['BOS', 'CHOCH', 'OB_RETEST'],
-                    'near_structures': 'BULL_OB [2649-2650], PDL @ 2648.50',
-                    'smc_summary': {...},
-                    'llm_reason': 'Бычий Order Block в зоне Discount...',
-                    'llm_confidence': 85,
-                    'llm_full_response': 'полный ответ LLM'
-                }
-        
-        Returns:
-            int: ID созданного сигнала или None при ошибке
         """
         if not self.url:
             logger.error("❌ Сохранение сигнала невозможно: SUPABASE_URL не настроен")
@@ -201,12 +214,6 @@ class DBService:
     def get_last_signal(self, signal_type=None):
         """
         Получает последний сигнал из БД
-        
-        Args:
-            signal_type: Фильтр по типу ('BUY', 'SELL', 'WAIT') или None для любого типа
-        
-        Returns:
-            Dict с данными сигнала или None
         """
         if not self.url:
             return None
@@ -236,9 +243,6 @@ class DBService:
         """
         Получает время последнего ТОРГОВОГО сигнала (только BUY/SELL, исключая WAIT)
         Используется для кулдауна
-        
-        Returns:
-            datetime: Время последнего BUY/SELL сигнала
         """
         if not self.url:
             return datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -268,13 +272,6 @@ class DBService:
     def get_signals_history(self, limit=10, signal_type=None):
         """
         Получает историю сигналов
-        
-        Args:
-            limit: Количество сигналов (по умолчанию 10)
-            signal_type: Фильтр по типу ('BUY', 'SELL', 'WAIT') или None
-        
-        Returns:
-            List[Dict]: Список сигналов
         """
         if not self.url:
             return []
@@ -301,9 +298,6 @@ class DBService:
     def get_signals_stats(self):
         """
         Получает статистику по сигналам через представление signals_stats
-        
-        Returns:
-            Dict: Статистика сигналов
         """
         if not self.url:
             return {}
@@ -328,15 +322,6 @@ class DBService:
     def update_signal_result(self, signal_id, result_pnl, close_price, status='closed'):
         """
         Обновляет результат сигнала (для будущего использования)
-        
-        Args:
-            signal_id: ID сигнала
-            result_pnl: Результат в пунктах
-            close_price: Цена закрытия
-            status: Статус ('closed', 'cancelled')
-        
-        Returns:
-            bool: Успешность операции
         """
         if not self.url:
             return False
