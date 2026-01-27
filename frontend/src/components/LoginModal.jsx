@@ -6,25 +6,33 @@ import axios from 'axios';
 const TelegramWidget = ({ onAuth }) => {
   const containerRef = useRef(null);
   const initialized = useRef(false);
+  const scriptRef = useRef(null);
   
   const onAuthRef = useRef(onAuth);
 
+  // Обновляем ref без ре-рендера
   useEffect(() => {
     onAuthRef.current = onAuth;
   }, [onAuth]);
 
   useEffect(() => {
-    if (initialized.current) return;
+    // КРИТИЧНО: Проверяем initialized ДО любых манипуляций с DOM
+    if (initialized.current) {
+      return;
+    }
 
-    window.onTelegramAuth = (user) => {
-      if (onAuthRef.current) {
-        onAuthRef.current(user);
-      }
-    };
+    // Устанавливаем глобальный callback один раз
+    if (!window.onTelegramAuth) {
+      window.onTelegramAuth = (user) => {
+        console.log('🔐 Telegram Widget callback вызван:', user);
+        if (onAuthRef.current) {
+          onAuthRef.current(user);
+        }
+      };
+    }
 
-    if (containerRef.current) {
-      containerRef.current.innerHTML = '';
-      
+    // Проверяем что контейнер существует И еще не содержит скрипт
+    if (containerRef.current && !containerRef.current.querySelector('script')) {
       const script = document.createElement('script');
       script.src = "https://telegram.org/js/telegram-widget.js?22";
       script.setAttribute('data-telegram-login', 'AstraAnalyzerPro_bot');
@@ -32,15 +40,30 @@ const TelegramWidget = ({ onAuth }) => {
       script.setAttribute('data-onauth', 'onTelegramAuth(user)');
       script.setAttribute('data-request-access', 'write');
       script.async = true;
+      
+      // Обработка успешной загрузки скрипта
+      script.onload = () => {
+        console.log('✅ Telegram Widget успешно загружен');
+      };
+      
+      script.onerror = () => {
+        console.error('❌ Ошибка загрузки Telegram Widget');
+        initialized.current = false; // Позволяем повторную попытку
+      };
 
       containerRef.current.appendChild(script);
+      scriptRef.current = script;
       initialized.current = true;
+      
+      console.log('📱 Telegram Widget инициализирован (один раз)');
     }
 
+    // Cleanup при unmount компонента
     return () => {
-      // При закрытии не удаляем глобальную функцию, чтобы избежать ошибок скрипта ТГ
+      // НЕ сбрасываем initialized.current чтобы предотвратить повторную загрузку
+      // НЕ удаляем window.onTelegramAuth чтобы избежать ошибок от уже загруженного виджета
     };
-  }, []);
+  }, []); // Пустой массив зависимостей - выполнится строго ОДИН раз
 
   return (
     <div 
@@ -59,9 +82,19 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const authInProgress = useRef(false); // Защита от множественных вызовов
 
   const handleTelegramAuth = async (tgUser) => {
+    // Защита от спама: если авторизация уже идет - игнорируем повторные вызовы
+    if (authInProgress.current) {
+      console.warn('⚠️ Авторизация уже в процессе, игнорирую повторный вызов');
+      return;
+    }
+
+    console.log('🔐 Начинаем авторизацию через Telegram:', tgUser.id);
+    authInProgress.current = true;
     setIsLoading(true);
+    
     try {
       const response = await axios.post(
         'https://astraanalyzerpro-q6up.onrender.com/api/auth/telegram', 
@@ -114,6 +147,8 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
       // НЕ закрываем модальное окно при ошибке - даём пользователю попробовать снова
     } finally {
       setIsLoading(false);
+      authInProgress.current = false; // Разрешаем новую попытку
+      console.log('✅ Процесс авторизации завершен');
     }
   };
 
