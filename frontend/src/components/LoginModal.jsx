@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { User, Lock, X } from 'lucide-react';
 import axios from 'axios';
 
 // --- КОМПОНЕНТ-ОБЕРТКА ДЛЯ ТВОЕГО КОДА ТЕЛЕГРАМ ---
-const TelegramWidget = ({ onAuth }) => {
+// Обернут в memo чтобы предотвратить ре-рендер при обновлении родителя
+const TelegramWidget = memo(({ onAuth }) => {
   const containerRef = useRef(null);
   const initialized = useRef(false);
   const scriptRef = useRef(null);
@@ -76,15 +77,20 @@ const TelegramWidget = ({ onAuth }) => {
       }}
     />
   );
-};
+});
 
-export const LoginModal = ({ onClose, onLoginSuccess }) => {
+// Устанавливаем displayName для React DevTools
+TelegramWidget.displayName = 'TelegramWidget';
+
+// Обернут в memo чтобы предотвратить ре-рендер при обновлении Header каждую секунду
+export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const authInProgress = useRef(false); // Защита от множественных вызовов
 
-  const handleTelegramAuth = async (tgUser) => {
+  // Мемоизируем функцию чтобы она не пересоздавалась и не вызывала ре-рендер TelegramWidget
+  const handleTelegramAuth = useCallback(async (tgUser) => {
     // Защита от спама: если авторизация уже идет - игнорируем повторные вызовы
     if (authInProgress.current) {
       console.warn('⚠️ Авторизация уже в процессе, игнорирую повторный вызов');
@@ -150,7 +156,7 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
       authInProgress.current = false; // Разрешаем новую попытку
       console.log('✅ Процесс авторизации завершен');
     }
-  };
+  }, [onLoginSuccess, onClose]); // Зависимости от props
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -276,4 +282,7 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
       </div>
     </div>
   );
-};
+});
+
+// Устанавливаем displayName для React DevTools
+LoginModal.displayName = 'LoginModal';

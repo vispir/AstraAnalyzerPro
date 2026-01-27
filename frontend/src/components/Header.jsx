@@ -39,11 +39,15 @@ const Header = ({ tf, setTf, source, setSource }) => {
     setShowLoginModal(false);
   }, []);
 
-  const handleLogout = () => {
+  const handleCloseModal = useCallback(() => {
+    setShowLoginModal(false);
+  }, []);
+
+  const handleLogout = useCallback(() => {
     setUser(null);
     localStorage.removeItem('astra_user'); // Удаляем из браузера
     setShowUserMenu(false);
-  };
+  }, []);
 
   return (
     <>
@@ -126,7 +130,7 @@ const Header = ({ tf, setTf, source, setSource }) => {
 
       {showLoginModal && (
         <LoginModal 
-          onClose={() => setShowLoginModal(false)} 
+          onClose={handleCloseModal} 
           onLoginSuccess={handleLoginSuccess} 
         />
       )}
