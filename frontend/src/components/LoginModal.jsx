@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { User, Lock, X } from 'lucide-react';
 import axios from 'axios';
 
+// ========== ГЛОБАЛЬНЫЙ SINGLETON - МАКСИМАЛЬНАЯ ЗАЩИТА ==========
+// Этот флаг живет на уровне window и предотвращает ВСЕ попытки повторной инициализации
+if (typeof window !== 'undefined') {
+  window.__TELEGRAM_WIDGET_INITIALIZED__ = window.__TELEGRAM_WIDGET_INITIALIZED__ || false;
+  window.__TELEGRAM_AUTH_IN_PROGRESS__ = window.__TELEGRAM_AUTH_IN_PROGRESS__ || false;
+}
+
 // --- КОМПОНЕНТ-ОБЕРТКА ДЛЯ ТВОЕГО КОДА ТЕЛЕГРАМ ---
 // Обернут в memo чтобы предотвратить ре-рендер при обновлении родителя
 const TelegramWidget = memo(({ onAuth }) => {
@@ -17,6 +24,13 @@ const TelegramWidget = memo(({ onAuth }) => {
   }, [onAuth]);
 
   useEffect(() => {
+    // ========== МАКСИМАЛЬНАЯ ЗАЩИТА #0: Глобальный singleton ==========
+    if (window.__TELEGRAM_WIDGET_INITIALIZED__) {
+      console.log('🛑 ГЛОБАЛЬНАЯ ЗАЩИТА: Виджет уже инициализирован на уровне window, БЛОКИРУЮ');
+      initialized.current = true;
+      return;
+    }
+
     // ========== БЕТОННАЯ ЗАЩИТА #1: Проверка initialized ref ==========
     if (initialized.current) {
       console.log('⚠️ TelegramWidget уже инициализирован (initialized.current = true), пропускаю');
@@ -79,8 +93,10 @@ const TelegramWidget = memo(({ onAuth }) => {
     containerRef.current.appendChild(script);
     scriptRef.current = script;
     initialized.current = true;
+    window.__TELEGRAM_WIDGET_INITIALIZED__ = true; // Устанавливаем глобальный флаг
     
     console.log('📱 Telegram Widget инициализирован (ОДИН РАЗ) с ID="tg-login-script"');
+    console.log('🔒 Глобальный флаг window.__TELEGRAM_WIDGET_INITIALIZED__ установлен в true');
 
     // Cleanup при unmount компонента
     return () => {
@@ -114,14 +130,21 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
 
   // Мемоизируем функцию чтобы она не пересоздавалась и не вызывала ре-рендер TelegramWidget
   const handleTelegramAuth = useCallback(async (tgUser) => {
+    // ========== ГЛОБАЛЬНАЯ ЗАЩИТА ОТ МНОЖЕСТВЕННЫХ ВЫЗОВОВ ==========
+    if (window.__TELEGRAM_AUTH_IN_PROGRESS__) {
+      console.warn('🛑 ГЛОБАЛЬНАЯ ЗАЩИТА: Авторизация уже идет (window.__TELEGRAM_AUTH_IN_PROGRESS__), БЛОКИРУЮ');
+      return;
+    }
+
     // Защита от спама: если авторизация уже идет - игнорируем повторные вызовы
     if (authInProgress.current) {
-      console.warn('⚠️ Авторизация уже в процессе, игнорирую повторный вызов');
+      console.warn('⚠️ Авторизация уже в процессе (authInProgress.current), игнорирую');
       return;
     }
 
     console.log('🔐 Начинаем авторизацию через Telegram:', tgUser.id);
     authInProgress.current = true;
+    window.__TELEGRAM_AUTH_IN_PROGRESS__ = true; // Глобальный флаг
     setIsLoading(true);
     
     try {
@@ -177,7 +200,8 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
     } finally {
       setIsLoading(false);
       authInProgress.current = false; // Разрешаем новую попытку
-      console.log('✅ Процесс авторизации завершен');
+      window.__TELEGRAM_AUTH_IN_PROGRESS__ = false; // Сбрасываем глобальный флаг
+      console.log('✅ Процесс авторизации завершен, флаги сброшены');
     }
   }, [onLoginSuccess, onClose]); // Зависимости от props
 
