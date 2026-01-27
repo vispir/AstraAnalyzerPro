@@ -211,6 +211,51 @@ class TelegramService:
             self._cmd_status(call.message)
         elif call.data == "help":
             self._cmd_help(call.message)
+        elif call.data == "approve_login":
+            self._handle_approve_login(call)
+        elif call.data == "deny_login":
+            self._handle_deny_login(call)
+    
+    def _handle_approve_login(self, call):
+        """Обработка подтверждения входа"""
+        try:
+            # Редактируем сообщение, убирая кнопки
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=(
+                    f"<b>✅ Вход подтвержден</b>\n\n"
+                    f"Отлично! Авторизация успешно завершена.\n"
+                    f"Добро пожаловать в <b>Astra Analyzer Pro</b>! 🚀"
+                ),
+                parse_mode='HTML'
+            )
+            logger.info(f"✅ Пользователь {call.from_user.id} подтвердил вход")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки approve_login: {e}")
+    
+    def _handle_deny_login(self, call):
+        """Обработка отклонения входа (потенциальная угроза безопасности)"""
+        try:
+            # Редактируем сообщение
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=(
+                    f"<b>⚠️ Попытка несанкционированного входа</b>\n\n"
+                    f"Если это были не вы, немедленно:\n"
+                    f"1️⃣ Смените пароль Telegram\n"
+                    f"2️⃣ Проверьте активные сеансы\n"
+                    f"3️⃣ Свяжитесь с поддержкой\n\n"
+                    f"Ваш аккаунт в безопасности! 🛡️"
+                ),
+                parse_mode='HTML'
+            )
+            logger.warning(f"⚠️ Пользователь {call.from_user.id} ОТКЛОНИЛ вход! Возможная угроза безопасности.")
+            
+            # Опционально: можно добавить деактивацию сессии или уведомление админа
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки deny_login: {e}")
     
     def _handle_text_message(self, message):
         """Обработка текстовых сообщений (для кнопок внизу)"""
@@ -244,7 +289,7 @@ class TelegramService:
         btn_help = types.InlineKeyboardButton("❓ Помощь", callback_data="help")
         
         # Кнопка открытия терминала
-        frontend_url = os.getenv("FRONTEND_URL", "http://127.0.0.1:5173")
+        frontend_url = os.getenv("FRONTEND_URL", "https://astra-analyzer-pro.vercel.app/")
         btn_terminal = types.InlineKeyboardButton("🌐 Открыть Терминал", url=frontend_url)
         
         markup.add(btn_terminal)
@@ -345,6 +390,37 @@ class TelegramService:
         
         logger.info(f"📤 Рассылка завершена: {success_count}/{len(user_ids)} доставлено")
         return success_count
+    
+    def send_approval_notification(self, user_id, user_name):
+        """
+        Отправляет пользователю уведомление о входе на сайт с кнопкой подтверждения
+        
+        Args:
+            user_id: Telegram ID пользователя
+            user_name: Имя пользователя
+        
+        Returns:
+            bool: Успешность отправки
+        """
+        if not self.bot:
+            logger.error("❌ Бот не инициализирован")
+            return False
+        
+        message = (
+            f"<b>🔔 Новый вход на сайт</b>\n\n"
+            f"Привет, <b>{user_name}</b>! 👋\n\n"
+            f"Ты только что авторизовался на сайте <b>Astra Analyzer Pro</b>.\n\n"
+            f"Подтверди, что это был ты:"
+        )
+        
+        # Создаем inline кнопки
+        markup = types.InlineKeyboardMarkup()
+        btn_approve = types.InlineKeyboardButton("✅ Да, это я", callback_data="approve_login")
+        btn_deny = types.InlineKeyboardButton("❌ Нет, не я", callback_data="deny_login")
+        markup.add(btn_approve, btn_deny)
+        
+        logger.info(f"📱 Отправка уведомления о входе для user_id={user_id}")
+        return self.send_message(user_id, message, reply_markup=markup)
     
     def _deactivate_user(self, user_id):
         """Деактивирует пользователя в БД (заблокировал бота)"""

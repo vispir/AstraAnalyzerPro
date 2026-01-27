@@ -7,9 +7,6 @@ const TelegramWidget = ({ onAuth }) => {
   const containerRef = useRef(null);
   const initialized = useRef(false);
   
-  // Создаем "живую" ссылку на функцию onAuth. 
-  // Это позволит нам вызывать самую свежую версию функции, 
-  // не добавляя её в зависимости useEffect.
   const onAuthRef = useRef(onAuth);
 
   useEffect(() => {
@@ -17,10 +14,8 @@ const TelegramWidget = ({ onAuth }) => {
   }, [onAuth]);
 
   useEffect(() => {
-    // Если уже инициализировано, выходим
     if (initialized.current) return;
 
-    // Глобальная функция для ТГ (теперь она всегда берет актуальный onAuth из рефа)
     window.onTelegramAuth = (user) => {
       if (onAuthRef.current) {
         onAuthRef.current(user);
@@ -42,12 +37,10 @@ const TelegramWidget = ({ onAuth }) => {
       initialized.current = true;
     }
 
-    // Cleanup функция
     return () => {
-      // При закрытии модалки не обнуляем initialized.current, 
-      // чтобы избежать мерцания при случайных ре-рендерах.
+      // При закрытии не удаляем глобальную функцию, чтобы избежать ошибок скрипта ТГ
     };
-  }, []); // Теперь массив пустой, и мы добавили коммент для ESLint, чтобы он не ругался
+  }, []);
 
   return (
     <div 
@@ -62,7 +55,6 @@ const TelegramWidget = ({ onAuth }) => {
   );
 };
 
-// --- ОСНОВНАЯ МОДАЛКА (Без изменений) ---
 export const LoginModal = ({ onClose, onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -71,19 +63,55 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
   const handleTelegramAuth = async (tgUser) => {
     setIsLoading(true);
     try {
-      const response = await axios.post('http://127.0.0.1:5000/api/auth/telegram', tgUser);
+      const response = await axios.post(
+        'https://astraanalyzerpro-q6up.onrender.com/api/auth/telegram', 
+        tgUser,
+        { timeout: 20000 } // 20 секунд таймаут для холодного старта Render
+      );
+      
       if (response.data.success) {
         onLoginSuccess(response.data.user);
         onClose();
+      } else {
+        // Сервер вернул success: false
+        alert('❌ Ошибка авторизации Telegram.\n\nПопробуйте снова или обратитесь в поддержку.');
+        console.error('Telegram auth failed:', response.data);
       }
     } catch (error) {
-      console.error("Ошибка авторизации:", error);
-      onLoginSuccess({
-        name: tgUser.first_name + (tgUser.last_name ? ` ${tgUser.last_name}` : ''),
-        photo: tgUser.photo_url || 'https://ui-avatars.com/api/?name=TG',
-        id: tgUser.id
-      });
-      onClose();
+      console.error("❌ Ошибка авторизации на сервере:", error);
+      
+      // Определяем тип ошибки и показываем соответствующее сообщение
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        alert(
+          '⏱️ Сервер не отвечает (холодный старт Render).\n\n' +
+          'Подождите 30-60 секунд и попробуйте снова.\n' +
+          'Сервер пробуждается после периода неактивности.'
+        );
+      } else if (error.response?.status === 401) {
+        alert(
+          '🔐 Ошибка проверки подписи Telegram.\n\n' +
+          'Попробуйте авторизоваться заново.\n' +
+          'Если ошибка повторяется - обратитесь в поддержку.'
+        );
+      } else if (error.response?.status === 500) {
+        alert(
+          '🛠️ Внутренняя ошибка сервера.\n\n' +
+          'Попробуйте через несколько минут.\n' +
+          'Если проблема сохраняется - сообщите нам.'
+        );
+      } else if (!error.response) {
+        alert(
+          '🌐 Ошибка соединения с сервером.\n\n' +
+          'Проверьте:\n' +
+          '• Подключение к интернету\n' +
+          '• Не блокирует ли VPN/Firewall\n' +
+          '• Доступен ли сайт astraanalyzerpro-q6up.onrender.com'
+        );
+      } else {
+        alert(`❌ Неизвестная ошибка авторизации.\n\nКод: ${error.response?.status || 'unknown'}`);
+      }
+      
+      // НЕ закрываем модальное окно при ошибке - даём пользователю попробовать снова
     } finally {
       setIsLoading(false);
     }
