@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import Header from './components/Header';
 import RiskPanel from './components/RiskPanel';
 import TradingChart from './components/TradingChart';
 import AIPanel from './components/AIPanel';
+import { LoginModal } from './components/LoginModal';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
@@ -33,6 +34,14 @@ function App() {
   const [activeMode, setActiveMode] = useState(null);
   const [serverConnected, setServerConnected] = useState(true);
 
+  // ============ СОСТОЯНИЕ АВТОРИЗАЦИИ (ПЕРЕНЕСЕНО ИЗ HEADER) ============
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('astra_user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
+  
+  const [showLoginModal, setShowLoginModal] = useState(false);
+
   // Сохраняем баланс при каждом изменении
   useEffect(() => {
     localStorage.setItem('astra_account', JSON.stringify(account));
@@ -42,6 +51,30 @@ function App() {
   useEffect(() => {
     localStorage.setItem('astra_levels', JSON.stringify(levels));
   }, [levels]);
+
+  // ============ ФУНКЦИИ АВТОРИЗАЦИИ (МЕМОИЗИРОВАННЫЕ) ============
+  const handleLoginSuccess = useCallback((userData) => {
+    console.log('✅ App.jsx: Успешная авторизация', userData);
+    setUser(userData);
+    localStorage.setItem('astra_user', JSON.stringify(userData));
+    setShowLoginModal(false);
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    console.log('🚪 App.jsx: Закрытие модального окна');
+    setShowLoginModal(false);
+  }, []);
+
+  const handleOpenLogin = useCallback(() => {
+    console.log('🔓 App.jsx: Открытие модального окна');
+    setShowLoginModal(true);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    console.log('👋 App.jsx: Выход из системы');
+    setUser(null);
+    localStorage.removeItem('astra_user');
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -106,9 +139,16 @@ function App() {
 
   return (
     <div className="app-wrapper">
-      <Header tf={tf} setTf={setTf} source={source} setSource={setSource} />
+      <Header 
+        tf={tf} 
+        setTf={setTf} 
+        source={source} 
+        setSource={setSource}
+        user={user}
+        onLoginClick={handleOpenLogin}
+        onLogout={handleLogout}
+      />
       <main className="main-layout">
-        {/* ВОТ ТУТ: Добавили tf={tf} */}
         <RiskPanel 
           account={account} setAccount={setAccount}
           levels={levels} setLevels={setLevels} 
@@ -125,6 +165,14 @@ function App() {
         </div>
         <AIPanel analysis={marketData.analysis} levels={levels} account={account} />
       </main>
+
+      {/* ============ МОДАЛЬНОЕ ОКНО АВТОРИЗАЦИИ (ИЗОЛИРОВАНО ОТ HEADER) ============ */}
+      {showLoginModal && (
+        <LoginModal 
+          onClose={handleCloseModal} 
+          onLoginSuccess={handleLoginSuccess} 
+        />
+      )}
     </div>
   );
 }

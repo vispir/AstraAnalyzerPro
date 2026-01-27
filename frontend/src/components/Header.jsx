@@ -1,21 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { User, Clock, LogOut, ChevronDown } from 'lucide-react'; // Добавили новые иконки
-import { LoginModal } from './LoginModal';
+import React, { useState, useEffect, useRef } from 'react';
+import { User, Clock, LogOut, ChevronDown } from 'lucide-react';
 
-const Header = ({ tf, setTf, source, setSource }) => {
+// Теперь Header - "тупой" компонент, получающий все как пропсы
+const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) => {
   const [time, setTime] = useState(new Date());
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  
-  // 1. СОСТОЯНИЕ АВТОРИЗАЦИИ (с проверкой памяти при загрузке)
-  const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('astra_user');
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
-
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const menuRef = useRef(null); // Нужно, чтобы закрывать меню при клике мимо
+  const menuRef = useRef(null);
 
-  // 2. ТАЙМЕР И КЛИК ВНЕ МЕНЮ
+  // ТАЙМЕР И КЛИК ВНЕ МЕНЮ
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
 
@@ -30,23 +22,6 @@ const Header = ({ tf, setTf, source, setSource }) => {
       clearInterval(timer);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, []);
-
-  // 3. ФУНКЦИИ ВХОДА И ВЫХОДА
-  const handleLoginSuccess = useCallback((userData) => {
-    setUser(userData);
-    localStorage.setItem('astra_user', JSON.stringify(userData));
-    setShowLoginModal(false);
-  }, []);
-
-  const handleCloseModal = useCallback(() => {
-    setShowLoginModal(false);
-  }, []);
-
-  const handleLogout = useCallback(() => {
-    setUser(null);
-    localStorage.removeItem('astra_user'); // Удаляем из браузера
-    setShowUserMenu(false);
   }, []);
 
   return (
@@ -109,7 +84,7 @@ const Header = ({ tf, setTf, source, setSource }) => {
                     <span className="dropdown-status">Active Trader</span>
                   </div>
                   <div className="dropdown-divider"></div>
-                  <button className="logout-button" onClick={handleLogout}>
+                  <button className="logout-button" onClick={() => { onLogout(); setShowUserMenu(false); }}>
                     <LogOut size={14} />
                     <span>Log out</span>
                   </button>
@@ -119,7 +94,7 @@ const Header = ({ tf, setTf, source, setSource }) => {
           ) : (
             <button 
               className="login-badge" 
-              onClick={() => setShowLoginModal(true)}
+              onClick={onLoginClick}
             >
               <span>Log in</span>
               <User size={14} />
@@ -127,13 +102,6 @@ const Header = ({ tf, setTf, source, setSource }) => {
           )}
         </div>
       </header>
-
-      {showLoginModal && (
-        <LoginModal 
-          onClose={handleCloseModal} 
-          onLoginSuccess={handleLoginSuccess} 
-        />
-      )}
     </>
   );
 };

@@ -17,12 +17,21 @@ const TelegramWidget = memo(({ onAuth }) => {
   }, [onAuth]);
 
   useEffect(() => {
-    // КРИТИЧНО: Проверяем initialized ДО любых манипуляций с DOM
+    // ========== БЕТОННАЯ ЗАЩИТА #1: Проверка initialized ref ==========
     if (initialized.current) {
+      console.log('⚠️ TelegramWidget уже инициализирован (initialized.current = true), пропускаю');
       return;
     }
 
-    // Устанавливаем глобальный callback один раз
+    // ========== БЕТОННАЯ ЗАЩИТА #2: Проверка существования скрипта в DOM ==========
+    const existingScript = document.getElementById('tg-login-script');
+    if (existingScript) {
+      console.log('⚠️ Скрипт Telegram Widget уже существует в DOM (id="tg-login-script"), пропускаю');
+      initialized.current = true;
+      return;
+    }
+
+    // ========== БЕТОННАЯ ЗАЩИТА #3: Проверка глобального callback ==========
     if (!window.onTelegramAuth) {
       window.onTelegramAuth = (user) => {
         console.log('🔐 Telegram Widget callback вызван:', user);
@@ -30,34 +39,48 @@ const TelegramWidget = memo(({ onAuth }) => {
           onAuthRef.current(user);
         }
       };
+      console.log('✅ Глобальный window.onTelegramAuth установлен');
+    } else {
+      console.log('⚠️ window.onTelegramAuth уже существует');
     }
 
-    // Проверяем что контейнер существует И еще не содержит скрипт
-    if (containerRef.current && !containerRef.current.querySelector('script')) {
-      const script = document.createElement('script');
-      script.src = "https://telegram.org/js/telegram-widget.js?22";
-      script.setAttribute('data-telegram-login', 'AstraAnalyzerPro_bot');
-      script.setAttribute('data-size', 'large');
-      script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-      script.setAttribute('data-request-access', 'write');
-      script.async = true;
-      
-      // Обработка успешной загрузки скрипта
-      script.onload = () => {
-        console.log('✅ Telegram Widget успешно загружен');
-      };
-      
-      script.onerror = () => {
-        console.error('❌ Ошибка загрузки Telegram Widget');
-        initialized.current = false; // Позволяем повторную попытку
-      };
+    // ========== БЕТОННАЯ ЗАЩИТА #4: Проверка контейнера и отсутствия дочерних скриптов ==========
+    if (!containerRef.current) {
+      console.warn('⚠️ containerRef.current не существует, пропускаю инициализацию');
+      return;
+    }
 
-      containerRef.current.appendChild(script);
-      scriptRef.current = script;
+    if (containerRef.current.querySelector('script')) {
+      console.log('⚠️ Контейнер уже содержит script, пропускаю');
       initialized.current = true;
-      
-      console.log('📱 Telegram Widget инициализирован (один раз)');
+      return;
     }
+
+    // ========== ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ: Создаем виджет ==========
+    const script = document.createElement('script');
+    script.id = 'tg-login-script'; // ВАЖНО: Уникальный ID для поиска в DOM
+    script.src = "https://telegram.org/js/telegram-widget.js?22";
+    script.setAttribute('data-telegram-login', 'AstraAnalyzerPro_bot');
+    script.setAttribute('data-size', 'large');
+    script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+    script.setAttribute('data-request-access', 'write');
+    script.async = true;
+    
+    // Обработка успешной загрузки скрипта
+    script.onload = () => {
+      console.log('✅ Telegram Widget успешно загружен');
+    };
+    
+    script.onerror = () => {
+      console.error('❌ Ошибка загрузки Telegram Widget');
+      initialized.current = false; // Позволяем повторную попытку при ошибке
+    };
+
+    containerRef.current.appendChild(script);
+    scriptRef.current = script;
+    initialized.current = true;
+    
+    console.log('📱 Telegram Widget инициализирован (ОДИН РАЗ) с ID="tg-login-script"');
 
     // Cleanup при unmount компонента
     return () => {
