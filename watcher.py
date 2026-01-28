@@ -31,6 +31,10 @@ def is_market_active():
     """
     Проверка активности рынка
     Рынок золота работает: воскресенье 23:00 UTC - пятница 22:00 UTC
+    
+    ВАЖНО: Rollover час (22:00-23:00 UTC) - рынок закрыт
+    22:00-23:00 UTC = 02:00-03:00 Астрахань (UTC+4)
+    В это время высокие спреды и технический перерыв
     """
     # Используем UTC для точности
     now = datetime.now(timezone.utc)
@@ -56,6 +60,14 @@ def is_market_active():
     if weekday == 4:
         if hour >= 22:
             logger.debug(f"Market CLOSED: Friday after 22:00 UTC (now: {hour}:00)")
+            return False
+    
+    # 🔴 ROLLOVER ЧАС: Технический перерыв с 22:00 до 23:00 UTC (Пн-Чт)
+    # 22:00-23:00 UTC = 02:00-03:00 по Астрахани (UTC+4)
+    # Высокие спреды, защита депозита
+    if weekday in [0, 1, 2, 3]:  # Понедельник-Четверг
+        if hour == 22:
+            logger.info(f"Market CLOSED: Rollover hour (22:00-23:00 UTC = 02:00-03:00 Астрахань)")
             return False
     
     # Понедельник утро - рынок открыт с 00:00 UTC (после открытия в воскресенье 23:00)
@@ -360,9 +372,32 @@ def run_analysis_cycle():
     # Шаг 1.1: Проверка активности рынка
     if not is_market_active():
         logger.info("💤 Рынок закрыт. Пропуск анализа.")
+        
+        # Определяем причину закрытия рынка
+        now_utc = datetime.now(timezone.utc)
+        weekday = now_utc.weekday()
+        hour = now_utc.hour
+        
+        # Проверка на Rollover час (22:00-23:00 UTC, Пн-Чт)
+        if weekday in [0, 1, 2, 3] and hour == 22:
+            reason = ('⏸ Технический перерыв (Rollover): 22:00-23:00 UTC (02:00-03:00 по Астрахани). '
+                     'Высокие спреды, торговля приостановлена для защиты депозита.')
+        # Суббота
+        elif weekday == 5:
+            reason = 'Суббота - рынок закрыт. Рынок откроется в Воскресенье 23:00 UTC (03:00 Астрахань).'
+        # Воскресенье до 23:00
+        elif weekday == 6 and hour < 23:
+            reason = f'Воскресенье - рынок откроется в 23:00 UTC (сейчас {hour}:00 UTC).'
+        # Пятница после 22:00
+        elif weekday == 4 and hour >= 22:
+            reason = 'Пятница - рынок закрыт. Откроется в Воскресенье 23:00 UTC (03:00 Астрахань).'
+        # Остальные случаи
+        else:
+            reason = 'Рынок золота работает: Воскресенье 23:00 UTC - Пятница 22:00 UTC'
+        
         send_debug_notification({
             'status': 'market_closed',
-            'reason': 'Рынок золота работает: Воскресенье 23:00 UTC - Пятница 22:00 UTC'
+            'reason': reason
         })
         return
     
