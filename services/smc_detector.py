@@ -77,6 +77,27 @@ class SMCDetector:
         self.swing_order_blocks: List[Dict] = []
         self.internal_order_blocks: List[Dict] = []
     
+    def reset(self):
+        """
+        Сброс всех флагов и состояния детектора
+        Полезно для начала нового цикла анализа
+        """
+        # Сброс Internal структур
+        self.internal_high.crossed = False
+        self.internal_high.current_level = 0.0
+        self.internal_low.crossed = False
+        self.internal_low.current_level = 0.0
+        self.internal_trend.bias = NEUTRAL
+        
+        # Сброс Swing структур
+        self.swing_high.crossed = False
+        self.swing_high.current_level = 0.0
+        self.swing_low.crossed = False
+        self.swing_low.current_level = 0.0
+        self.swing_trend.bias = NEUTRAL
+        
+        logger.debug("SMC Detector state reset")
+    
     def _calculate_atr(self, df: pd.DataFrame, period: int = 200) -> float:
         """Расчет ATR для фильтрации"""
         try:
@@ -230,7 +251,7 @@ class SMCDetector:
     def _detect_structure_breaks(self, df: pd.DataFrame, structure: Dict, internal: bool = False) -> Dict:
         """
         Определение BOS и CHOCH через crossover/crossunder
-        Логика из Pine Script
+        Логика из Pine Script с исправлением сброса флагов
         """
         breaks = {
             'bos': [],
@@ -252,6 +273,17 @@ class SMCDetector:
             pivot_h = self.internal_high if internal else self.swing_high
             pivot_l = self.internal_low if internal else self.swing_low
             
+            # 🔧 ИСПРАВЛЕНИЕ: Сброс флага crossed при появлении нового pivot уровня
+            if pivot_high and pivot_h.current_level != pivot_high['price']:
+                pivot_h.current_level = pivot_high['price']
+                pivot_h.crossed = False
+                logger.debug(f"New {'Internal' if internal else 'Swing'} Pivot High: {pivot_high['price']:.2f} (reset crossed flag)")
+            
+            if pivot_low and pivot_l.current_level != pivot_low['price']:
+                pivot_l.current_level = pivot_low['price']
+                pivot_l.crossed = False
+                logger.debug(f"New {'Internal' if internal else 'Swing'} Pivot Low: {pivot_low['price']:.2f} (reset crossed flag)")
+            
             # Bullish structure break (crossover pivot high)
             if pivot_high and current_price > pivot_high['price'] and not pivot_h.crossed:
                 tag = 'CHOCH' if trend.bias == BEARISH else 'BOS'
@@ -265,6 +297,7 @@ class SMCDetector:
                 
                 pivot_h.crossed = True
                 trend.bias = BULLISH
+                logger.info(f"{'Internal' if internal else 'Swing'} BULLISH {tag} detected at {pivot_high['price']:.2f}")
             
             # Bearish structure break (crossunder pivot low)
             if pivot_low and current_price < pivot_low['price'] and not pivot_l.crossed:
@@ -279,6 +312,7 @@ class SMCDetector:
                 
                 pivot_l.crossed = True
                 trend.bias = BEARISH
+                logger.info(f"{'Internal' if internal else 'Swing'} BEARISH {tag} detected at {pivot_low['price']:.2f}")
         
         except Exception as e:
             logger.error(f"Error detecting structure breaks: {e}")
@@ -1044,7 +1078,8 @@ class SMCDetector:
                        f"Zone: {advanced_data['key_levels']['Current_Zone']} | "
                        f"OB:{len(all_order_blocks)}(I:{len(order_blocks_data['internal'])}/S:{len(order_blocks_data['swing'])}), "
                        f"FVG:{len(fvg)}, S/R:{len(liquidity)}, "
-                       f"CHOCH:{len(smc_data['choch'])}, BOS:{len(smc_data['bos'])}, "
+                       f"CHOCH:{len(smc_data['choch'])}(I:{len(market_structure['internal_choch'])}/S:{len(market_structure['swing_choch'])}), "
+                       f"BOS:{len(smc_data['bos'])}(I:{len(market_structure['internal_bos'])}/S:{len(market_structure['swing_bos'])}), "
                        f"EQH:{len(equal_levels['eqh'])}, EQL:{len(equal_levels['eql'])}")
             
             return smc_data
