@@ -263,22 +263,37 @@ def format_debug_report(status_data):
     
     return msg
 
-def format_signal_message(ai_response):
-    """Превращает JSON от Gemini в красивый текст"""
+def parse_llm_response(ai_response):
+    """
+    Парсит JSON ответ от Gemini LLM
+    Возвращает словарь с полями или None при ошибке
+    """
     try:
         start = ai_response.find('{')
         end = ai_response.rfind('}') + 1
-        data = json.loads(ai_response[start:end])
-        action = data.get("ACTION", "N/A")
+        if start >= 0 and end > start:
+            json_str = ai_response[start:end]
+            data = json.loads(json_str)
+            return data
+    except Exception as e:
+        logger.error(f"Ошибка парсинга LLM ответа: {e}")
+    return None
+
+def format_signal_message(ai_response):
+    """Превращает JSON от Gemini в красивый текст"""
+    parsed_data = parse_llm_response(ai_response)
+    
+    if parsed_data:
+        action = parsed_data.get("ACTION", "N/A")
         emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
         msg = (f"<b>🚀 ASTRA SIGNAL: GOLD (XAU/USD)</b>\n\n"
                f"Направление: <b>{emoji}</b>\n"
-               f"Вход: <code>{data.get('ENTRY')}</code>\n"
-               f"Стоп: <code>{data.get('SL')}</code>\n"
-               f"Тейк: <code>{data.get('TP')}</code>\n\n"
-               f"<b>Анализ:</b>\n<i>{data.get('REASON', 'SMC Confirmation')}</i>")
+               f"Вход: <code>{parsed_data.get('ENTRY')}</code>\n"
+               f"Стоп: <code>{parsed_data.get('SL')}</code>\n"
+               f"Тейк: <code>{parsed_data.get('TP')}</code>\n\n"
+               f"<b>Анализ:</b>\n<i>{parsed_data.get('REASON', 'SMC Confirmation')}</i>")
         return msg
-    except:
+    else:
         return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{ai_response}"
 
 def send_debug_notification(status_data):
@@ -467,37 +482,65 @@ def run_analysis_cycle():
     # Вызов Gemini LLM для финального вердикта
     ai_response = llm_service.get_signal_verdict(analysis)
     
-    # Анализ ответа LLM
-    is_confirmed = '"ACTION": "BUY"' in ai_response.upper() or '"ACTION": "SELL"' in ai_response.upper()
-    is_wait = "WAIT" in ai_response.upper() or '"ACTION": "WAIT"' in ai_response.upper()
+    # ========================================================================
+    # ЕДИНЫЙ ПАРСИНГ И ПОДГОТОВКА ПОЛНЫХ ДАННЫХ
+    # ========================================================================
+    
+    # Парсим JSON ответ от Gemini
+    parsed_llm = parse_llm_response(ai_response)
+    
+    # Определяем тип действия
+    llm_action = parsed_llm.get('ACTION', 'WAIT') if parsed_llm else 'WAIT'
+    is_confirmed = llm_action in ['BUY', 'SELL']
+    is_wait = llm_action == 'WAIT' or not is_confirmed
+    
+    # Подготавливаем ПОЛНУЮ структуру данных для сохранения в БД
+    # Этот словарь будет использован как для торговых сигналов, так и для WAIT
+    signal_data_db = {
+        'symbol': 'XAU_USD',
+        'signal_type': llm_action,
+        'entry_price': current_price,  # По умолчанию текущая цена (переопределится для BUY/SELL)
+        'current_price': current_price,
+        'trend': trend,
+        'zone': current_zone,
+        'patterns': ', '.join(found_signals) if found_signals else 'None',
+        'near_structures': near_description,
+        'llm_full_response': ai_response,  # Сохраняем полный необработанный ответ
+        'llm_reason': parsed_llm.get('REASON', ai_response[:500]) if parsed_llm else ai_response[:500],
+        'llm_confidence': parsed_llm.get('CONFIDENCE', 0) if parsed_llm else 0,
+        'stop_loss': 0,  # По умолчанию 0 (переопределится для BUY/SELL)
+        'take_profit': 0  # По умолчанию 0 (переопределится для BUY/SELL)
+    }
+    
+    # Для торговых сигналов переопределяем поля из LLM
+    if is_confirmed:
+        signal_data_db['entry_price'] = parsed_llm.get('ENTRY', current_price) if parsed_llm else current_price
+        signal_data_db['stop_loss'] = parsed_llm.get('SL', 0) if parsed_llm else 0
+        signal_data_db['take_profit'] = parsed_llm.get('TP', 0) if parsed_llm else 0
     
     # ========================================================================
     # СЛУЧАЙ A: ТОРГОВЫЙ СИГНАЛ (BUY/SELL)
     # ========================================================================
-    if is_confirmed and not is_wait:
-        logger.info("🔥 КОНСЕНСУС ДОСТИГНУТ! ОТПРАВКА ТОРГОВОГО СИГНАЛА!")
+    if is_confirmed:
+        logger.info(f"🔥 КОНСЕНСУС ДОСТИГНУТ! ОТПРАВКА ТОРГОВОГО СИГНАЛА: {llm_action}")
         
         # Обновляем метку времени последнего сигнала (блокировка на 2 часа)
         db_service.update_last_signal_time()
+        
+        # Сохраняем сигнал в БД с полными данными
+        signal_id = db_service.save_signal(signal_data_db)
+        logger.info(f"💾 Сигнал {llm_action} сохранен в БД (ID: {signal_id})")
         
         # Получаем всех активных пользователей и отправляем сигнал
         user_ids = db_service.get_all_active_users()
         if user_ids:
             formatted_msg = format_signal_message(ai_response)
             telegram_service.broadcast_signal(user_ids, formatted_msg)
-            
-            # Сохраняем сигнал в БД
-            db_service.save_signal({
-                'symbol': 'XAU_USD',
-                'signal_type': 'BUY' if 'BUY' in ai_response.upper() else 'SELL',
-                'entry_price': current_price,
-                'llm_reason': ai_response,
-                'near_structures': near_description
-            })
+            logger.info(f"📤 Сигнал отправлен {len(user_ids)} пользователям")
             
             # Отправляем детальный отчет с вердиктом LLM
             status_data['status'] = 'signal_sent'
-            status_data['reason'] = 'Gemini подтвердил торговый сетап. Сигнал отправлен всем активным пользователям.'
+            status_data['reason'] = f'Gemini подтвердил торговый сетап {llm_action}. Сигнал отправлен всем активным пользователям.'
             status_data['llm_verdict'] = ai_response
             send_debug_notification(status_data)
     
@@ -510,13 +553,9 @@ def run_analysis_cycle():
         # Обновляем метку времени последнего WAIT (блокировка на 1 час)
         db_service.update_last_wait_time()
         
-        # Сохраняем вердикт WAIT в БД
-        db_service.save_signal({
-            'symbol': 'XAU_USD',
-            'signal_type': 'WAIT',
-            'current_price': current_price,
-            'llm_reason': ai_response
-        })
+        # Сохраняем вердикт WAIT в БД с полными данными
+        signal_id = db_service.save_signal(signal_data_db)
+        logger.info(f"💾 Вердикт WAIT сохранен в БД (ID: {signal_id})")
         
         # Отправляем отчет с вердиктом WAIT и обоснованием LLM
         status_data['status'] = 'wait_decision'
