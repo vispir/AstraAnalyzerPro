@@ -638,7 +638,7 @@ class SMCDetector:
         
         return structure
     
-    def detect_liquidity(self, df: pd.DataFrame, lookback: int = 250) -> List[Dict]:
+    def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
         """
         Определение значимых Support/Resistance уровней
         С кластеризацией и учетом "силы" уровня

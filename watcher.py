@@ -376,7 +376,7 @@ def run_analysis_cycle():
         return
     
     # Шаг 1.3: Получение живых свечей из OANDA
-    data = oanda_service.get_candles(timeframe='M15', limit=100)
+    data = oanda_service.get_candles(timeframe='M15', limit=250)
     if "error" in data:
         logger.error("🔌 Ошибка получения данных от OANDA")
         send_debug_notification({
