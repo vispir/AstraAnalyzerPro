@@ -175,26 +175,86 @@ def is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5):
     return False, "Нет близких SMC структур"
 
 def format_debug_report(status_data):
-    """Форматирует отладочный отчет для Telegram"""
-    status_emoji = {'market_closed': '💤', 'news_block': '📰', 'no_signals': '🛰️', 'weak_patterns': '📊', 'wrong_zone': '🚫', 'not_near_structure': '🔍', 'cooldown': '⏳', 'llm_called': '🤖', 'signal_sent': '✅', 'wait_decision': '⚖️'}
+    """
+    Форматирует детальный отладочный отчет для Telegram
+    Показывает ПОЛНУЮ картину каждого цикла анализа
+    """
+    status_emoji = {
+        'market_closed': '💤', 'news_block': '📰', 'oanda_error': '🔌',
+        'no_smc': '⚙️', 'not_near_structure': '🔍', 'weak_patterns': '📊',
+        'wrong_zone': '🚫', 'cooldown': '⏳', 'llm_called': '🤖',
+        'signal_sent': '✅', 'wait_decision': '⚖️'
+    }
+    
+    status_texts = {
+        'market_closed': 'Рынок закрыт', 
+        'news_block': 'Блокировка по новостям',
+        'oanda_error': 'Ошибка OANDA',
+        'no_smc': 'SMC детектор недоступен',
+        'not_near_structure': 'Цена далеко от структур (>0.5%)',
+        'weak_patterns': 'Нет сильных паттернов',
+        'wrong_zone': 'Неправильная зона входа',
+        'cooldown': 'Активен кулдаун',
+        'llm_called': 'LLM анализ выполнен',
+        'signal_sent': '🎯 СИГНАЛ ОТПРАВЛЕН!',
+        'wait_decision': 'LLM рекомендует WAIT'
+    }
+    
     status = status_data.get('status', 'unknown')
     emoji = status_emoji.get(status, '❓')
     
-    msg = f"<b>{emoji} ASTRA DEBUG REPORT</b>\n"
-    msg += f"<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
-    msg += "─" * 30 + "\n\n"
+    # Заголовок
+    now_utc = datetime.now(timezone.utc)
+    msg = f"<b>{emoji} ASTRA WATCHER REPORT</b>\n"
+    msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+    msg += "━" * 32 + "\n\n"
     
-    status_texts = {'market_closed': 'Рынок закрыт', 'news_block': 'Блокировка по новостям', 'no_signals': 'Нет сигналов', 'weak_patterns': 'Слабые паттерны', 'wrong_zone': 'Неправильная зона', 'not_near_structure': 'Цена не у структур', 'cooldown': 'Активен кулдаун', 'llm_called': 'LLM анализ выполнен', 'signal_sent': 'Сигнал отправлен', 'wait_decision': 'LLM: WAIT'}
+    # Решение
+    decision = status_texts.get(status, 'Неизвестно')
+    msg += f"<b>📋 Решение:</b> {decision}\n\n"
     
-    msg += f"<b>Статус:</b> {status_texts.get(status, 'Неизвестно')}\n\n"
-    if 'price' in status_data: msg += f"<b>💰 Цена:</b> <code>{status_data['price']:.2f}</code>\n"
-    if 'trend' in status_data: msg += f"<b>Тренд:</b> {status_data['trend']}\n"
-    if 'zone' in status_data: msg += f"<b>Зона:</b> {status_data['zone']}\n"
-    if 'near_structures' in status_data: msg += f"<b>Уровни:</b> {status_data['near_structures']}\n"
+    # Рыночные данные (если есть)
+    if status_data.get('price', 0) > 0:
+        msg += "<b>💹 Рыночные данные:</b>\n"
+        msg += f"├ Цена: <code>${status_data['price']:.2f}</code>\n"
+        
+        if 'trend' in status_data:
+            trend_emoji = "📈" if "UP" in status_data['trend'] else "📉" if "DOWN" in status_data['trend'] else "↔️"
+            msg += f"├ Тренд: {trend_emoji} {status_data['trend']}\n"
+        
+        if 'zone' in status_data:
+            zone = status_data['zone']
+            zone_emoji = "🔴" if zone == "PREMIUM" else "🟢" if zone == "DISCOUNT" else "⚪"
+            msg += f"└ Зона: {zone_emoji} {zone}\n\n"
     
-    if 'smc_summary' in status_data:
+    # SMC паттерны (если есть)
+    if 'smc_summary' in status_data and any(status_data['smc_summary'].values()):
         smc = status_data['smc_summary']
-        msg += f"\n<b>📊 SMC:</b> OB:{smc.get('ob')}, FVG:{smc.get('fvg')}, BOS:{smc.get('bos')}"
+        msg += "<b>📊 Найденные паттерны SMC:</b>\n"
+        msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
+        msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
+        msg += f"├ Break of Structure: {smc.get('bos', 0)}\n"
+        msg += f"└ Change of Character: {smc.get('choch', 0)}\n\n"
+        
+        if 'found_signals' in status_data and status_data['found_signals']:
+            signals_list = ", ".join(status_data['found_signals'][:5])
+            msg += f"<b>🎯 Активные сигналы:</b> {signals_list}\n\n"
+    
+    # Близость к структурам
+    if 'near_structures' in status_data:
+        msg += f"<b>🎯 Уровни рядом:</b>\n{status_data['near_structures']}\n\n"
+    
+    # Причина остановки (детали)
+    if 'reason' in status_data:
+        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n\n"
+    
+    # Вердикт LLM (если был вызван)
+    if 'llm_verdict' in status_data:
+        msg += f"<b>🤖 Gemini вердикт:</b>\n<code>{status_data['llm_verdict'][:200]}...</code>\n\n"
+    
+    # Футер с временем следующей проверки
+    msg += "━" * 32 + "\n"
+    msg += "<i>⏱ Следующая проверка через 15 минут</i>"
     
     return msg
 
@@ -217,16 +277,16 @@ def format_signal_message(ai_response):
         return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{ai_response}"
 
 def send_debug_notification(status_data):
-    """Отправляет уведомления только по важным событиям"""
-    important = ['signal_sent', 'wait_decision', 'llm_called']
-    if status_data.get('status') not in important:
-        return 
-        
+    """
+    Отправляет отладочный отчет ВСЕМ активным пользователям
+    Каждые 15 минут - независимо от результата анализа
+    """
     try:
         user_ids = db_service.get_all_active_users()
         if user_ids:
             message = format_debug_report(status_data)
             telegram_service.broadcast_signal(user_ids, message)
+            logger.info(f"📤 Debug отчет отправлен ({len(user_ids)} пользователей)")
     except Exception as e:
         logger.error(f"❌ Debug Error: {e}")
 
@@ -238,7 +298,11 @@ def run_analysis_cycle():
     
     # Сначала проверяем: работает ли рынок вообще?
     if not is_market_active():
-        # logger.info("Market is IDLE. Skipping...")
+        logger.info("💤 Рынок закрыт. Пропуск анализа.")
+        send_debug_notification({
+            'status': 'market_closed',
+            'reason': 'Рынок золота работает: Воскресенье 23:00 UTC - Пятница 22:00 UTC'
+        })
         return
     
     # Подготавливаем данные для отчета
@@ -246,13 +310,39 @@ def run_analysis_cycle():
 
     # Проверяем новости (Блокировка 45 мин до/15 мин после)
     if is_news_blockactive():
+        logger.info("📰 Блокировка по новостям. Пропуск анализа.")
+        send_debug_notification({
+            'status': 'news_block',
+            'reason': 'Обнаружены важные новости USD в ближайшие 45 минут или прошли менее 15 минут назад'
+        })
         return 
     
     # Получаем живые свечи из OANDA
     data = oanda_service.get_candles(timeframe='M15', limit=100)
-    if "error" in data: return
+    if "error" in data:
+        logger.error("🔌 Ошибка получения данных от OANDA")
+        send_debug_notification({
+            'status': 'oanda_error',
+            'reason': f'Ошибка OANDA API: {data.get("error", "Unknown error")}'
+        })
+        return
+    
     candles = data.get("candles", [])
-    if not smc_detector or not candles: return
+    if not smc_detector:
+        logger.error("⚙️ SMC детектор недоступен")
+        send_debug_notification({
+            'status': 'no_smc',
+            'reason': 'SMC детектор не инициализирован. Проверьте сервис smc_detector.'
+        })
+        return
+    
+    if not candles:
+        logger.error("📊 Нет данных свечей от OANDA")
+        send_debug_notification({
+            'status': 'oanda_error',
+            'reason': 'OANDA вернул пустой массив свечей'
+        })
+        return
 
     # 1. SMC Технический анализ (Математическое ядро)
     analysis = smc_detector.analyze(candles)
@@ -287,32 +377,60 @@ def run_analysis_cycle():
     # --- ФИЛЬТР 1: СНАЙПЕРСКАЯ ТОЧНОСТЬ (0.5% зона) ---
     # САМЫЙ СТРОГИЙ! Отсечет 90% пустых ситуаций
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
+    status_data['near_structures'] = near_description
+    
     if not is_near:
-        logger.info(f"🔍 Цена {current_price} вне зоны интереса. Пропуск.")
+        logger.info(f"🔍 Цена {current_price:.2f} вне зоны интереса. Пропуск.")
+        status_data['status'] = 'not_near_structure'
+        status_data['reason'] = f'Цена ${current_price:.2f} не находится в пределах 0.5% от ключевых SMC структур. {near_description}'
+        send_debug_notification(status_data)
         return
 
     # --- ФИЛЬТР 2: ТЕХНИЧЕСКИЙ (SMC Сила) ---
     is_worth_it = any(setup in found_signals for setup in STRONG_SETUPS)
     if not found_signals or not is_worth_it:
+        logger.info("📊 Нет сильных паттернов SMC. Пропуск.")
+        status_data['status'] = 'weak_patterns'
+        strong_list = ", ".join(STRONG_SETUPS)
+        found_list = ", ".join(found_signals) if found_signals else "Нет"
+        status_data['reason'] = f'Требуются сильные паттерны ({strong_list}). Найдено: {found_list}'
+        send_debug_notification(status_data)
         return
 
     # --- ФИЛЬТР 3: ЗОНА (Premium/Discount) ---
     if (trend == "UPTREND" and current_zone == "PREMIUM") or (trend == "DOWNTREND" and current_zone == "DISCOUNT"):
+        logger.info(f"🚫 Неправильная зона для входа: {trend} в {current_zone}. Пропуск.")
+        status_data['status'] = 'wrong_zone'
+        if trend == "UPTREND":
+            status_data['reason'] = f'UPTREND требует входа в DISCOUNT зоне, но цена в {current_zone}. Ждем коррекции.'
+        else:
+            status_data['reason'] = f'DOWNTREND требует входа в PREMIUM зоне, но цена в {current_zone}. Ждем коррекции.'
+        send_debug_notification(status_data)
         return
 
     # --- ФИЛЬТР 4: КУЛДАУН ---
     if not check_smart_cooldown():
+        logger.info("⏳ Кулдаун активен. Пропуск.")
+        status_data['status'] = 'cooldown'
+        status_data['reason'] = 'Кулдаун активен: либо недавний торговый сигнал (2ч), либо вердикт WAIT (1ч). Ждем истечения.'
+        send_debug_notification(status_data)
         return
 
     # --- ШАГ 5: ВЫЗОВ GEMINI ---
-    logger.info(f"🎯 Условия идеальны! Запрашиваем вердикт Gemini...")
+    logger.info(f"🎯 ВСЕ ФИЛЬТРЫ ПРОЙДЕНЫ! Запрашиваем вердикт Gemini...")
+    logger.info(f"   💰 Цена: ${current_price:.2f}")
+    logger.info(f"   📈 Тренд: {trend}")
+    logger.info(f"   🎯 Зона: {current_zone}")
+    logger.info(f"   🔍 Уровни: {near_description}")
+    logger.info(f"   📊 Паттерны: {', '.join(found_signals)}")
+    
     ai_response = llm_service.get_signal_verdict(analysis)
 
     is_confirmed = '"ACTION": "BUY"' in ai_response.upper() or '"ACTION": "SELL"' in ai_response.upper()
     is_wait = "WAIT" in ai_response.upper() or '"ACTION": "WAIT"' in ai_response.upper()
     
     if is_confirmed and not is_wait:
-        logger.info("🔥 КОНСЕНСУС ДОСТИГНУТ!")
+        logger.info("🔥 КОНСЕНСУС ДОСТИГНУТ! ОТПРАВКА СИГНАЛА!")
         db_service.update_last_signal_time() # Блок 2ч
         
         # Шлем ВСЕМ активным пользователям (независимо от photo_url)
@@ -326,12 +444,22 @@ def run_analysis_cycle():
                 'symbol': 'XAU_USD', 'signal_type': 'BUY' if 'BUY' in ai_response.upper() else 'SELL',
                 'entry_price': current_price, 'llm_reason': ai_response, 'near_structures': near_description
             })
-            send_debug_notification({'status': 'signal_sent', 'price': current_price, 'reason': 'Signal broadcasted'})
+            
+            # Отправляем детальный отчет
+            status_data['status'] = 'signal_sent'
+            status_data['reason'] = 'Gemini подтвердил торговый сетап. Сигнал отправлен всем активным пользователям.'
+            status_data['llm_verdict'] = ai_response
+            send_debug_notification(status_data)
     else:
-        logger.info("⚖️ ИИ выдал WAIT. Блокировка на 1 час.")
+        logger.info("⚖️ Gemini рекомендует WAIT. Блокировка на 1 час.")
         db_service.update_last_wait_time() # Блок 1ч
         db_service.save_signal({'symbol': 'XAU_USD', 'signal_type': 'WAIT', 'current_price': current_price, 'llm_reason': ai_response})
-        send_debug_notification({'status': 'wait_decision', 'price': current_price, 'reason': ai_response})
+        
+        # Отправляем отчет с вердиктом WAIT
+        status_data['status'] = 'wait_decision'
+        status_data['reason'] = 'Gemini не видит четкого сетапа. Рекомендуется подождать лучших условий.'
+        status_data['llm_verdict'] = ai_response
+        send_debug_notification(status_data)
 
 def start_watcher():
     """
