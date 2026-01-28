@@ -283,13 +283,13 @@ if __name__ == '__main__':
         logger.info("   Или TELEGRAM_WEBHOOK_URL для webhook режима")
     
     # Запуск Watcher в фоне (только если НЕ на Vercel)
-    if start_watcher and not os.getenv('VERCEL'):
-        try:
-            watcher_thread = threading.Thread(target=start_watcher, daemon=True)
-            watcher_thread.start()
-            logger.info("🚀 ASTRA WATCHER STARTED IN BACKGROUND")
-        except Exception as e:
-            logger.error(f"Failed to start Watcher: {e}")
+    # if start_watcher and not os.getenv('VERCEL'):
+    #     try:
+    #         watcher_thread = threading.Thread(target=start_watcher, daemon=True)
+    #         watcher_thread.start()
+    #         logger.info("🚀 ASTRA WATCHER STARTED IN BACKGROUND")
+    #     except Exception as e:
+    #         logger.error(f"Failed to start Watcher: {e}")
 
     try:
         hostname = socket.gethostname()

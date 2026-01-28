@@ -77,7 +77,7 @@ const TelegramWidget = memo(({ onAuth }) => {
     script.setAttribute('data-telegram-login', 'AstraAnalyzerPro_bot');
     script.setAttribute('data-size', 'large');
     script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-    script.setAttribute('data-request-access', 'write');
+    // NOTE: data-request-access удален - не обязателен для базовой авторизации
     script.async = true;
     
     // Обработка успешной загрузки скрипта
@@ -127,6 +127,10 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const authInProgress = useRef(false); // Защита от множественных вызовов
+  
+  // Состояние для авторизации через бота
+  const [botAuthLink, setBotAuthLink] = useState(null);
+  const pollingInterval = useRef(null);
 
   // Мемоизируем функцию чтобы она не пересоздавалась и не вызывала ре-рендер TelegramWidget
   const handleTelegramAuth = useCallback(async (tgUser) => {
@@ -217,6 +221,98 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
       onClose();
     }, 1000);
   };
+
+  // ========== АВТОРИЗАЦИЯ ЧЕРЕЗ БОТА ==========
+  
+  const startPolling = useCallback((token) => {
+    console.log('🔄 Запуск polling авторизации через бота...');
+    
+    // Останавливаем предыдущий polling если был
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+    }
+    
+    let attempts = 0;
+    const maxAttempts = 60; // 2 минуты (60 * 2 секунды)
+    
+    pollingInterval.current = setInterval(async () => {
+      attempts++;
+      
+      if (attempts > maxAttempts) {
+        clearInterval(pollingInterval.current);
+        console.log('⏱️ Polling остановлен: таймаут');
+        alert('⏱️ Время ожидания истекло.\n\nПопробуйте снова.');
+        setBotAuthLink(null);
+        return;
+      }
+      
+      try {
+        const response = await axios.get(
+          `https://astraanalyzerpro-q6up.onrender.com/api/auth/check-session/${token}`,
+          { timeout: 5000 }
+        );
+        
+        if (response.data.success && response.data.status === 'completed') {
+          // Авторизация завершена!
+          clearInterval(pollingInterval.current);
+          console.log('✅ Авторизация через бота завершена успешно');
+          
+          const userData = response.data.user;
+          onLoginSuccess(userData);
+          onClose();
+        }
+      } catch (error) {
+        // Игнорируем ошибки - просто продолжаем polling
+        if (error.response?.status === 404) {
+          console.warn('⚠️ Сессия не найдена');
+          clearInterval(pollingInterval.current);
+          alert('❌ Сессия авторизации не найдена.\n\nПопробуйте снова.');
+          setBotAuthLink(null);
+        }
+      }
+    }, 2000); // Проверяем каждые 2 секунды
+  }, [onLoginSuccess, onClose]);
+
+  const handleBotAuth = useCallback(async () => {
+    setIsLoading(true);
+    
+    try {
+      // Генерируем токен
+      const response = await axios.get(
+        'https://astraanalyzerpro-q6up.onrender.com/api/auth/gen-token',
+        { timeout: 10000 }
+      );
+      
+      if (response.data.success) {
+        const { token, link } = response.data;
+        setBotAuthLink(link);
+        
+        console.log('🔑 Токен авторизации сгенерирован:', token.substring(0, 8) + '...');
+        
+        // Открываем ссылку в новом окне
+        window.open(link, '_blank');
+        
+        // Запускаем polling
+        startPolling(token);
+      } else {
+        alert('❌ Ошибка генерации токена.\n\nПопробуйте позже.');
+      }
+    } catch (error) {
+      console.error('❌ Ошибка генерации токена:', error);
+      alert('❌ Не удалось создать ссылку для входа.\n\nПроверьте соединение с сервером.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [startPolling]);
+
+  // Очистка polling при размонтировании
+  useEffect(() => {
+    return () => {
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="login-modal-overlay">
@@ -315,9 +411,85 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
             </button>
           </form>
 
+          {/* АЛЬТЕРНАТИВНЫЙ ВХОД ЧЕРЕЗ БОТА */}
+          <div style={{ margin: '20px 0', textAlign: 'center' }}>
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              margin: '15px 0',
+              gap: '10px'
+            }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+              <span style={{ color: '#666', fontSize: '12px' }}>или</span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleBotAuth}
+              disabled={isLoading || botAuthLink}
+              style={{
+                width: '100%',
+                padding: '12px 20px',
+                background: botAuthLink ? '#26a69a' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                border: 'none',
+                borderRadius: '8px',
+                color: 'white',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: botAuthLink ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+                opacity: (isLoading || botAuthLink) ? 0.7 : 1
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              {botAuthLink ? '⏳ Ожидаем подтверждения...' : '🤖 Войти через Telegram Bot'}
+            </button>
+
+            {botAuthLink && (
+              <div style={{ 
+                marginTop: '15px', 
+                padding: '12px', 
+                background: 'rgba(38, 166, 154, 0.1)',
+                borderRadius: '8px',
+                border: '1px solid rgba(38, 166, 154, 0.3)'
+              }}>
+                <p style={{ color: '#26a69a', fontSize: '13px', margin: '0 0 8px 0' }}>
+                  ✅ Ссылка открыта в новой вкладке
+                </p>
+                <p style={{ color: '#888', fontSize: '12px', margin: 0 }}>
+                  Подтвердите вход в боте. Авторизация завершится автоматически.
+                </p>
+                <button
+                  onClick={() => window.open(botAuthLink, '_blank')}
+                  style={{
+                    marginTop: '8px',
+                    padding: '6px 12px',
+                    background: 'transparent',
+                    border: '1px solid rgba(38, 166, 154, 0.5)',
+                    borderRadius: '6px',
+                    color: '#26a69a',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Открыть ссылку снова
+                </button>
+              </div>
+            )}
+          </div>
+
           <div style={{ margin: '20px 0', textAlign: 'center' }}>
             <p style={{ color: '#888', fontSize: '12px', marginBottom: '10px' }}>
-              Вариант регистрации:
+              Вход через виджет (может быть заблокирован):
             </p>
             <TelegramWidget onAuth={handleTelegramAuth} />
           </div>

@@ -284,19 +284,20 @@ def run_analysis_cycle():
         }
     })
 
-    # --- ФИЛЬТР 1: ТЕХНИЧЕСКИЙ (SMC Сила) ---
+    # --- ФИЛЬТР 1: СНАЙПЕРСКАЯ ТОЧНОСТЬ (0.5% зона) ---
+    # САМЫЙ СТРОГИЙ! Отсечет 90% пустых ситуаций
+    is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
+    if not is_near:
+        logger.info(f"🔍 Цена {current_price} вне зоны интереса. Пропуск.")
+        return
+
+    # --- ФИЛЬТР 2: ТЕХНИЧЕСКИЙ (SMC Сила) ---
     is_worth_it = any(setup in found_signals for setup in STRONG_SETUPS)
     if not found_signals or not is_worth_it:
         return
 
-    # --- ФИЛЬТР 2: ЗОНА (Premium/Discount) ---
+    # --- ФИЛЬТР 3: ЗОНА (Premium/Discount) ---
     if (trend == "UPTREND" and current_zone == "PREMIUM") or (trend == "DOWNTREND" and current_zone == "DISCOUNT"):
-        return
-
-    # --- ФИЛЬТР 3: ТОЧНОСТЬ (0.5% зона) ---
-    is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
-    if not is_near:
-        logger.info(f"🔍 Цена {current_price} вне зоны интереса. Пропуск.")
         return
 
     # --- ФИЛЬТР 4: КУЛДАУН ---
@@ -314,8 +315,9 @@ def run_analysis_cycle():
         logger.info("🔥 КОНСЕНСУС ДОСТИГНУТ!")
         db_service.update_last_signal_time() # Блок 2ч
         
-        # Шлем ТОЛЬКО авторизованным через сайт
-        user_ids = db_service.get_website_authorized_users()
+        # Шлем ВСЕМ активным пользователям (независимо от photo_url)
+        # Теперь сигналы получают все кто авторизовался через виджет ИЛИ через бота
+        user_ids = db_service.get_all_active_users()
         if user_ids:
             formatted_msg = format_signal_message(ai_response)
             telegram_service.broadcast_signal(user_ids, formatted_msg)

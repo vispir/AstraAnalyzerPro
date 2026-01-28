@@ -77,7 +77,99 @@ class TelegramService:
     
     def _cmd_start(self, message):
         """Обработчик команды /start"""
-        # Регистрируем пользователя в БД (доступно всем)
+        # Проверяем есть ли аргумент (токен авторизации)
+        text_parts = message.text.split()
+        
+        if len(text_parts) > 1:
+            # Есть аргумент - это токен авторизации
+            token = text_parts[1]
+            logger.info(f"🔑 Получен токен авторизации от user {message.from_user.id}: {token[:8]}...")
+            
+            try:
+                from services.db_service import db_service
+                
+                # Проверяем существует ли такая сессия
+                session = db_service.get_auth_session(token)
+                
+                if not session:
+                    self.bot.send_message(
+                        message.chat.id,
+                        "❌ Неверный токен авторизации.\n\nПопробуйте еще раз или свяжитесь с поддержкой.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                if session['status'] == 'completed':
+                    self.bot.send_message(
+                        message.chat.id,
+                        "⚠️ Этот токен уже был использован.\n\nСгенерируйте новый токен на сайте.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                # Получаем данные пользователя
+                user = message.from_user
+                user_id = user.id
+                username = user.username or ''
+                first_name = user.first_name or ''
+                last_name = user.last_name or ''
+                
+                # Получаем фото профиля
+                photo_url = None
+                try:
+                    photos = self.bot.get_user_profile_photos(user_id, limit=1)
+                    if photos.total_count > 0:
+                        # Берем самое большое фото
+                        photo = photos.photos[0][-1]
+                        file_info = self.bot.get_file(photo.file_id)
+                        photo_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_info.file_path}"
+                        logger.info(f"📸 Получено фото профиля для user {user_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось получить фото профиля: {e}")
+                    # Используем дефолтное фото
+                    photo_url = f"https://avatar.iran.liara.run/public/{user_id % 100}"
+                
+                # Сохраняем пользователя в БД с фото
+                user_data = {
+                    'id': user_id,
+                    'username': username,
+                    'first_name': first_name,
+                    'last_name': last_name,
+                    'photo_url': photo_url,
+                    'auth_date': int(message.date),
+                    'is_active': True
+                }
+                
+                db_service.save_user(user_data)
+                
+                # Закрываем сессию авторизации
+                db_service.complete_auth_session(token, user_id)
+                
+                # Отправляем подтверждение
+                user_name = f"{first_name} {last_name}".strip()
+                self.bot.send_message(
+                    message.chat.id,
+                    f"<b>✅ Авторизация успешна!</b>\n\n"
+                    f"Привет, <b>{user_name}</b>! 🎉\n\n"
+                    f"Ты успешно авторизовался на сайте <b>Astra Analyzer Pro</b>.\n\n"
+                    f"Теперь ты будешь получать торговые сигналы здесь в Telegram! 📱\n\n"
+                    f"Можешь вернуться на сайт — авторизация завершена.",
+                    parse_mode='HTML'
+                )
+                
+                logger.info(f"✅ Авторизация через бота завершена: user {user_id} (@{username})")
+                return
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки токена авторизации: {e}")
+                self.bot.send_message(
+                    message.chat.id,
+                    "❌ Произошла ошибка при авторизации.\n\nПопробуйте еще раз позже.",
+                    parse_mode='HTML'
+                )
+                return
+        
+        # Обычный запуск бота (без токена)
         self._register_user(message.from_user)
         
         welcome = (
@@ -102,8 +194,6 @@ class TelegramService:
     
     def _cmd_price(self, message):
         """Обработчик команды /price"""
-        self._auto_register_user(message.from_user)
-        
         try:
             from services.oanda_service import oanda_service
             
@@ -121,8 +211,6 @@ class TelegramService:
     
     def _cmd_trend(self, message):
         """Обработчик команды /trend"""
-        self._auto_register_user(message.from_user)
-        
         try:
             from services.oanda_service import oanda_service
             from services.smc_detector import smc_detector
@@ -152,8 +240,6 @@ class TelegramService:
     
     def _cmd_status(self, message):
         """Обработчик команды /status"""
-        self._auto_register_user(message.from_user)
-        
         try:
             from services.db_service import db_service
             

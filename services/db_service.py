@@ -176,6 +176,110 @@ class DBService:
             return [row['id'] for row in response.json()]
         except: return []
 
+    # --- МЕТОДЫ ДЛЯ AUTH SESSIONS (ВХОД ЧЕРЕЗ БОТА) ---
+
+    def create_auth_session(self, token):
+        """
+        Создает новую сессию авторизации для входа через бота
+        """
+        if not self.url:
+            logger.error("❌ Создание auth_session невозможно: SUPABASE_URL не настроен")
+            return False
+        
+        target_url = f"{self.url}/rest/v1/auth_sessions"
+        
+        session_data = {
+            "token": token,
+            "status": "pending",
+            "tg_user_id": None,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        try:
+            response = requests.post(
+                target_url,
+                json=session_data,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Auth session создан: {token[:8]}...")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания auth_session: {e}")
+            return False
+
+    def get_auth_session(self, token):
+        """
+        Получает статус сессии авторизации
+        """
+        if not self.url:
+            return None
+        
+        target_url = f"{self.url}/rest/v1/auth_sessions?token=eq.{token}&select=*"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения auth_session: {e}")
+            return None
+
+    def complete_auth_session(self, token, tg_user_id):
+        """
+        Обновляет сессию авторизации как завершенную
+        """
+        if not self.url:
+            return False
+        
+        target_url = f"{self.url}/rest/v1/auth_sessions?token=eq.{token}"
+        
+        try:
+            response = requests.patch(
+                target_url,
+                json={
+                    "status": "completed",
+                    "tg_user_id": tg_user_id,
+                    "completed_at": datetime.now(timezone.utc).isoformat()
+                },
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Auth session завершен: {token[:8]}... → user {tg_user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка завершения auth_session: {e}")
+            return False
+
+    def get_user_by_id(self, user_id):
+        """
+        Получает данные пользователя по ID
+        """
+        if not self.url:
+            return None
+        
+        target_url = f"{self.url}/rest/v1/users?id=eq.{user_id}&select=*"
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения пользователя: {e}")
+            return None
+
     # --- МЕТОДЫ ДЛЯ РАБОТЫ С СИГНАЛАМИ ---
 
     def save_signal(self, signal_data):
