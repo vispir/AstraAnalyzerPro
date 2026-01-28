@@ -365,9 +365,13 @@ class SMCDetector:
             return None
     
     def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50, 
-                           internal_size: int = 5, swing_size: int = 50) -> Dict:
+                           internal_size: int = 3, swing_size: int = 50) -> Dict:
         """
         Детекция Order Blocks (Internal и Swing) с логикой Pine Script
+        
+        Args:
+            internal_size: Размер для Internal OB (3 бара = 45 мин на M15, оптимально для XAUUSD)
+            swing_size: Размер для Swing OB (50 баров = 12.5 часов)
         """
         order_blocks = {
             'internal': [],
@@ -387,7 +391,7 @@ class SMCDetector:
             # Текущая цена для фильтрации "живых" блоков
             current_price = df['close'].iloc[-1]
             
-            # Internal Order Blocks (size=5)
+            # Internal Order Blocks (size=3, оптимально для XAUUSD M15)
             internal_structure = self._get_current_structure(df, internal_size, internal=True)
             
             for pivot_high in internal_structure['pivot_highs'][-3:]:
@@ -577,11 +581,15 @@ class SMCDetector:
         
         return equal_levels
     
-    def detect_market_structure(self, df: pd.DataFrame, internal_size: int = 5, 
+    def detect_market_structure(self, df: pd.DataFrame, internal_size: int = 3, 
                                swing_size: int = 50) -> Dict:
         """
         Определение структуры рынка (CHOCH, BOS) для Internal и Swing
         С механизмом legs из Pine Script
+        
+        Args:
+            internal_size: Размер окна для Internal структуры (3 бара = 45 мин на M15)
+            swing_size: Размер окна для Swing структуры (50 баров = 12.5 часов на M15)
         """
         structure = {
             'internal_choch': [],
@@ -596,7 +604,7 @@ class SMCDetector:
             if len(df) < 10:
                 return structure
             
-            # Internal структура (size=5)
+            # Internal структура (size=3, быстрое обнаружение для XAUUSD)
             internal_struct = self._get_current_structure(df, internal_size, internal=True)
             internal_breaks = self._detect_structure_breaks(df, internal_struct, internal=True)
             

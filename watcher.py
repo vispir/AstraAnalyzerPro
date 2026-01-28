@@ -453,13 +453,27 @@ def run_analysis_cycle():
     # ФАЗА 2: ФИЛЬТРЫ GATEKEEPER (экономим токены AI)
     # ========================================================================
     
+    # Проверка на свежие структурные изменения (BOS/CHOCH в текущем цикле)
+    has_fresh_bos = len(analysis.get('bos', [])) > 0
+    has_fresh_choch = len(analysis.get('choch', [])) > 0
+    has_fresh_structure = has_fresh_bos or has_fresh_choch
+    
+    if has_fresh_structure:
+        bos_count = len(analysis.get('bos', []))
+        choch_count = len(analysis.get('choch', []))
+        logger.info(f"🚀 Свежий структурный брейк обнаружен: BOS={bos_count}, CHOCH={choch_count}")
+    
     # --- ФИЛЬТР 1: БЛИЗОСТЬ К СТРУКТУРАМ (0.5%) ---
-    if not is_near:
+    # Исключение: Пропускаем фильтр если обнаружен свежий BOS/CHOCH (импульсный вход)
+    if not is_near and not has_fresh_structure:
         logger.info(f"🔍 SKIP: Цена {current_price:.2f} вне зоны интереса.")
         status_data['status'] = 'not_near_structure'
         status_data['reason'] = f'SKIP - Цена ${current_price:.2f} не находится в пределах 0.5% от ключевых SMC структур.'
         send_debug_notification(status_data)
         return
+    elif not is_near and has_fresh_structure:
+        logger.info(f"⚡ Фильтр дистанции пропущен: свежий структурный брейк (импульсный вход)")
+        status_data['bypass_reason'] = 'Фильтр дистанции пропущен из-за свежего BOS/CHOCH'
     
     # --- ФИЛЬТР 2: НАЛИЧИЕ СИЛЬНЫХ ПАТТЕРНОВ ---
     is_worth_it = any(setup in found_signals for setup in STRONG_SETUPS)
