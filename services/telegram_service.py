@@ -387,7 +387,7 @@ class TelegramService:
     def _register_user(self, user):
         """
         Регистрирует пользователя в базе данных
-        Доступно всем - без проверки авторизации
+        Использует partial_update=True чтобы НЕ затереть photo_url и другие поля
         """
         try:
             from services.db_service import db_service
@@ -400,8 +400,9 @@ class TelegramService:
                 'is_active': True
             }
             
-            db_service.save_user(user_data)
-            logger.info(f"✅ Пользователь {user.id} (@{user.username or 'no_username'}) зарегистрирован")
+            # ВАЖНО: partial_update=True чтобы не затереть photo_url, auth_date и другие поля
+            db_service.save_user(user_data, partial_update=True)
+            logger.info(f"✅ Пользователь {user.id} (@{user.username or 'no_username'}) обновлен (partial)")
         except Exception as e:
             logger.error(f"❌ Ошибка регистрации пользователя: {e}")
     

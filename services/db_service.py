@@ -25,8 +25,14 @@ class DBService:
             }
             logger.info("✅ DB Service переключен на Supabase Cloud API")
 
-    def save_user(self, data):
-        """Сохраняет или обновляет данные пользователя в облаке (UPSERT)"""
+    def save_user(self, data, partial_update=False):
+        """
+        Сохраняет или обновляет данные пользователя в облаке (UPSERT)
+        
+        Args:
+            data: Словарь с данными пользователя
+            partial_update: Если True, обновляет только переданные поля (не затирает существующие)
+        """
         if not self.url: 
             logger.error("❌ Сохранение невозможно: SUPABASE_URL не настроен")
             return False
@@ -36,27 +42,55 @@ class DBService:
             logger.warning("⚠️ Попытка сохранить юзера без ID")
             return False
 
-        # Готовим данные точно под твою структуру в SQL
-        user_payload = {
-            "id": user_id,
-            "username": data.get('username'),
-            "first_name": data.get('first_name'),
-            "last_name": data.get('last_name'),
-            "photo_url": data.get('photo_url'),
-            "auth_date": data.get('auth_date'),
-            "is_active": True
-        }
-
         try:
-            # Для работы upsert через POST в Supabase нужно передать заголовок resolution=merge-duplicates
-            # и указать в URL, что мы работаем с таблицей users
-            target_url = f"{self.url}/rest/v1/users"
-            
-            response = requests.post(target_url, json=user_payload, headers=self.headers)
-            response.raise_for_status()
-            
-            logger.info(f"👤 Юзер {user_id} успешно синхронизирован с облаком (upsert)")
-            return True
+            if partial_update:
+                # PARTIAL UPDATE: Обновляем только is_active, не трогая остальные поля
+                # Используем PATCH для обновления существующей записи
+                target_url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+                
+                # Формируем payload только с переданными полями
+                update_payload = {}
+                if 'is_active' in data:
+                    update_payload['is_active'] = data['is_active']
+                if 'username' in data and data.get('username'):
+                    update_payload['username'] = data['username']
+                if 'first_name' in data and data.get('first_name'):
+                    update_payload['first_name'] = data['first_name']
+                if 'last_name' in data and data.get('last_name'):
+                    update_payload['last_name'] = data['last_name']
+                
+                # Отправляем PATCH запрос
+                response = requests.patch(
+                    target_url,
+                    json=update_payload,
+                    headers={
+                        "apikey": self.key,
+                        "Authorization": f"Bearer {self.key}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                response.raise_for_status()
+                logger.info(f"👤 Юзер {user_id} обновлен (partial update)")
+                return True
+            else:
+                # FULL UPSERT: Создаем новую запись или обновляем все поля
+                user_payload = {
+                    "id": user_id,
+                    "username": data.get('username'),
+                    "first_name": data.get('first_name'),
+                    "last_name": data.get('last_name'),
+                    "photo_url": data.get('photo_url'),
+                    "auth_date": data.get('auth_date'),
+                    "is_active": True
+                }
+                
+                target_url = f"{self.url}/rest/v1/users"
+                response = requests.post(target_url, json=user_payload, headers=self.headers)
+                response.raise_for_status()
+                
+                logger.info(f"👤 Юзер {user_id} успешно синхронизирован с облаком (full upsert)")
+                return True
+                
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения в облако: {e}")
             return False

@@ -489,7 +489,7 @@ export const LoginModal = memo(({ onClose, onLoginSuccess }) => {
 
           <div style={{ margin: '20px 0', textAlign: 'center' }}>
             <p style={{ color: '#888', fontSize: '12px', marginBottom: '10px' }}>
-              Вход через виджет (может быть заблокирован):
+              Вход через виджет:
             </p>
             <TelegramWidget onAuth={handleTelegramAuth} />
           </div>
