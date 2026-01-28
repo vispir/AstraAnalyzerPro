@@ -749,3 +749,149 @@
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out;
 }
+
+/* ============================================================
+   MOBILE ADAPTATION (для экранов меньше 1024px)
+   ============================================================ */
+   @media (max-width: 1024px) {
+    .app-wrapper {
+      height: auto; /* Снимаем жесткую высоту 100vh */
+      min-height: 100vh;
+    }
+  
+    /* Перестраиваем сетку в одну колонку */
+    .main-layout {
+      display: flex;
+      flex-direction: column;
+      grid-template-columns: 1fr; 
+      gap: 12px;
+      padding: 8px;
+      overflow: visible;
+    }
+  
+    /* Сайдбары на весь экран */
+    .sidebar-left, .sidebar-right {
+      width: 100%;
+      order: 2; /* Уводим панели вниз под график */
+    }
+  
+    /* График ставим первым и ограничиваем высоту */
+    .chart-wrapper {
+      order: 1;
+      height: 400px; /* Фиксированная высота для мобилок, чтобы не на весь экран */
+      min-height: 400px;
+      margin-bottom: 10px;
+    }
+  
+    /* AI панель в самый низ */
+    .sidebar-right {
+      order: 3;
+    }
+  
+    /* Адаптация Шапки */
+    .header-container {
+      height: auto;
+      flex-wrap: wrap;
+      padding: 10px !important;
+      gap: 10px;
+    }
+  
+    .clock-area {
+      position: static; /* Возвращаем в поток */
+      transform: none;
+      order: 3;
+      width: 100%;
+      justify-content: center;
+      display: flex;
+    }
+  
+    .controls-area {
+      order: 2;
+    }
+  
+    /* Увеличиваем кнопки для удобства нажатия пальцем */
+    .mode-btn {
+      padding: 12px;
+      font-size: 14px;
+    }
+  
+    .custom-input {
+      padding: 14px; /* Толще инпуты для мобилки */
+      font-size: 16px; /* Защита от автозума в iOS */
+    }
+    
+    .icon-btn {
+      width: 50px;
+      height: 50px;
+    }
+  }
+  
+  /* Фикс для совсем маленьких телефонов */
+  @media (max-width: 480px) {
+    .brand-text {
+      font-size: 14px;
+    }
+    
+    .chart-wrapper {
+      height: 300px;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    .header-container {
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
+      padding: 8px 12px !important;
+      flex-wrap: wrap !important;
+    }
+  
+    /* ЛЕВАЯ ЧАСТЬ: Логотип (Фиксируем ширину, чтобы не тянулся) */
+    .header-section:first-child {
+      flex: 0 0 100px !important; /* Жестко 100px */
+      display: flex !important;
+      justify-content: flex-start !important;
+    }
+  
+    /* ЦЕНТРАЛЬНАЯ ЧАСТЬ: Селекторы */
+    .controls-area {
+      flex: 1 !important; /* Занимает всё свободное место в центре */
+      display: flex !important;
+      justify-content: center !important; /* Центрирует M15 и OANDA внутри себя */
+      gap: 6px !important;
+    }
+  
+    /* ПРАВАЯ ЧАСТЬ: Логин (Тоже фиксируем ширину как у лого) */
+    .login-badge, .user-avatar-badge {
+      flex: 0 0 100px !important; /* Тоже 100px для симметрии */
+      display: flex !important;
+      justify-content: center !important; /* Текст внутри будет по центру */
+      align-items: center !important;
+      padding: 6px 4px !important;
+      font-size: 11px !important;
+      white-space: nowrap !important;
+      text-align: center !important;
+      order: 3 !important; /* Гарантируем, что он справа от центральных кнопок */
+    }
+  
+    /* Фикс для текста внутри логина, если там есть иконка */
+    .login-badge span, .user-avatar-badge span {
+       margin: 0 auto !important; /* Центрируем текст внутри кнопки */
+    }
+  
+    /* ЧАСЫ (под всем этим) */
+    .clock-area {
+      flex: 0 0 100% !important;
+      order: 4 !important;
+      display: flex !important;
+      justify-content: center !important;
+      margin-top: 8px !important;
+      position: static !important;
+      transform: none !important;
+    }
+  
+    .brand-text {
+      font-size: 13px !important;
+      font-weight: 800 !important;
+    }
+  }
