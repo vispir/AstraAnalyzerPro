@@ -11,7 +11,7 @@ LAST_SIGNAL_TIME = None
 # константы
 SIGNAL_COOLDOWN_HOURS = 2  # Кулдаун для BUY/SELL сигналов
 WAIT_COOLDOWN_HOURS = 1    # Кулдаун для вердиктов WAIT
-STRONG_SETUPS = ['BOS', 'CHOCH', 'OB_RETEST', 'FVG_FILL', 'SWEEP']
+STRONG_SETUPS = ['BOS', 'CHOCH', 'OB_RETEST']  # Только критические паттерны для вызова LLM
 
 # Подключение сервисов
 try:
@@ -251,9 +251,10 @@ def format_debug_report(status_data):
     if 'reason' in status_data:
         msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n\n"
     
-    # Вердикт LLM (если был вызван)
+    # Вердикт LLM (если был вызван) - показываем только executive_summary
     if 'llm_verdict' in status_data:
-        msg += f"<b>🤖 Gemini вердикт:</b>\n<code>{status_data['llm_verdict'][:200]}...</code>\n\n"
+        summary = extract_executive_summary(status_data['llm_verdict'])
+        msg += f"<b>🤖 Gemini резюме:</b>\n<i>{summary}</i>\n\n"
     
     # Футер с временем следующей проверки
     msg += "━" * 32 + "\n"
@@ -276,6 +277,24 @@ def parse_llm_response(ai_response):
     except Exception as e:
         logger.error(f"Ошибка парсинга LLM ответа: {e}")
     return None
+
+def extract_executive_summary(ai_response):
+    """
+    Извлекает executive_summary из ответа LLM или очищенный текст
+    Возвращает короткое резюме без сырого JSON
+    """
+    # Попытка распарсить JSON
+    parsed = parse_llm_response(ai_response)
+    if parsed and 'executive_summary' in parsed:
+        return parsed['executive_summary']
+    
+    # Если парсинг не удался, очищаем текст от markdown
+    cleaned = ai_response.replace('```json', '').replace('```', '').strip()
+    
+    # Возвращаем первые 200 символов
+    if len(cleaned) > 200:
+        return cleaned[:197] + '...'
+    return cleaned
 
 def format_signal_message(ai_response):
     """Превращает JSON от Gemini в красивый текст"""
@@ -453,7 +472,16 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # --- ФИЛЬТР 3: КУЛДАУН (2ч для сигналов, 1ч для WAIT) ---
+    # --- ФИЛЬТР 3: ЖЕСТКИЙ ЗАПРЕТ НА НЕЙТРАЛЬНЫЙ ТРЕНД ---
+    # Если тренд нейтральный - вызов LLM запрещен (исключение: найден CHOCH)
+    if trend == "NEUTRAL" and 'CHOCH' not in found_signals:
+        logger.info("🛑 SKIP: Нейтральный тренд без CHOCH.")
+        status_data['status'] = 'weak_patterns'
+        status_data['reason'] = '🛑 SKIP: Нейтральный тренд. ИИ не вызывается до появления CHOCH.'
+        send_debug_notification(status_data)
+        return
+    
+    # --- ФИЛЬТР 4: КУЛДАУН (2ч для сигналов, 1ч для WAIT) ---
     if not check_smart_cooldown():
         logger.info("⏳ SKIP: Кулдаун активен.")
         status_data['status'] = 'cooldown'
