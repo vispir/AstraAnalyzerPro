@@ -184,7 +184,6 @@ def format_debug_report(status_data):
         'news_block': '📰', 
         'oanda_error': '🔌',
         'no_smc': '⚙️', 
-        'technical_scan_complete': '📊',
         'not_near_structure': '🔍', 
         'weak_patterns': '📉',
         'cooldown': '⏳', 
@@ -197,7 +196,6 @@ def format_debug_report(status_data):
         'news_block': 'Блокировка по новостям',
         'oanda_error': 'Ошибка OANDA',
         'no_smc': 'SMC детектор недоступен',
-        'technical_scan_complete': 'Технический анализ завершен',
         'not_near_structure': 'SKIP - Цена далеко от структур (>0.5%)',
         'weak_patterns': 'SKIP - Нет сильных паттернов',
         'cooldown': 'SKIP - Активен кулдаун',
@@ -317,19 +315,21 @@ def run_analysis_cycle():
     СТРОГИЙ КОНВЕЙЕР:
     1. Техническая фаза (только детектор):
        - Проверка рынка, новостей, получение свечей OANDA
-       - Выполнение SMC анализа
-       - ОБЯЗАТЕЛЬНЫЙ технический отчет (каждые 15 минут)
+       - Выполнение SMC анализа и сбор технических данных
+       - Применение фильтров Gatekeeper
     
     2. Фильтры Gatekeeper (без AI):
        - Фильтр 1: Близость к структурам (0.5%)
        - Фильтр 2: Наличие сильных паттернов (BOS, CHOCH, OB_RETEST)
        - Фильтр 3: Кулдаун (2ч для сигналов, 1ч для WAIT)
-       - При провале любого фильтра: отчет SKIP + выход БЕЗ вызова LLM
+       - При провале любого фильтра: 1 отчет SKIP + выход БЕЗ вызова LLM
     
     3. Этап LLM анализа:
        - Только если ВСЕ фильтры пройдены
-       - BUY/SELL: update_last_signal_time() + торговый сигнал
-       - WAIT: update_last_wait_time() + отладочный отчет
+       - BUY/SELL: update_last_signal_time() + торговый сигнал + отчет
+       - WAIT: update_last_wait_time() + отчет с обоснованием LLM
+    
+    ВАЖНО: 1 цикл = 1 сообщение в Telegram (отчет отправляется один раз за цикл)
     """
     global LAST_SIGNAL_TIME
     logger.info("📡 [TRIGGER] Цикл анализа запущен внешним вызовом (Cron/API)")
@@ -410,7 +410,7 @@ def run_analysis_cycle():
     # Шаг 1.7: Проверка близости к SMC структурам
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
     
-    # Подготовка структуры для технического отчета
+    # Подготовка структуры для технического отчета (заполняется на протяжении всего цикла)
     status_data = {
         'price': current_price,
         'trend': trend,
@@ -423,17 +423,12 @@ def run_analysis_cycle():
             'bos': len(analysis.get('bos', [])),
             'choch': len(analysis.get('choch', []))
         },
-        'near_structures': near_description
+        'near_structures': near_description,
+        'status': 'unknown',
+        'reason': ''
     }
     
-    # ========================================================================
-    # 🔔 ОБЯЗАТЕЛЬНЫЙ ТЕХНИЧЕСКИЙ ОТЧЕТ (каждые 15 минут)
-    # Отправляется ПЕРЕД применением фильтров, содержит только данные детектора
-    # ========================================================================
-    logger.info("📊 Отправка технического отчета (данные детектора)...")
-    status_data['status'] = 'technical_scan_complete'
-    status_data['reason'] = 'Технический анализ завершен. Данные получены только из SMC детектора.'
-    send_debug_notification(status_data)
+    logger.info("📊 Технический анализ завершен. Применяем фильтры Gatekeeper...")
     
     # ========================================================================
     # ФАЗА 2: ФИЛЬТРЫ GATEKEEPER (экономим токены AI)
@@ -441,7 +436,7 @@ def run_analysis_cycle():
     
     # --- ФИЛЬТР 1: БЛИЗОСТЬ К СТРУКТУРАМ (0.5%) ---
     if not is_near:
-        logger.info(f"🔍 SKIP: Цена {current_price:.2f} вне зоны интереса (>{near_description}).")
+        logger.info(f"🔍 SKIP: Цена {current_price:.2f} вне зоны интереса.")
         status_data['status'] = 'not_near_structure'
         status_data['reason'] = f'SKIP - Цена ${current_price:.2f} не находится в пределах 0.5% от ключевых SMC структур.'
         send_debug_notification(status_data)
