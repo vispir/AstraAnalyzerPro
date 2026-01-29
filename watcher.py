@@ -39,15 +39,9 @@ try:
     from services.oanda_service import oanda_service
     from services.llm_service import llm_service
     
-    # 🔧 ВАЖНО: Импортируем исправленный детектор
-    # Вариант 1: Если переименовали файл
     try:
-        from services.smc_detector import smc_detector 
+            from services.smc_detector import smc_detector
     except ImportError:
-        # Вариант 2: Если оставили новое имя
-        try:
-            from services.smc_detector_fixed import smc_detector
-        except ImportError:
             smc_detector = None
             
     from services.news_service import news_service
