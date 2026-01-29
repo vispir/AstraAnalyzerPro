@@ -23,10 +23,41 @@ SMC Detector v2.1 - ИСПРАВЛЕННАЯ ВЕРСИЯ
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional
+import json
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """
+    Рекурсивно конвертирует numpy типы в стандартные Python типы
+    для корректной JSON сериализации.
+    
+    numpy.bool_ -> bool
+    numpy.int64 -> int
+    numpy.float64 -> float
+    numpy.ndarray -> list
+    """
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(sanitize_for_json(item) for item in obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return [sanitize_for_json(item) for item in obj.tolist()]
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
 
 # Константы
 BULLISH = 1
@@ -1258,13 +1289,17 @@ class SMCDetector:
                        f"OB:{len(all_order_blocks)} FVG:{len(fvg)} S/R:{len(liquidity)} "
                        f"CHoCH:{len(all_choch)} BOS:{len(all_bos)}")
             
-            return smc_data
+            # 🔧 КРИТИЧНО v2.1.1: Конвертируем numpy типы в стандартные Python типы
+            # Это НЕОБХОДИМО для корректной JSON сериализации в Flask API
+            # Без этого Flask выдаёт: "Object of type bool is not JSON serializable"
+            return sanitize_for_json(smc_data)
             
         except Exception as e:
             logger.error(f"SMC Analysis error: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return self._get_empty_result()
+            # Санитизируем даже пустой результат на всякий случай
+            return sanitize_for_json(self._get_empty_result())
 
 
 # Глобальный экземпляр
