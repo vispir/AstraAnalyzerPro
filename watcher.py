@@ -196,18 +196,58 @@ def extract_executive_summary(ai_response):
 
 
 def format_signal_message(ai_response):
+    """
+    Форматирует сигнал от LLM в красивое сообщение для Telegram
+    REASON выводится полностью без обрезки
+    """
     parsed_data = parse_llm_response(ai_response)
     
     if parsed_data:
         action = parsed_data.get("ACTION", "N/A")
         emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
-        return (f"<b>🚀 ASTRA SIGNAL: GOLD (XAU/USD)</b>\n\n"
-                f"Направление: <b>{emoji}</b>\n"
-                f"Вход: <code>{parsed_data.get('ENTRY')}</code>\n"
-                f"Стоп: <code>{parsed_data.get('SL')}</code>\n"
-                f"Тейк: <code>{parsed_data.get('TP')}</code>\n\n"
-                f"<b>Анализ:</b>\n<i>{parsed_data.get('REASON', 'SMC Confirmation')}</i>")
+        
+        entry = parsed_data.get('ENTRY', 'N/A')
+        sl = parsed_data.get('SL', 'N/A')
+        tp = parsed_data.get('TP', 'N/A')
+        confidence = parsed_data.get('CONFIDENCE', 0)
+        reason = parsed_data.get('REASON', 'SMC Confirmation')
+        
+        # Расчёт R:R если данные есть
+        rr_text = ""
+        try:
+            entry_f = float(entry)
+            sl_f = float(sl)
+            tp_f = float(tp)
+            risk = abs(entry_f - sl_f)
+            reward = abs(tp_f - entry_f)
+            if risk > 0:
+                rr = reward / risk
+                rr_text = f"\n📊 R:R = <b>1:{rr:.1f}</b>"
+        except:
+            pass
+        
+        # Уверенность
+        conf_text = ""
+        if confidence:
+            conf_emoji = "🟢" if int(confidence) >= 70 else "🟡" if int(confidence) >= 50 else "🔴"
+            conf_text = f"\n{conf_emoji} Уверенность: <b>{confidence}%</b>"
+        
+        msg = (
+            f"<b>🚀 ASTRA SIGNAL: GOLD (XAU/USD)</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Направление: <b>{emoji}</b>\n"
+            f"Вход: <code>{entry}</code>\n"
+            f"Стоп-лосс: <code>{sl}</code>\n"
+            f"Тейк-профит: <code>{tp}</code>"
+            f"{rr_text}"
+            f"{conf_text}\n\n"
+            f"<b>📝 Анализ:</b>\n{reason}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⚠️ Не является финансовым советом</i>"
+        )
+        return msg
     
+    # Если не удалось распарсить — выводим как есть
     return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{ai_response}"
 
 

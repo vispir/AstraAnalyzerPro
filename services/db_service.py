@@ -1,9 +1,29 @@
 import os
+import math
 import requests
 import logging
-from datetime import datetime, timezone # Добавили timezone для корректной работы с облаком
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def safe_float(value, default=0.0):
+    """Безопасное преобразование в float с проверкой на NaN/Inf"""
+    try:
+        result = float(value) if value is not None else default
+        if math.isnan(result) or math.isinf(result):
+            return default
+        return result
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value, default=0):
+    """Безопасное преобразование в int"""
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
 
 class DBService:
     def __init__(self):
@@ -319,32 +339,99 @@ class DBService:
     def save_signal(self, signal_data):
         """
         Сохраняет сигнал в таблицу signals
+        
+        КРИТИЧЕСКИЕ ТРЕБОВАНИЯ SUPABASE:
+        - Заголовки: apikey, Authorization (Bearer), Content-Type, Prefer
+        - Типизация: float для цен, int для confidence
+        - Формат даты: ISO 8601 с timezone
         """
-        if not self.url:
-            logger.error("❌ Сохранение сигнала невозможно: SUPABASE_URL не настроен")
+        if not self.url or not self.key:
+            logger.error("❌ Сохранение сигнала невозможно: SUPABASE_URL или SUPABASE_KEY не настроен")
             return None
         
         target_url = f"{self.url}/rest/v1/signals"
         
+        # ============================================================
+        # ТИПИЗАЦИЯ ДАННЫХ (защита от ошибок 400)
+        # Соответствие РЕАЛЬНОЙ схеме таблицы signals в Supabase:
+        # - signal_label НЕТ (вычисляется в VIEW latest_signals)
+        # - internal_trend НЕТ  
+        # - patterns = text (не jsonb!)
+        # ============================================================
+        
+        # Преобразуем patterns из list в строку (колонка text в БД)
+        patterns_raw = signal_data.get('patterns', [])
+        if isinstance(patterns_raw, list):
+            patterns_str = ', '.join(str(p) for p in patterns_raw) if patterns_raw else ''
+        else:
+            patterns_str = str(patterns_raw) if patterns_raw else ''
+        
+        sanitized_data = {
+            'symbol': str(signal_data.get('symbol', 'XAU_USD')),
+            'signal_type': str(signal_data.get('signal_type', 'WAIT')),
+            # signal_label УБРАН — вычисляется в VIEW
+            'status': str(signal_data.get('status', 'active')),
+            
+            # Цены — СТРОГО float, проверка на NaN
+            'entry_price': safe_float(signal_data.get('entry_price'), 0.0),
+            'current_price': safe_float(signal_data.get('current_price'), 0.0),
+            'stop_loss': safe_float(signal_data.get('stop_loss'), 0.0),
+            'take_profit': safe_float(signal_data.get('take_profit'), 0.0),
+            
+            # Тренд и зона — строки (internal_trend УБРАН — нет в таблице)
+            'trend': str(signal_data.get('trend', 'NEUTRAL')),
+            'zone': str(signal_data.get('zone', 'UNKNOWN')),
+            
+            # Паттерны — TEXT строка (не list!)
+            'patterns': patterns_str,
+            
+            # SMC Summary — jsonb
+            'smc_summary': dict(signal_data.get('smc_summary', {})) if isinstance(signal_data.get('smc_summary'), dict) else {},
+            
+            # LLM данные (увеличены лимиты)
+            'llm_full_response': str(signal_data.get('llm_full_response', ''))[:4000],
+            'llm_reason': str(signal_data.get('llm_reason', ''))[:1000],
+            'llm_confidence': safe_int(signal_data.get('llm_confidence'), 0),
+            
+            # Timestamp — ISO 8601 формат с timezone
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # ============================================================
+        # ЗАГОЛОВКИ (КРИТИЧНО для Supabase!)
+        # ============================================================
+        headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"  # Гарантирует ответ от API
+        }
+        
         try:
+            logger.debug(f"📤 Отправка сигнала в Supabase: {sanitized_data.get('signal_type')} @ {sanitized_data.get('current_price')}")
+            
             response = requests.post(
                 target_url,
-                json=signal_data,
-                headers={
-                    "apikey": self.key,
-                    "Authorization": f"Bearer {self.key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation"  # Возвращает созданную запись
-                }
+                json=sanitized_data,
+                headers=headers,
+                timeout=10
             )
-            response.raise_for_status()
+            
+            # Детальная диагностика ошибок
+            if response.status_code >= 400:
+                logger.error(f"❌ Supabase Error {response.status_code}: {response.text}")
+                response.raise_for_status()
+            
             result = response.json()
             signal_id = result[0]['id'] if result else None
             
-            signal_type = signal_data.get('signal_type', 'N/A')
-            price = signal_data.get('entry_price') or signal_data.get('current_price', 0)
-            logger.info(f"✅ Сигнал {signal_type} @ {price} сохранен в БД (ID: {signal_id})")
+            logger.info(f"✅ Сигнал {sanitized_data['signal_type']} @ {sanitized_data['current_price']:.2f} сохранен (ID: {signal_id})")
             return signal_id
+            
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"❌ HTTP Error при сохранении сигнала: {e}")
+            logger.error(f"   Response: {e.response.text if e.response else 'No response'}")
+            return None
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения сигнала: {e}")
             return None
