@@ -8,11 +8,25 @@ Astra Watcher v2.2 - Исправленная версия
 """
 
 import os
+import math
 from datetime import datetime, timedelta, timezone
 import logging
 import json
 from services.db_service import db_service
-from services.telegram_service import telegram_service 
+from services.telegram_service import telegram_service
+
+
+def safe_float(value, default=0.0):
+    """
+    Безопасное преобразование в float с проверкой на NaN/Inf
+    """
+    try:
+        result = float(value) if value is not None else default
+        if math.isnan(result) or math.isinf(result):
+            return default
+        return result
+    except (TypeError, ValueError):
+        return default 
 
 # Переменная для отслеживания времени последнего сигнала
 LAST_SIGNAL_TIME = None 
@@ -262,9 +276,10 @@ def format_debug_report(status_data):
         'news_block': '📰', 
         'oanda_error': '🔌',
         'no_smc': '⚙️', 
-        'not_near_structure': '🔍', 
+        'not_near_structure': '🔍',
+        'equilibrium_zone': '⚪',
         'weak_patterns': '📉',
-        'neutral_no_swing': '⚖️',  # НОВЫЙ статус
+        'neutral_no_swing': '⚖️',
         'cooldown': '⏳', 
         'signal_sent': '✅', 
         'wait_decision': '⚖️'
@@ -276,6 +291,7 @@ def format_debug_report(status_data):
         'oanda_error': 'Ошибка OANDA',
         'no_smc': 'SMC детектор недоступен',
         'not_near_structure': 'SKIP - Цена далеко от структур (>0.5%)',
+        'equilibrium_zone': 'SKIP - Цена в зоне Equilibrium',
         'weak_patterns': 'SKIP - Нет сильных паттернов',
         'neutral_no_swing': 'SKIP - Нейтральный тренд без Swing пробоя',
         'cooldown': 'SKIP - Активен кулдаун',
@@ -339,9 +355,14 @@ def format_debug_report(status_data):
     if 'near_structures' in status_data:
         msg += f"<b>🎯 Уровни рядом:</b>\n{status_data['near_structures']}\n\n"
     
-    # Причина остановки
+    # Причина остановки + позиция в рендже
     if 'reason' in status_data:
-        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n\n"
+        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n"
+        # Позиция в рендже (для команды)
+        if 'position_in_range_pct' in status_data:
+            pos_pct = status_data['position_in_range_pct']
+            msg += f"📍 Позиция в рендже: {pos_pct:.1f}%\n"
+        msg += "\n"
     
     # Вердикт LLM
     if 'llm_verdict' in status_data:
@@ -456,56 +477,62 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
     """
     Подготавливает данные для сохранения в Supabase
     
-    ИСПРАВЛЕНИЕ: Правильные типы данных для схемы БД
+    ИСПРАВЛЕНИЕ v2.3:
+    - patterns = СТРОГО список (не .join()!)
+    - smc_summary = СТРОГО dict
+    - Все числовые поля через safe_float() с проверкой NaN
     """
     
-    # Собираем все паттерны в СПИСОК (не строку!)
+    # Собираем все паттерны в СПИСОК (СТРОГО список, не строку!)
     all_patterns = swing_signals + internal_signals
-    patterns_list = all_patterns if all_patterns else []
+    patterns_list = list(all_patterns) if all_patterns else []
     
     # Определяем label
     signal_label = get_signal_label(llm_action)
     
-    # Извлекаем данные из LLM ответа с приведением типов
-    entry_price = float(current_price)
+    # Извлекаем данные из LLM ответа с БЕЗОПАСНЫМ приведением типов
+    entry_price = safe_float(current_price, 0.0)
     stop_loss = 0.0
     take_profit = 0.0
     confidence = 0
     reason = ""
     
-    if parsed_llm:
-        entry_price = float(parsed_llm.get('ENTRY', current_price) or current_price)
-        stop_loss = float(parsed_llm.get('SL', 0) or 0)
-        take_profit = float(parsed_llm.get('TP', 0) or 0)
-        confidence = int(parsed_llm.get('CONFIDENCE', 0) or 0)
+    if parsed_llm and isinstance(parsed_llm, dict):
+        entry_price = safe_float(parsed_llm.get('ENTRY', current_price), safe_float(current_price, 0.0))
+        stop_loss = safe_float(parsed_llm.get('SL', 0), 0.0)
+        take_profit = safe_float(parsed_llm.get('TP', 0), 0.0)
+        try:
+            confidence = int(parsed_llm.get('CONFIDENCE', 0) or 0)
+        except (TypeError, ValueError):
+            confidence = 0
         reason = str(parsed_llm.get('REASON', ''))[:500]
     
-    # Формируем payload с правильными типами
+    # Формируем payload с ПРАВИЛЬНЫМИ типами для Supabase
     signal_data = {
         'symbol': 'XAU_USD',
         'signal_type': str(llm_action),
         'signal_label': signal_label,
         'status': 'active',
         
-        # Цены - все float
-        'entry_price': float(entry_price),
-        'current_price': float(current_price),
-        'stop_loss': float(stop_loss),
-        'take_profit': float(take_profit),
+        # Цены - все через safe_float() для защиты от NaN
+        'entry_price': safe_float(entry_price, 0.0),
+        'current_price': safe_float(current_price, 0.0),
+        'stop_loss': safe_float(stop_loss, 0.0),
+        'take_profit': safe_float(take_profit, 0.0),
         
-        # Тренды
-        'trend': str(trend),
-        'internal_trend': str(internal_trend),
-        'zone': str(zone),
+        # Тренды - строки
+        'trend': str(trend) if trend else 'NEUTRAL',
+        'internal_trend': str(internal_trend) if internal_trend else 'NEUTRAL',
+        'zone': str(zone) if zone else 'UNKNOWN',
         
-        # Паттерны - СПИСОК (не строка!)
+        # Паттерны - СТРОГО СПИСОК (не строка!)
         'patterns': patterns_list,
         
-        # SMC Summary - словарь (jsonb)
-        'smc_summary': smc_summary if isinstance(smc_summary, dict) else {},
+        # SMC Summary - СТРОГО словарь (jsonb)
+        'smc_summary': dict(smc_summary) if isinstance(smc_summary, dict) else {},
         
         # LLM данные
-        'llm_full_response': str(ai_response)[:2000],  # Ограничиваем длину
+        'llm_full_response': str(ai_response)[:2000] if ai_response else '',
         'llm_reason': reason,
         'llm_confidence': confidence
     }
@@ -594,8 +621,10 @@ def run_analysis_cycle():
     # Извлекаем тренды и контекст
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
-    current_zone = analysis.get('advanced', {}).get('key_levels', {}).get('Current_Zone', 'N/A')
-    current_price = float(candles[-1].get('close', 0))
+    advanced_data = analysis.get('advanced', {})
+    current_zone = advanced_data.get('key_levels', {}).get('Current_Zone', 'N/A')
+    position_in_range_pct = advanced_data.get('zones', {}).get('position_in_range_pct', 50.0)
+    current_price = safe_float(candles[-1].get('close', 0), 0.0)
     
     # ========================================================================
     # СБОР СИГНАЛОВ (РАЗДЕЛЕНИЕ SWING vs INTERNAL)
@@ -630,6 +659,7 @@ def run_analysis_cycle():
         'trend': swing_trend,
         'internal_trend': internal_trend,
         'zone': current_zone,
+        'position_in_range_pct': position_in_range_pct,
         'swing_signals': swing_signals,
         'internal_signals': internal_signals,
         'smc_summary': smc_summary,
@@ -658,6 +688,17 @@ def run_analysis_cycle():
     if not is_near and not has_swing_break:
         status_data['status'] = 'not_near_structure'
         status_data['reason'] = f'Цена ${current_price:.2f} далеко от SMC структур (>0.5%). Нет Swing пробоя.'
+        send_debug_notification(status_data)
+        return
+    
+    # --- ФИЛЬТР 1.5: EQUILIBRIUM ZONE PROTECTION ---
+    # 🔥 ЭКОНОМИЯ LLM: Вызов Gemini ЗАПРЕЩЕН в зоне Equilibrium!
+    if current_zone == "EQUILIBRIUM":
+        status_data['status'] = 'equilibrium_zone'
+        status_data['reason'] = (
+            f'Цена в зоне Equilibrium ({position_in_range_pct:.1f}% рендж). '
+            f'Ждём выхода в Premium/Discount для поиска сетапа.'
+        )
         send_debug_notification(status_data)
         return
     
