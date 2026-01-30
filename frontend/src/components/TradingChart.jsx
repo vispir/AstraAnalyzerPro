@@ -7,6 +7,9 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
   const seriesRef = useRef(null);
   const linesRef = useRef({ entry: null, sl: null, tp: null });
   const draggingRef = useRef(null);
+  
+  // Ref для уровней, чтобы иметь к ним доступ в обработчиках без пересоздания useEffect
+  const levelsRef = useRef(levels);
 
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) return;
@@ -35,7 +38,6 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
     
     const onMouseDown = (e) => {
       const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       
       const price = series.coordinateToPrice(y);
@@ -128,10 +130,9 @@ const TradingChart = ({ history, levels, setLevels, activeMode, setActiveMode, s
         chartRef.current = null;
       }
     };
-  }, []);
+  }, [setLevels]);
 
-  // Используем ref для уровней, чтобы иметь к ним доступ в обработчиках без пересоздания useEffect
-  const levelsRef = useRef(levels);
+  // Синхронизируем ref с актуальными levels
   useEffect(() => {
     levelsRef.current = levels;
   }, [levels]);

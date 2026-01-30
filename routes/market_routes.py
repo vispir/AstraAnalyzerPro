@@ -94,7 +94,7 @@ def get_candles():
             })
         
         # ВАРИАНТ 2: Запрос конкретного таймфрейма
-        calc_limit = max(limit or 100, 100)  # Минимум 100 для точности анализа
+        calc_limit = max(limit or 300, 100)  # По умолчанию 300 (для SMC анализа 250 + запас), минимум 100
         result = market_service.get_candles(timeframe, period, calc_limit)
         
         if "error" in result:

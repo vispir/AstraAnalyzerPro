@@ -23,7 +23,7 @@ def generate_chart():
     Query params:
         tf: timeframe (M15, H1, H4) - обязательно
         source: источник данных (oanda, twelvedata) - default: twelvedata
-        limit: количество свечей (default: 100)
+        limit: количество свечей (default: 300)
         width: ширина изображения (default: 1200)
         height: высота изображения (default: 700)
     
@@ -46,7 +46,7 @@ def generate_chart():
                 "hint": "Usage: /api/chart/generate?tf=H1"
             }), 400
         
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get('limit', 300))
         width = int(request.args.get('width', 1200))
         height = int(request.args.get('height', 700))
         
