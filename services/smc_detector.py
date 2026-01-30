@@ -28,11 +28,11 @@ NEUTRAL = 0
 # Параметры по умолчанию (как LuxAlgo)
 DEFAULT_INTERNAL_LEFT = 5      # Internal structure: 5 баров слева
 DEFAULT_INTERNAL_RIGHT = 5     # Internal structure: 5 баров справа
-DEFAULT_SWING_LEFT = 25        # Swing structure: 25 баров слева (было 50, ускоряем поиск макро-экстремумов)
-DEFAULT_SWING_RIGHT = 5        # Swing structure: 5 баров справа (как в оригинале LuxAlgo)
+DEFAULT_SWING_LEFT = 50        # Swing structure: 50 баров слева
+DEFAULT_SWING_RIGHT = 50       # Swing structure: 50 баров справа
 
 # Для фильтрации "свежих" сигналов для бота
-FRESH_SIGNAL_BARS = 30         # Сигналы за последние 30 баров (7.5 часов на M15) считаются "свежими"
+FRESH_SIGNAL_BARS = 10         # Сигналы за последние N баров считаются "свежими"
 
 
 # ============================================================================

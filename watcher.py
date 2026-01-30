@@ -1,10 +1,15 @@
 """
-Astra Watcher v2.2 - Исправленная версия
-=========================================
+Astra Watcher v2.4 - Абсолютный запрет + жёсткий фикс зон
+==============================================================
 Критические исправления:
 1. Supabase 400 Error - правильная структура данных для БД
 2. Ужесточение триггера LLM - приоритет Swing над Internal
 3. Сохранение 15-минутных отчётов
+4. ЖЁСТКИЙ ФИКС ЗОН - пересчёт Premium/Discount поверх детектора
+
+Рекомендация от Gemini: В сильном тренде детектор не находит "красивые"
+pivot точки, поэтому зоны считаются неверно. Решение - пересчитываем
+зоны в watcher.py используя простой max/min за 250 свечей.
 """
 
 import os
@@ -13,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import json
 from services.db_service import db_service
-from services.telegram_service import telegram_service
+from services.telegram_service import telegram_service 
 
 
 def safe_float(value, default=0.0):
@@ -26,7 +31,8 @@ def safe_float(value, default=0.0):
             return default
         return result
     except (TypeError, ValueError):
-        return default 
+        return default
+
 
 # Переменная для отслеживания времени последнего сигнала
 LAST_SIGNAL_TIME = None 
@@ -216,6 +222,57 @@ def is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5):
 
 
 # ============================================================================
+# ЖЁСТКИЙ РАСЧЁТ ЗОН (ОБХОД ДЕТЕКТОРА)
+# ============================================================================
+
+def calculate_forced_zones(candles):
+    """
+    🔧 ЖЁСТКИЙ ФИКС ЗОН (рекомендация от Gemini)
+    
+    Проблема: В сильном тренде детектор не находит "красивые" pivot точки,
+    поэтому зоны Premium/Discount считаются неверно.
+    
+    Решение: Считаем зоны тупо по max/min за все 250 свечей.
+    Это железобетонно и не зависит от pivot detection.
+    
+    Returns:
+        (current_zone, position_in_range_pct, global_high, global_low)
+    """
+    try:
+        # Берём max и min за все свечи
+        all_highs = [c['high'] for c in candles]
+        all_lows = [c['low'] for c in candles]
+        
+        global_high = max(all_highs)
+        global_low = min(all_lows)
+        current_close = candles[-1]['close']
+        
+        # Защита от деления на ноль
+        if global_high == global_low:
+            position_pct = 50.0
+        else:
+            # Считаем, где мы реально находимся (0% = дно, 100% = вершина)
+            position_pct = ((current_close - global_low) / (global_high - global_low)) * 100
+        
+        # Принудительно определяем зону
+        if position_pct < 33.3:
+            forced_zone = "DISCOUNT"
+        elif position_pct > 66.6:
+            forced_zone = "PREMIUM"
+        else:
+            forced_zone = "EQUILIBRIUM"
+        
+        logger.info(f"🔧 ЗОНЫ ПЕРЕСЧИТАНЫ: Цена {current_close:.2f} в диапазоне "
+                   f"[{global_low:.2f} - {global_high:.2f}] -> {position_pct:.1f}% ({forced_zone})")
+        
+        return forced_zone, position_pct, global_high, global_low
+        
+    except Exception as e:
+        logger.error(f"Ошибка расчёта зон: {e}")
+        return "UNKNOWN", 50.0, 0.0, 0.0
+
+
+# ============================================================================
 # ПАРСИНГ И ФОРМАТИРОВАНИЕ
 # ============================================================================
 
@@ -278,6 +335,8 @@ def format_debug_report(status_data):
         'no_smc': '⚙️', 
         'not_near_structure': '🔍',
         'equilibrium_zone': '⚪',
+        'hard_filter_discount_downtrend': '🛑',
+        'hard_filter_premium_uptrend': '🛑',
         'weak_patterns': '📉',
         'neutral_no_swing': '⚖️',
         'cooldown': '⏳', 
@@ -292,6 +351,8 @@ def format_debug_report(status_data):
         'no_smc': 'SMC детектор недоступен',
         'not_near_structure': 'SKIP - Цена далеко от структур (>0.5%)',
         'equilibrium_zone': 'SKIP - Цена в зоне Equilibrium',
+        'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT при DownTrend',
+        'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM при UpTrend',
         'weak_patterns': 'SKIP - Нет сильных паттернов',
         'neutral_no_swing': 'SKIP - Нейтральный тренд без Swing пробоя',
         'cooldown': 'SKIP - Активен кулдаун',
@@ -329,7 +390,20 @@ def format_debug_report(status_data):
         if 'zone' in status_data:
             zone = status_data['zone']
             zone_emoji = "🔴" if zone == "PREMIUM" else "🟢" if zone == "DISCOUNT" else "⚪"
-            msg += f"└ Зона: {zone_emoji} {zone}\n\n"
+            msg += f"├ Зона: {zone_emoji} {zone}\n"
+        
+        # Позиция в рендже (показываем всегда!)
+        if 'position_in_range_pct' in status_data:
+            pos_pct = status_data['position_in_range_pct']
+            msg += f"└ Позиция: {pos_pct:.1f}% диапазона\n\n"
+        else:
+            msg += "\n"
+    
+    # Диапазон (если есть)
+    if 'global_high' in status_data and 'global_low' in status_data:
+        msg += f"<b>📐 Диапазон 250 свечей:</b>\n"
+        msg += f"├ High: ${status_data['global_high']:.2f}\n"
+        msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
     # SMC паттерны (разделённые)
     if 'smc_summary' in status_data and any(status_data['smc_summary'].values()):
@@ -337,7 +411,6 @@ def format_debug_report(status_data):
         msg += "<b>📊 SMC Паттерны:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
-        # Total (вся история 250 свечей) + Fresh (последние 30 баров)
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (Total) | Fresh: {smc.get('swing_bos', 0)}\n"
         msg += f"├ Swing CHoCH: {smc.get('swing_choch_total', 0)} (Total) | Fresh: {smc.get('swing_choch', 0)}\n"
         msg += f"└ Internal BOS: {smc.get('int_bos', 0)} | CHoCH: {smc.get('int_choch', 0)}\n\n"
@@ -355,14 +428,9 @@ def format_debug_report(status_data):
     if 'near_structures' in status_data:
         msg += f"<b>🎯 Уровни рядом:</b>\n{status_data['near_structures']}\n\n"
     
-    # Причина остановки + позиция в рендже
+    # Причина остановки
     if 'reason' in status_data:
-        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n"
-        # Позиция в рендже (для команды)
-        if 'position_in_range_pct' in status_data:
-            pos_pct = status_data['position_in_range_pct']
-            msg += f"📍 Позиция в рендже: {pos_pct:.1f}%\n"
-        msg += "\n"
+        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n\n"
     
     # Вердикт LLM
     if 'llm_verdict' in status_data:
@@ -548,12 +616,13 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Основная функция анализа v2.2
+    Основная функция анализа v2.3
     
     КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ:
     1. Разделение Swing vs Internal сигналов
     2. Ужесточение: NEUTRAL тренд требует Swing пробоя для вызова LLM
     3. Правильная структура данных для Supabase
+    4. 🔧 ЖЁСТКИЙ ФИКС ЗОН - пересчёт поверх детектора
     """
     global LAST_SIGNAL_TIME
     logger.info("📡 [TRIGGER] Цикл анализа запущен")
@@ -614,16 +683,23 @@ def run_analysis_cycle():
         })
         return
     
-    # SMC Анализ
+    # ---------------------------------------------------------
+    # 1. Запускаем SMC анализ (ради BOS, CHoCH, OB)
+    # ---------------------------------------------------------
     logger.info("🔬 Выполняем SMC анализ...")
     analysis = smc_detector.analyze(candles)
     
-    # Извлекаем тренды и контекст
+    # ---------------------------------------------------------
+    # 2. 🔧 ЖЁСТКИЙ ФИКС ЗОН (Переписываем логику детектора)
+    # ---------------------------------------------------------
+    # Мы берём max и min за все 250 свечей. Это железобетонно.
+    current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
+    
+    # ---------------------------------------------------------
+    # 3. Извлекаем остальные данные (Тренды берём из детектора - там всё ок)
+    # ---------------------------------------------------------
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
-    advanced_data = analysis.get('advanced', {})
-    current_zone = advanced_data.get('key_levels', {}).get('Current_Zone', 'N/A')
-    position_in_range_pct = advanced_data.get('zones', {}).get('position_in_range_pct', 50.0)
     current_price = safe_float(candles[-1].get('close', 0), 0.0)
     
     # ========================================================================
@@ -634,7 +710,7 @@ def run_analysis_cycle():
     
     logger.info(f"📊 Найдено: Swing={len(swing_signals)}, Internal={len(internal_signals)}")
     
-    # SMC Summary для БД (Total = вся история 250 свечей, Fresh = последние 30 баров)
+    # SMC Summary для БД (Total = вся история 250 свечей, Fresh = последние 10 баров)
     smc_summary = {
         'ob': len(analysis.get('order_blocks', [])),
         'fvg': len(analysis.get('fvg', [])),
@@ -660,6 +736,8 @@ def run_analysis_cycle():
         'internal_trend': internal_trend,
         'zone': current_zone,
         'position_in_range_pct': position_in_range_pct,
+        'global_high': global_high,
+        'global_low': global_low,
         'swing_signals': swing_signals,
         'internal_signals': internal_signals,
         'smc_summary': smc_summary,
@@ -698,6 +776,35 @@ def run_analysis_cycle():
         status_data['reason'] = (
             f'Цена в зоне Equilibrium ({position_in_range_pct:.1f}% рендж). '
             f'Ждём выхода в Premium/Discount для поиска сетапа.'
+        )
+        send_debug_notification(status_data)
+        return
+    
+    # =========================================================================
+    # 🛑 АБСОЛЮТНЫЙ ЗАПРЕТ (HARD FILTER) — v2.4
+    # =========================================================================
+    # Эти комбинации НИКОГДА не должны вызывать LLM!
+    # 
+    # DOWNTREND + DISCOUNT = Падение уже произошло, продавать поздно
+    # UPTREND + PREMIUM = Рост уже произошёл, покупать поздно
+    # =========================================================================
+    
+    if swing_trend == "DOWNTREND" and current_zone == "DISCOUNT":
+        status_data['status'] = 'hard_filter_discount_downtrend'
+        status_data['reason'] = (
+            f'🛑 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ: Продажа в DISCOUNT при DownTrend.\n'
+            f'Цена уже упала на {100 - position_in_range_pct:.1f}% от максимума.\n'
+            f'Входить в SELL поздно — ждём откат в Premium или разворот.'
+        )
+        send_debug_notification(status_data)
+        return
+    
+    if swing_trend == "UPTREND" and current_zone == "PREMIUM":
+        status_data['status'] = 'hard_filter_premium_uptrend'
+        status_data['reason'] = (
+            f'🛑 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ: Покупка в PREMIUM при UpTrend.\n'
+            f'Цена уже выросла на {position_in_range_pct:.1f}% от минимума.\n'
+            f'Входить в BUY поздно — ждём откат в Discount или разворот.'
         )
         send_debug_notification(status_data)
         return
@@ -752,7 +859,8 @@ def run_analysis_cycle():
     logger.info(f"   💰 Цена: ${current_price:.2f}")
     logger.info(f"   📈 Swing Тренд: {swing_trend}")
     logger.info(f"   📍 Internal Тренд: {internal_trend}")
-    logger.info(f"   🎯 Зона: {current_zone}")
+    logger.info(f"   🎯 Зона: {current_zone} ({position_in_range_pct:.1f}%)")
+    logger.info(f"   📐 Диапазон: ${global_low:.2f} - ${global_high:.2f}")
     logger.info(f"   🔥 Swing сигналы: {swing_signals}")
     logger.info(f"   📊 Internal сигналы: {internal_signals}")
     logger.info("=" * 60)
@@ -841,7 +949,7 @@ def start_watcher():
     """
     Инициализация наблюдателя
     """
-    logger.info("🛰 Astra Watcher v2.2 инициализирован")
+    logger.info("🛰 Astra Watcher v2.3 инициализирован (с жёстким фиксом зон)")
 
 
 if __name__ == "__main__":
