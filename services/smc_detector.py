@@ -1,11 +1,12 @@
 """
-SMC Detector v4.1 - Adaptive Impulse
-=====================================
-Изменения v4.1:
-- FRESH_SIGNAL_BARS = 25 (было 10)
-- Новый метод detect_impulse_context()
-- Определение IMPULSE_TREND, is_void_run
-- Поддержка Breakout входов
+SMC Detector v5.2 - Ultra Sensitive
+====================================
+Критические изменения:
+- FRESH_SIGNAL_BARS = 25 (помним пробой дольше)
+- IMPULSE_CANDLE_THRESHOLD = 1.5 (чувствительность к импульсу)
+- has_breakout: цена < минимума 20 свечей
+- is_void_run: цена в пределах 0.5% от минимума 250 свечей
+- is_impulse: движение > 1.5x средней свечи
 """
 
 import pandas as pd
@@ -17,7 +18,7 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# КОНСТАНТЫ v4.1
+# КОНСТАНТЫ v5.2 ULTRA SENSITIVE
 # ============================================================================
 
 BULLISH = 1
@@ -30,11 +31,16 @@ DEFAULT_INTERNAL_RIGHT = 5
 DEFAULT_SWING_LEFT = 50
 DEFAULT_SWING_RIGHT = 50
 
-# v4.1: Увеличен порог свежести для импульсов
-FRESH_SIGNAL_BARS = 25         # Было 10, стало 25 — помним пробой дольше
-LOOKBACK_BARS = 250            # Глубина анализа
-IMPULSE_THRESHOLD = 3          # Минимум BOS для определения импульса
-VOID_RUN_THRESHOLD = 0.02      # 2% за пределами исторического экстремума
+# v5.2 Ultra Sensitive параметры
+FRESH_SIGNAL_BARS = 25              # Свежий сигнал (было 10)
+LOOKBACK_BARS = 250                 # Глубина анализа
+
+# Параметры детекции импульса v5.2
+IMPULSE_CANDLE_THRESHOLD = 1.5      # 1.5x средней свечи = импульс
+IMPULSE_LOOKBACK = 15               # Окно для расчёта импульса
+BREAKOUT_LOOKBACK = 20              # Пробой = ниже минимума N свечей
+VOID_RUN_THRESHOLD = 0.005          # 0.5% от экстремума = void run
+IMPULSE_THRESHOLD = 2               # Минимум BOS для IMPULSE_TREND
 
 
 # ============================================================================
@@ -43,16 +49,14 @@ VOID_RUN_THRESHOLD = 0.02      # 2% за пределами историческ
 
 @dataclass
 class PivotPoint:
-    """Pivot точка с полной информацией"""
     price: float = 0.0
     bar_index: int = 0
     bar_time: str = ""
     is_high: bool = True
 
 
-@dataclass 
+@dataclass
 class StructureBreak:
-    """Событие пробоя структуры"""
     break_type: str = ""
     price: float = 0.0
     bar_index: int = 0
@@ -63,21 +67,12 @@ class StructureBreak:
     break_by_wick: bool = False
 
 
-@dataclass
-class TrendState:
-    """Состояние тренда"""
-    bias: int = NEUTRAL
-    pivot_high: PivotPoint = field(default_factory=PivotPoint)
-    pivot_low: PivotPoint = field(default_factory=PivotPoint)
-    last_break_index: int = 0
-
-
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================================
 
 def sanitize_for_json(obj: Any) -> Any:
-    """Рекурсивная конвертация numpy типов в стандартные Python типы"""
+    """Конвертация numpy типов в Python типы для JSON"""
     if isinstance(obj, dict):
         return {k: sanitize_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -104,9 +99,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # ============================================================================
 
 class SMCDetector:
-    """
-    SMC Detector v4.1 с поддержкой Adaptive Impulse
-    """
+    """SMC Detector v5.2 Ultra Sensitive"""
     
     def __init__(self):
         self.analysis_count = 0
@@ -116,7 +109,6 @@ class SMCDetector:
         self.swing_right = DEFAULT_SWING_RIGHT
     
     def reset(self):
-        """Сброс состояния"""
         self.analysis_count = 0
         logger.debug("SMC Detector reset")
     
@@ -177,16 +169,16 @@ class SMCDetector:
                                    pivot_highs: List[PivotPoint],
                                    pivot_lows: List[PivotPoint],
                                    structure_name: str = "swing") -> Tuple[List[StructureBreak], List[StructureBreak], int]:
-        """Bar-by-bar сканирование истории для BOS/CHoCH"""
-        all_choch: List[StructureBreak] = []
-        all_bos: List[StructureBreak] = []
+        """Bar-by-bar сканирование истории"""
+        all_choch = []
+        all_bos = []
         
         if not pivot_highs and not pivot_lows:
             return all_choch, all_bos, NEUTRAL
         
         current_trend = NEUTRAL
-        active_pivot_high: Optional[PivotPoint] = None
-        active_pivot_low: Optional[PivotPoint] = None
+        active_pivot_high = None
+        active_pivot_low = None
         ph_idx = 0
         pl_idx = 0
         
@@ -210,7 +202,7 @@ class SMCDetector:
                 active_pivot_low = pivot_lows[pl_idx]
                 pl_idx += 1
             
-            # Проверяем пробой Pivot High (Bullish break)
+            # Bullish break
             if active_pivot_high and active_pivot_high.price > 0:
                 if current_high > active_pivot_high.price:
                     is_choch = (current_trend == BEARISH)
@@ -236,7 +228,7 @@ class SMCDetector:
                     current_trend = BULLISH
                     active_pivot_high = None
             
-            # Проверяем пробой Pivot Low (Bearish break)
+            # Bearish break
             if active_pivot_low and active_pivot_low.price > 0:
                 if current_low < active_pivot_low.price:
                     is_choch = (current_trend == BULLISH)
@@ -265,7 +257,6 @@ class SMCDetector:
         return all_choch, all_bos, current_trend
     
     def _structure_break_to_dict(self, sb: StructureBreak) -> Dict:
-        """Конвертация StructureBreak в словарь"""
         return {
             'type': sb.break_type,
             'price': float(sb.price),
@@ -282,7 +273,7 @@ class SMCDetector:
     # ========================================================================
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
-        """Определение структуры рынка с bar-by-bar replay"""
+        """Определение структуры рынка"""
         result = {
             'all_internal_choch': [], 'all_internal_bos': [],
             'all_swing_choch': [], 'all_swing_bos': [],
@@ -296,7 +287,7 @@ class SMCDetector:
         if len(df) < 20:
             return result
         
-        # Internal Structure
+        # Internal structure
         int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
         int_all_choch, int_all_bos, int_trend = self._detect_structure_history(df, int_pivot_highs, int_pivot_lows, "internal")
         
@@ -311,7 +302,7 @@ class SMCDetector:
         if int_pivot_lows:
             result['internal_pivot_low'] = int_pivot_lows[-1].price
         
-        # Swing Structure
+        # Swing structure
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(df, sw_pivot_highs, sw_pivot_lows, "swing")
         
@@ -326,124 +317,166 @@ class SMCDetector:
         if sw_pivot_lows:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
-        logger.info(f"Structure: Internal={result['internal_trend']} (PH:{result['internal_pivot_high']:.2f}, PL:{result['internal_pivot_low']:.2f}), "
-                   f"Swing={result['swing_trend']} (PH:{result['swing_pivot_high']:.2f}, PL:{result['swing_pivot_low']:.2f})")
+        logger.info(f"Structure: Internal={result['internal_trend']}, Swing={result['swing_trend']}")
         
         return result
     
     # ========================================================================
-    # IMPULSE CONTEXT DETECTION (v4.1 NEW!)
+    # v5.2 ULTRA SENSITIVE IMPULSE DETECTION
     # ========================================================================
     
-    def detect_impulse_context(self, df: pd.DataFrame, analysis_result: Dict) -> Dict:
+    def detect_impulse_context_v52(self, df: pd.DataFrame, analysis_result: Dict) -> Dict:
         """
-        🔥 НОВЫЙ МЕТОД v4.1: Определяет контекст импульса
+        v5.2 Ultra Sensitive детекция импульса
         
-        Используется для Impulse Override в watcher.py
-        
-        Returns:
-            {
-                'market_condition': 'IMPULSE_TREND' | 'STRONG_TREND' | 'RANGING',
-                'is_void_run': True/False,
-                'impulse_strength': 0-100,
-                'impulse_direction': 'BULLISH' | 'BEARISH' | 'NONE',
-                'allow_discount_sell': True/False,
-                'allow_premium_buy': True/False,
-                'fresh_bos_count': int,
-                'consecutive_bos': int
-            }
+        Флаги:
+        - has_breakout: цена НИЖЕ минимума последних 20 свечей (или ВЫШЕ максимума)
+        - is_void_run: цена в пределах 0.5% от глобального экстремума
+        - is_impulse: движение > 1.5x средней свечи за 15 баров
         """
         context = {
             'market_condition': 'RANGING',
+            'has_breakout': False,
             'is_void_run': False,
+            'is_impulse': False,
             'impulse_strength': 0,
             'impulse_direction': 'NONE',
             'allow_discount_sell': False,
             'allow_premium_buy': False,
-            'fresh_bos_count': 0,
-            'consecutive_bos': 0
+            'breakout_type': None,
+            'void_run_type': None,
+            'override_reason': ''
         }
         
         try:
-            if len(df) < 50:
+            if len(df) < LOOKBACK_BARS:
                 return context
             
-            current_price = float(df['close'].iloc[-1])
+            current_close = float(df['close'].iloc[-1])
+            current_high = float(df['high'].iloc[-1])
+            current_low = float(df['low'].iloc[-1])
             
-            # Исторические экстремумы за LOOKBACK_BARS
-            lookback_df = df.tail(LOOKBACK_BARS)
-            historical_high = float(lookback_df['high'].max())
-            historical_low = float(lookback_df['low'].min())
+            # Глобальные экстремумы (250 свечей)
+            global_high = float(df['high'].max())
+            global_low = float(df['low'].min())
             
-            # Проверка Void Run (пробой исторического экстремума)
-            low_threshold = historical_low * (1 + VOID_RUN_THRESHOLD)
-            high_threshold = historical_high * (1 - VOID_RUN_THRESHOLD)
+            # Локальные экстремумы (20 свечей для breakout)
+            recent_df = df.tail(BREAKOUT_LOOKBACK)
+            local_high = float(recent_df['high'].max())
+            local_low = float(recent_df['low'].min())
             
-            if current_price < low_threshold:
-                context['is_void_run'] = True
-                context['impulse_direction'] = 'BEARISH'
-                logger.info(f"🔥 VOID RUN DETECTED: Price {current_price:.2f} < Historical Low {historical_low:.2f}")
-            elif current_price > high_threshold:
-                context['is_void_run'] = True
-                context['impulse_direction'] = 'BULLISH'
-                logger.info(f"🔥 VOID RUN DETECTED: Price {current_price:.2f} > Historical High {historical_high:.2f}")
+            # Средняя свеча за IMPULSE_LOOKBACK баров
+            impulse_df = df.tail(IMPULSE_LOOKBACK)
+            candle_ranges = (impulse_df['high'] - impulse_df['low']).values
+            avg_candle = float(np.mean(candle_ranges)) if len(candle_ranges) > 0 else 0
             
-            # Подсчёт свежих BOS
-            fresh_swing_bos = analysis_result.get('swing_bos', [])
-            fresh_internal_bos = analysis_result.get('internal_bos', [])
+            # Движение за IMPULSE_LOOKBACK баров
+            impulse_high = float(impulse_df['high'].max())
+            impulse_low = float(impulse_df['low'].min())
+            recent_move = impulse_high - impulse_low
             
-            bearish_bos_count = sum(1 for b in fresh_swing_bos if 'BEARISH' in b.get('type', ''))
-            bullish_bos_count = sum(1 for b in fresh_swing_bos if 'BULLISH' in b.get('type', ''))
+            override_reasons = []
             
-            context['fresh_bos_count'] = len(fresh_swing_bos)
+            # ================================================================
+            # 1. HAS_BREAKOUT: Цена пробила локальный экстремум
+            # ================================================================
             
-            # Определение направления импульса
-            if bearish_bos_count >= IMPULSE_THRESHOLD:
-                context['market_condition'] = 'IMPULSE_TREND'
-                context['impulse_direction'] = 'BEARISH'
-                context['impulse_strength'] = min(100, bearish_bos_count * 25)
+            # Исключаем текущую свечу из расчёта локального минимума
+            if len(df) > BREAKOUT_LOOKBACK:
+                lookback_df = df.iloc[-(BREAKOUT_LOOKBACK + 1):-1]  # 20 свечей БЕЗ текущей
+                local_low_excl = float(lookback_df['low'].min())
+                local_high_excl = float(lookback_df['high'].max())
+            else:
+                local_low_excl = local_low
+                local_high_excl = local_high
+            
+            # Bearish breakout: текущая цена НИЖЕ минимума предыдущих 20 свечей
+            if current_close < local_low_excl:
+                context['has_breakout'] = True
+                context['breakout_type'] = 'BEARISH'
                 context['allow_discount_sell'] = True
-                context['consecutive_bos'] = bearish_bos_count
-                logger.info(f"⚡ IMPULSE TREND BEARISH: {bearish_bos_count} BOS detected")
-                
-            elif bullish_bos_count >= IMPULSE_THRESHOLD:
-                context['market_condition'] = 'IMPULSE_TREND'
-                context['impulse_direction'] = 'BULLISH'
-                context['impulse_strength'] = min(100, bullish_bos_count * 25)
+                override_reasons.append(f"📉 Пробой минимума 20 свечей (цена {current_close:.2f} < {local_low_excl:.2f})")
+                logger.info(f"v5.2 BREAKOUT DETECTED: {current_close:.2f} < {local_low_excl:.2f}")
+            
+            # Bullish breakout: текущая цена ВЫШЕ максимума предыдущих 20 свечей
+            if current_close > local_high_excl:
+                context['has_breakout'] = True
+                context['breakout_type'] = 'BULLISH'
                 context['allow_premium_buy'] = True
-                context['consecutive_bos'] = bullish_bos_count
-                logger.info(f"⚡ IMPULSE TREND BULLISH: {bullish_bos_count} BOS detected")
+                override_reasons.append(f"📈 Пробой максимума 20 свечей (цена {current_close:.2f} > {local_high_excl:.2f})")
+                logger.info(f"v5.2 BREAKOUT DETECTED: {current_close:.2f} > {local_high_excl:.2f}")
+            
+            # ================================================================
+            # 2. IS_VOID_RUN: Цена у глобального экстремума (0.5%)
+            # ================================================================
+            
+            void_low_threshold = global_low * (1 + VOID_RUN_THRESHOLD)  # +0.5%
+            void_high_threshold = global_high * (1 - VOID_RUN_THRESHOLD)  # -0.5%
+            
+            # Bearish void run: у самого дна
+            if current_close <= void_low_threshold:
+                context['is_void_run'] = True
+                context['void_run_type'] = 'BEARISH'
+                context['allow_discount_sell'] = True
+                override_reasons.append(f"🕳️ Void Run: цена {current_close:.2f} у дна {global_low:.2f} (порог {void_low_threshold:.2f})")
+                logger.info(f"v5.2 VOID RUN DETECTED: {current_close:.2f} <= {void_low_threshold:.2f}")
+            
+            # Bullish void run: у самого верха
+            if current_close >= void_high_threshold:
+                context['is_void_run'] = True
+                context['void_run_type'] = 'BULLISH'
+                context['allow_premium_buy'] = True
+                override_reasons.append(f"🕳️ Void Run: цена {current_close:.2f} у вершины {global_high:.2f}")
+                logger.info(f"v5.2 VOID RUN DETECTED: {current_close:.2f} >= {void_high_threshold:.2f}")
+            
+            # ================================================================
+            # 3. IS_IMPULSE: Сильное движение за последние свечи
+            # ================================================================
+            
+            if avg_candle > 0:
+                impulse_ratio = recent_move / avg_candle
                 
-            elif len(fresh_swing_bos) >= 1:
-                context['market_condition'] = 'STRONG_TREND'
-                context['impulse_strength'] = min(75, len(fresh_swing_bos) * 20)
-                
-                # Определяем направление по последнему BOS
-                if fresh_swing_bos:
-                    last_bos = fresh_swing_bos[-1]
-                    if 'BEARISH' in last_bos.get('type', ''):
+                if impulse_ratio >= IMPULSE_CANDLE_THRESHOLD:
+                    context['is_impulse'] = True
+                    context['impulse_strength'] = min(100, int(impulse_ratio * 30))
+                    
+                    # Определяем направление импульса
+                    first_close = float(impulse_df['close'].iloc[0])
+                    last_close = float(impulse_df['close'].iloc[-1])
+                    
+                    if last_close < first_close:
                         context['impulse_direction'] = 'BEARISH'
                         context['allow_discount_sell'] = True
-                    elif 'BULLISH' in last_bos.get('type', ''):
+                        override_reasons.append(f"⚡ Медвежий импульс {context['impulse_strength']}% (движение {recent_move:.2f} > {avg_candle * IMPULSE_CANDLE_THRESHOLD:.2f})")
+                    else:
                         context['impulse_direction'] = 'BULLISH'
                         context['allow_premium_buy'] = True
+                        override_reasons.append(f"⚡ Бычий импульс {context['impulse_strength']}%")
+                    
+                    logger.info(f"v5.2 IMPULSE DETECTED: ratio={impulse_ratio:.2f}, strength={context['impulse_strength']}%")
             
-            # Void Run автоматически разрешает торговлю в экстремальных зонах
-            if context['is_void_run']:
+            # ================================================================
+            # 4. MARKET CONDITION
+            # ================================================================
+            
+            swing_bos_count = len(analysis_result.get('swing_bos', []))
+            swing_choch_count = len(analysis_result.get('swing_choch', []))
+            
+            if context['has_breakout'] or context['is_void_run'] or swing_bos_count >= IMPULSE_THRESHOLD:
                 context['market_condition'] = 'IMPULSE_TREND'
-                context['impulse_strength'] = max(context['impulse_strength'], 80)
-                if context['impulse_direction'] == 'BEARISH':
-                    context['allow_discount_sell'] = True
-                elif context['impulse_direction'] == 'BULLISH':
-                    context['allow_premium_buy'] = True
+            elif context['is_impulse'] or swing_bos_count >= 1:
+                context['market_condition'] = 'STRONG_TREND'
+            else:
+                context['market_condition'] = 'RANGING'
             
-            logger.info(f"Impulse Context: {context['market_condition']}, "
-                       f"Direction: {context['impulse_direction']}, "
-                       f"Strength: {context['impulse_strength']}%, "
-                       f"VoidRun: {context['is_void_run']}")
+            context['override_reason'] = ' | '.join(override_reasons) if override_reasons else ''
+            
+            logger.info(f"v5.2 Impulse Context: condition={context['market_condition']}, "
+                       f"breakout={context['has_breakout']}, void_run={context['is_void_run']}, "
+                       f"impulse={context['is_impulse']} ({context['impulse_strength']}%)")
             
         except Exception as e:
-            logger.error(f"Error in detect_impulse_context: {e}")
+            logger.error(f"Error in detect_impulse_context_v52: {e}")
         
         return context
     
@@ -452,7 +485,6 @@ class SMCDetector:
     # ========================================================================
     
     def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
-        """Детекция Order Blocks"""
         order_blocks = {'internal': [], 'swing': []}
         
         try:
@@ -493,8 +525,6 @@ class SMCDetector:
             order_blocks['internal'] = order_blocks['internal'][-5:]
             order_blocks['swing'] = order_blocks['swing'][-3:]
             
-            logger.info(f"Order Blocks: Internal={len(order_blocks['internal'])}, Swing={len(order_blocks['swing'])}")
-            
         except Exception as e:
             logger.error(f"Error detecting order blocks: {e}")
         
@@ -505,7 +535,6 @@ class SMCDetector:
     # ========================================================================
     
     def detect_fvg(self, df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
-        """Детекция Fair Value Gaps"""
         fvg_list = []
         
         try:
@@ -513,9 +542,8 @@ class SMCDetector:
                 return fvg_list
             
             recent_df = df.tail(lookback).reset_index(drop=True)
-            current_price = float(df['close'].iloc[-1])
             atr = self._calculate_atr(df)
-            min_gap = atr * 0.3 if atr > 0 else current_price * 0.0003
+            min_gap = atr * 0.3 if atr > 0 else 1.0
             
             for i in range(1, len(recent_df) - 1):
                 candle1 = recent_df.iloc[i - 1]
@@ -550,7 +578,6 @@ class SMCDetector:
                         })
             
             fvg_list = fvg_list[-5:]
-            logger.info(f"FVG detected: {len(fvg_list)}")
             
         except Exception as e:
             logger.error(f"Error detecting FVG: {e}")
@@ -562,7 +589,6 @@ class SMCDetector:
     # ========================================================================
     
     def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
-        """Детекция уровней ликвидности"""
         liquidity = []
         
         try:
@@ -575,68 +601,23 @@ class SMCDetector:
             
             for i in range(3, len(recent_df) - 3):
                 if highs[i] > max(highs[i-3:i]) and highs[i] > max(highs[i+1:i+4]):
-                    liquidity.append({
-                        'type': 'RESISTANCE',
-                        'price': float(highs[i]),
-                        'strength': 1
-                    })
-            
-            for i in range(3, len(recent_df) - 3):
+                    liquidity.append({'type': 'RESISTANCE', 'price': float(highs[i]), 'strength': 1})
+                
                 if lows[i] < min(lows[i-3:i]) and lows[i] < min(lows[i+1:i+4]):
-                    liquidity.append({
-                        'type': 'SUPPORT',
-                        'price': float(lows[i]),
-                        'strength': 1
-                    })
+                    liquidity.append({'type': 'SUPPORT', 'price': float(lows[i]), 'strength': 1})
             
-            liquidity = self._cluster_levels(liquidity)
-            liquidity = sorted(liquidity, key=lambda x: x['strength'], reverse=True)[:4]
-            
-            logger.info(f"Liquidity levels: {len(liquidity)}")
+            liquidity = sorted(liquidity, key=lambda x: x['price'], reverse=True)[:4]
             
         except Exception as e:
             logger.error(f"Error detecting liquidity: {e}")
         
         return liquidity
     
-    def _cluster_levels(self, levels: List[Dict], threshold: float = 0.002) -> List[Dict]:
-        """Группировка близких уровней"""
-        if not levels:
-            return []
-        
-        sorted_levels = sorted(levels, key=lambda x: x['price'])
-        clusters = []
-        current_cluster = [sorted_levels[0]]
-        
-        for level in sorted_levels[1:]:
-            cluster_avg = sum(l['price'] for l in current_cluster) / len(current_cluster)
-            if abs(level['price'] - cluster_avg) / cluster_avg < threshold:
-                current_cluster.append(level)
-            else:
-                avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-                clusters.append({
-                    'type': current_cluster[0]['type'],
-                    'price': float(avg_price),
-                    'strength': len(current_cluster)
-                })
-                current_cluster = [level]
-        
-        if current_cluster:
-            avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-            clusters.append({
-                'type': current_cluster[0]['type'],
-                'price': float(avg_price),
-                'strength': len(current_cluster)
-            })
-        
-        return clusters
-    
     # ========================================================================
     # EQUAL HIGHS/LOWS
     # ========================================================================
     
     def detect_equal_highs_lows(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
-        """Детекция Equal Highs/Lows"""
         equal_levels = {'eqh': [], 'eql': []}
         
         try:
@@ -647,12 +628,15 @@ class SMCDetector:
             threshold = atr * 0.1 if atr > 0 else df['close'].iloc[-1] * 0.001
             recent_df = df.tail(lookback)
             
-            # Swing highs
             swing_highs = []
+            swing_lows = []
+            
             for i in range(2, len(recent_df) - 2):
-                if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and \
-                   recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
+                if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
                     swing_highs.append({'price': float(recent_df['high'].iloc[i]), 'index': i})
+                
+                if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
+                    swing_lows.append({'price': float(recent_df['low'].iloc[i]), 'index': i})
             
             # Equal Highs
             for i in range(len(swing_highs) - 1):
@@ -660,18 +644,7 @@ class SMCDetector:
                     if abs(swing_highs[i]['price'] - swing_highs[j]['price']) < threshold:
                         avg_price = (swing_highs[i]['price'] + swing_highs[j]['price']) / 2
                         if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eqh']):
-                            equal_levels['eqh'].append({
-                                'price': float(avg_price),
-                                'type': 'EQUAL_HIGHS',
-                                'touches': 2
-                            })
-            
-            # Swing lows
-            swing_lows = []
-            for i in range(2, len(recent_df) - 2):
-                if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and \
-                   recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
-                    swing_lows.append({'price': float(recent_df['low'].iloc[i]), 'index': i})
+                            equal_levels['eqh'].append({'price': float(avg_price), 'type': 'EQUAL_HIGHS', 'touches': 2})
             
             # Equal Lows
             for i in range(len(swing_lows) - 1):
@@ -679,16 +652,10 @@ class SMCDetector:
                     if abs(swing_lows[i]['price'] - swing_lows[j]['price']) < threshold:
                         avg_price = (swing_lows[i]['price'] + swing_lows[j]['price']) / 2
                         if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eql']):
-                            equal_levels['eql'].append({
-                                'price': float(avg_price),
-                                'type': 'EQUAL_LOWS',
-                                'touches': 2
-                            })
+                            equal_levels['eql'].append({'price': float(avg_price), 'type': 'EQUAL_LOWS', 'touches': 2})
             
             equal_levels['eqh'] = equal_levels['eqh'][-3:]
             equal_levels['eql'] = equal_levels['eql'][-3:]
-            
-            logger.info(f"Equal levels: EQH={len(equal_levels['eqh'])}, EQL={len(equal_levels['eql'])}")
             
         except Exception as e:
             logger.error(f"Error detecting EQH/EQL: {e}")
@@ -700,7 +667,6 @@ class SMCDetector:
     # ========================================================================
     
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Расчёт ATR"""
         try:
             high = df['high']
             low = df['low']
@@ -717,27 +683,6 @@ class SMCDetector:
         except:
             return 0.0
     
-    def _get_empty_zones(self) -> Dict:
-        return {
-            'premium': {'top': 0.0, 'bottom': 0.0},
-            'equilibrium': {'top': 0.0, 'bottom': 0.0, 'price': 0.0},
-            'discount': {'top': 0.0, 'bottom': 0.0},
-            'current_zone': 'UNKNOWN',
-            'range_high': 0.0,
-            'range_low': 0.0,
-            'range_source': 'NONE',
-            'position_in_range_pct': 50.0
-        }
-    
-    def _get_empty_advanced_data(self) -> Dict:
-        return {
-            "key_levels": {"DH": 0.0, "DL": 0.0, "PDH": 0.0, "PDL": 0.0, 
-                          "Equilibrium_Price": 0.0, "Current_Zone": "UNKNOWN"},
-            "structure_points": {"nearest_swing_high": 0.0, "nearest_swing_low": 0.0},
-            "range": {"high": 0.0, "low": 0.0, "size": 0.0, "source": "NONE"},
-            "zones": self._get_empty_zones()
-        }
-    
     def _get_empty_result(self) -> Dict:
         return sanitize_for_json({
             'order_blocks': [], 'order_blocks_internal': [], 'order_blocks_swing': [],
@@ -752,16 +697,13 @@ class SMCDetector:
             'trend': 'NEUTRAL', 'internal_trend': 'NEUTRAL',
             'internal_pivot_high': 0.0, 'internal_pivot_low': 0.0,
             'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0,
-            'advanced': self._get_empty_advanced_data(),
+            'advanced': {}, 'signals_count': 0,
             'impulse_context': {
                 'market_condition': 'RANGING',
-                'is_void_run': False,
-                'impulse_strength': 0,
-                'impulse_direction': 'NONE',
-                'allow_discount_sell': False,
-                'allow_premium_buy': False
-            },
-            'signals_count': 0
+                'has_breakout': False, 'is_void_run': False, 'is_impulse': False,
+                'impulse_strength': 0, 'impulse_direction': 'NONE',
+                'allow_discount_sell': False, 'allow_premium_buy': False
+            }
         })
     
     # ========================================================================
@@ -769,9 +711,7 @@ class SMCDetector:
     # ========================================================================
     
     def analyze(self, df) -> Dict:
-        """
-        Полный SMC анализ v4.1 с Impulse Context
-        """
+        """Полный SMC анализ v5.2 Ultra Sensitive"""
         try:
             if isinstance(df, list):
                 if not df:
@@ -779,22 +719,19 @@ class SMCDetector:
                 df = pd.DataFrame(df)
             
             if not isinstance(df, pd.DataFrame):
-                logger.error(f"Invalid data type: {type(df)}")
                 return self._get_empty_result()
             
             required = ['open', 'high', 'low', 'close']
             if not all(col in df.columns for col in required):
-                logger.error("Missing required columns")
                 return self._get_empty_result()
             
             if len(df) < 20:
-                logger.warning(f"Insufficient data: {len(df)} bars")
                 return self._get_empty_result()
             
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v5.2 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
             # 1. Market Structure
             market_structure = self.detect_market_structure(df)
@@ -811,7 +748,7 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # Сборка результата
+            # Собираем результат
             all_order_blocks = order_blocks['internal'] + order_blocks['swing']
             fresh_choch = market_structure['internal_choch'] + market_structure['swing_choch']
             fresh_bos = market_structure['internal_bos'] + market_structure['swing_bos']
@@ -844,23 +781,19 @@ class SMCDetector:
                 'swing_pivot_low': market_structure['swing_pivot_low'],
                 'eqh': equal_levels['eqh'],
                 'eql': equal_levels['eql'],
-                'advanced': self._get_empty_advanced_data()
+                'advanced': {}
             }
             
-            # 6. Impulse Context (v4.1 NEW!)
-            impulse_context = self.detect_impulse_context(df, result)
+            # 6. v5.2 Impulse Context
+            impulse_context = self.detect_impulse_context_v52(df, result)
             result['impulse_context'] = impulse_context
             
-            # Счётчик
-            total = (len(all_order_blocks) + len(fvg) + len(liquidity) + 
-                    len(all_choch) + len(all_bos) + 
-                    len(equal_levels['eqh']) + len(equal_levels['eql']))
+            total = len(all_order_blocks) + len(fvg) + len(liquidity) + len(all_choch) + len(all_bos)
             result['signals_count'] = total
             
-            logger.info(f"SMC Result: Signals={total} | "
-                       f"Trend: I={market_structure['internal_trend']}, S={market_structure['swing_trend']} | "
-                       f"Impulse: {impulse_context['market_condition']} ({impulse_context['impulse_strength']}%) | "
-                       f"OB:{len(all_order_blocks)} FVG:{len(fvg)} CHoCH:{len(all_choch)} BOS:{len(all_bos)}")
+            logger.info(f"SMC v5.2 Result: Signals={total} | Trend={market_structure['swing_trend']} | "
+                       f"Impulse: breakout={impulse_context['has_breakout']}, void={impulse_context['is_void_run']}, "
+                       f"impulse={impulse_context['is_impulse']}")
             
             return sanitize_for_json(result)
             
@@ -873,46 +806,3 @@ class SMCDetector:
 
 # Глобальный экземпляр
 smc_detector = SMCDetector()
-
-
-# ============================================================================
-# ТЕСТ
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("SMC Detector v4.1 - Adaptive Impulse")
-    print(f"FRESH_SIGNAL_BARS = {FRESH_SIGNAL_BARS}")
-    print(f"IMPULSE_THRESHOLD = {IMPULSE_THRESHOLD}")
-    print("=" * 60)
-    
-    # Тест
-    import numpy as np
-    np.random.seed(42)
-    n = 250
-    
-    base_price = 2650
-    prices = [base_price]
-    for i in range(1, n):
-        trend = 0.1 if i < 100 else -0.15 if i < 180 else 0.2
-        change = trend + np.random.randn() * 2
-        prices.append(prices[-1] + change)
-    
-    data = []
-    for i, close in enumerate(prices):
-        high = close + abs(np.random.randn()) * 3
-        low = close - abs(np.random.randn()) * 3
-        open_price = prices[i-1] if i > 0 else close
-        data.append({'open': open_price, 'high': high, 'low': low, 'close': close})
-    
-    df = pd.DataFrame(data)
-    result = smc_detector.analyze(df)
-    
-    print(f"\n📊 РЕЗУЛЬТАТ:")
-    print(f"   Цена: ${df['close'].iloc[-1]:.2f}")
-    print(f"   Swing Trend: {result['trend']}")
-    print(f"   Impulse: {result['impulse_context']['market_condition']}")
-    print(f"   Strength: {result['impulse_context']['impulse_strength']}%")
-    print(f"   VoidRun: {result['impulse_context']['is_void_run']}")
-    print(f"   Fresh BOS: {len(result['swing_bos'])}")
-    print("\n✅ Тест пройден!")
