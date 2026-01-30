@@ -7,6 +7,7 @@ SMC Detector v5.2 - Ultra Sensitive
 - has_breakout: цена < минимума 20 свечей
 - is_void_run: цена в пределах 0.5% от минимума 250 свечей
 - is_impulse: движение > 1.5x средней свечи
+- ИСПРАВЛЕНО: advanced.key_levels.Current_Zone для фронтенда
 """
 
 import pandas as pd
@@ -41,6 +42,10 @@ IMPULSE_LOOKBACK = 15               # Окно для расчёта импул�
 BREAKOUT_LOOKBACK = 20              # Пробой = ниже минимума N свечей
 VOID_RUN_THRESHOLD = 0.005          # 0.5% от экстремума = void run
 IMPULSE_THRESHOLD = 2               # Минимум BOS для IMPULSE_TREND
+
+# Пороги зон
+PREMIUM_THRESHOLD = 66.6            # > 66.6% = Premium
+DISCOUNT_THRESHOLD = 33.3           # < 33.3% = Discount
 
 
 # ============================================================================
@@ -320,6 +325,181 @@ class SMCDetector:
         logger.info(f"Structure: Internal={result['internal_trend']}, Swing={result['swing_trend']}")
         
         return result
+    
+    # ========================================================================
+    # РАСЧЁТ ЗОН PREMIUM/DISCOUNT (ИСПРАВЛЕНО ДЛЯ ФРОНТЕНДА!)
+    # ========================================================================
+    
+    def calculate_zones(self, df: pd.DataFrame) -> Dict:
+        """
+        Расчёт зон Premium/Discount на основе LOOKBACK_BARS свечей
+        
+        ВАЖНО: Формат для фронтенда AIPanel.jsx:
+        analysis.advanced.key_levels.Current_Zone
+        """
+        try:
+            if len(df) < 10:
+                return self._get_empty_zones()
+            
+            # Берём последние LOOKBACK_BARS свечей (или все если меньше)
+            lookback = min(LOOKBACK_BARS, len(df))
+            recent_df = df.tail(lookback)
+            
+            # Глобальные экстремумы
+            h_max = float(recent_df['high'].max())
+            l_min = float(recent_df['low'].min())
+            current_close = float(df['close'].iloc[-1])
+            
+            # Защита от деления на ноль
+            if h_max == l_min:
+                pos_pct = 50.0
+                zone_name = "EQUILIBRIUM"
+            else:
+                # Позиция в диапазоне (0% = дно, 100% = вершина)
+                pos_pct = ((current_close - l_min) / (h_max - l_min)) * 100
+                
+                # Определяем зону
+                if pos_pct > PREMIUM_THRESHOLD:
+                    zone_name = "PREMIUM"
+                elif pos_pct < DISCOUNT_THRESHOLD:
+                    zone_name = "DISCOUNT"
+                else:
+                    zone_name = "EQUILIBRIUM"
+            
+            # Расчёт уровней для зон
+            range_size = h_max - l_min
+            equilibrium_price = (h_max + l_min) / 2
+            premium_bottom = l_min + (range_size * PREMIUM_THRESHOLD / 100)
+            discount_top = l_min + (range_size * DISCOUNT_THRESHOLD / 100)
+            
+            zones = {
+                'premium': {
+                    'top': float(h_max),
+                    'bottom': float(premium_bottom)
+                },
+                'equilibrium': {
+                    'top': float(premium_bottom),
+                    'bottom': float(discount_top),
+                    'price': float(equilibrium_price)
+                },
+                'discount': {
+                    'top': float(discount_top),
+                    'bottom': float(l_min)
+                },
+                'current_zone': zone_name,
+                'range_high': float(h_max),
+                'range_low': float(l_min),
+                'range_source': 'LOOKBACK_250',
+                'position_in_range_pct': float(round(pos_pct, 2))
+            }
+            
+            logger.info(f"Zones: {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}]")
+            
+            return zones
+            
+        except Exception as e:
+            logger.error(f"Error calculating zones: {e}")
+            return self._get_empty_zones()
+    
+    def _get_empty_zones(self) -> Dict:
+        """Пустая структура зон"""
+        return {
+            'premium': {'top': 0.0, 'bottom': 0.0},
+            'equilibrium': {'top': 0.0, 'bottom': 0.0, 'price': 0.0},
+            'discount': {'top': 0.0, 'bottom': 0.0},
+            'current_zone': 'UNKNOWN',
+            'range_high': 0.0,
+            'range_low': 0.0,
+            'range_source': 'NONE',
+            'position_in_range_pct': 50.0
+        }
+    
+    # ========================================================================
+    # РАСЧЁТ ADVANCED DATA (ДЛЯ ФРОНТЕНДА!)
+    # ========================================================================
+    
+    def calculate_advanced_data(self, df: pd.DataFrame, zones: Dict) -> Dict:
+        """
+        Расчёт advanced данных для фронтенда
+        
+        ФОРМАТ ДЛЯ AIPanel.jsx:
+        analysis.advanced.key_levels.Current_Zone
+        analysis.advanced.key_levels.Range_Percent
+        """
+        try:
+            if len(df) < 10:
+                return self._get_empty_advanced()
+            
+            # Daily High/Low
+            dh = float(df.tail(96)['high'].max())  # ~24 часа на M15
+            dl = float(df.tail(96)['low'].min())
+            
+            # Previous Day (приблизительно)
+            if len(df) > 96:
+                prev_df = df.iloc[-192:-96]
+                pdh = float(prev_df['high'].max())
+                pdl = float(prev_df['low'].min())
+            else:
+                pdh = dh
+                pdl = dl
+            
+            advanced = {
+                'key_levels': {
+                    'Current_Zone': zones.get('current_zone', 'UNKNOWN'),
+                    'Range_Percent': zones.get('position_in_range_pct', 50.0),
+                    'High_250': zones.get('range_high', 0.0),
+                    'Low_250': zones.get('range_low', 0.0),
+                    'DH': float(dh),
+                    'DL': float(dl),
+                    'PDH': float(pdh),
+                    'PDL': float(pdl),
+                    'Equilibrium_Price': zones.get('equilibrium', {}).get('price', 0.0)
+                },
+                'structure_points': {
+                    'nearest_swing_high': zones.get('range_high', 0.0),
+                    'nearest_swing_low': zones.get('range_low', 0.0)
+                },
+                'range': {
+                    'high': zones.get('range_high', 0.0),
+                    'low': zones.get('range_low', 0.0),
+                    'size': zones.get('range_high', 0.0) - zones.get('range_low', 0.0),
+                    'source': zones.get('range_source', 'LOOKBACK_250')
+                },
+                'zones': zones
+            }
+            
+            return advanced
+            
+        except Exception as e:
+            logger.error(f"Error calculating advanced data: {e}")
+            return self._get_empty_advanced()
+    
+    def _get_empty_advanced(self) -> Dict:
+        """Пустая структура advanced"""
+        return {
+            'key_levels': {
+                'Current_Zone': 'UNKNOWN',
+                'Range_Percent': 50.0,
+                'High_250': 0.0,
+                'Low_250': 0.0,
+                'DH': 0.0,
+                'DL': 0.0,
+                'PDH': 0.0,
+                'PDL': 0.0,
+                'Equilibrium_Price': 0.0
+            },
+            'structure_points': {
+                'nearest_swing_high': 0.0,
+                'nearest_swing_low': 0.0
+            },
+            'range': {
+                'high': 0.0,
+                'low': 0.0,
+                'size': 0.0,
+                'source': 'NONE'
+            },
+            'zones': self._get_empty_zones()
+        }
     
     # ========================================================================
     # v5.2 ULTRA SENSITIVE IMPULSE DETECTION
@@ -697,7 +877,8 @@ class SMCDetector:
             'trend': 'NEUTRAL', 'internal_trend': 'NEUTRAL',
             'internal_pivot_high': 0.0, 'internal_pivot_low': 0.0,
             'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0,
-            'advanced': {}, 'signals_count': 0,
+            'advanced': self._get_empty_advanced(),
+            'signals_count': 0,
             'impulse_context': {
                 'market_condition': 'RANGING',
                 'has_breakout': False, 'is_void_run': False, 'is_impulse': False,
@@ -748,6 +929,12 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
+            # 6. РАСЧЁТ ЗОН (ИСПРАВЛЕНО ДЛЯ ФРОНТЕНДА!)
+            zones = self.calculate_zones(df)
+            
+            # 7. ADVANCED DATA (ДЛЯ AIPanel.jsx!)
+            advanced = self.calculate_advanced_data(df, zones)
+            
             # Собираем результат
             all_order_blocks = order_blocks['internal'] + order_blocks['swing']
             fresh_choch = market_structure['internal_choch'] + market_structure['swing_choch']
@@ -781,10 +968,11 @@ class SMCDetector:
                 'swing_pivot_low': market_structure['swing_pivot_low'],
                 'eqh': equal_levels['eqh'],
                 'eql': equal_levels['eql'],
-                'advanced': {}
+                # ИСПРАВЛЕНО: Полная структура advanced для фронтенда!
+                'advanced': advanced
             }
             
-            # 6. v5.2 Impulse Context
+            # 8. v5.2 Impulse Context
             impulse_context = self.detect_impulse_context_v52(df, result)
             result['impulse_context'] = impulse_context
             
@@ -792,6 +980,7 @@ class SMCDetector:
             result['signals_count'] = total
             
             logger.info(f"SMC v5.2 Result: Signals={total} | Trend={market_structure['swing_trend']} | "
+                       f"Zone={zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
                        f"Impulse: breakout={impulse_context['has_breakout']}, void={impulse_context['is_void_run']}, "
                        f"impulse={impulse_context['is_impulse']}")
             
