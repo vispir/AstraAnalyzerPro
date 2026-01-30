@@ -1,649 +1,508 @@
 """
-SMC Detector v2.1 - ИСПРАВЛЕННАЯ ВЕРСИЯ
-Детектор SMC уровней (Order Blocks, FVG, BOS, CHoCH, Support/Resistance)
-Улучшенная математика на основе LuxAlgo Smart Money Concepts
+SMC Detector v4.0 - Bar-by-Bar Historical Replay
+=================================================
+Полная переработка логики на основе рекомендаций:
+- Сканирование ВСЕЙ истории свеча за свечой
+- Сохранение состояния тренда на каждом баре
+- Корректная детекция исторических BOS/CHoCH для графика
 
-ИСПРАВЛЕНИЯ v2.0:
-1. Правильное определение Pivot High/Low с подтверждением справа
-2. Корректная логика BOS/CHoCH с отслеживанием состояния
-3. Оптимизированные параметры для XAUUSD M15
-4. Улучшенная фильтрация шума
-
-ИСПРАВЛЕНИЯ v2.1:
-5. Пробитие BOS/CHoCH по HIGH/LOW (фитилям) вместо CLOSE
-   - Для бычьего пробоя: high > pivot_high.price
-   - Для медвежьего пробоя: low < pivot_low.price
-   Это важно для XAUUSD, где фитили часто снимают ликвидность
-   
-6. Premium/Discount зоны на основе swing pivot'ов
-   - Используем self.swing.pivot_high.price и self.swing.pivot_low.price
-   - Fallback на последние 50 свечей (не 250!)
-   - Более актуальные зоны для текущего дня
+Основано на логике LuxAlgo Smart Money Concepts
 """
+
 import pandas as pd
 import numpy as np
 import logging
-import json
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# КОНСТАНТЫ
+# ============================================================================
+
+BULLISH = 1
+BEARISH = -1
+NEUTRAL = 0
+
+# Параметры по умолчанию (как LuxAlgo)
+DEFAULT_INTERNAL_LEFT = 5      # Internal structure: 5 баров слева
+DEFAULT_INTERNAL_RIGHT = 5     # Internal structure: 5 баров справа
+DEFAULT_SWING_LEFT = 50        # Swing structure: 50 баров слева
+DEFAULT_SWING_RIGHT = 50       # Swing structure: 50 баров справа
+
+# Для фильтрации "свежих" сигналов для бота
+FRESH_SIGNAL_BARS = 10         # Сигналы за последние N баров считаются "свежими"
+
+
+# ============================================================================
+# СТРУКТУРЫ ДАННЫХ
+# ============================================================================
+
+@dataclass
+class PivotPoint:
+    """Pivot точка с полной информацией"""
+    price: float = 0.0
+    bar_index: int = 0
+    bar_time: str = ""
+    is_high: bool = True  # True = Pivot High, False = Pivot Low
+
+
+@dataclass 
+class StructureBreak:
+    """Событие пробоя структуры (BOS или CHoCH)"""
+    break_type: str = ""       # 'BULLISH_BOS', 'BEARISH_BOS', 'BULLISH_CHOCH', 'BEARISH_CHOCH'
+    price: float = 0.0         # Цена пробитого уровня
+    bar_index: int = 0         # Индекс бара где произошёл пробой
+    bar_time: str = ""         # Время бара
+    pivot_bar_index: int = 0   # Индекс pivot бара который был пробит
+    is_choch: bool = False     # True = смена тренда, False = продолжение
+    bars_ago: int = 0          # Сколько баров назад от текущего
+    break_by_wick: bool = False  # Пробой фитилём (high/low) без закрытия
+
+
+@dataclass
+class TrendState:
+    """Состояние тренда в определённый момент"""
+    bias: int = NEUTRAL        # BULLISH, BEARISH, NEUTRAL
+    pivot_high: PivotPoint = field(default_factory=PivotPoint)
+    pivot_low: PivotPoint = field(default_factory=PivotPoint)
+    last_break_index: int = 0  # Индекс последнего пробоя
+
+
+# ============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================================
 
 def sanitize_for_json(obj: Any) -> Any:
-    """
-    Рекурсивно конвертирует numpy типы в стандартные Python типы
-    для корректной JSON сериализации.
-    
-    numpy.bool_ -> bool
-    numpy.int64 -> int
-    numpy.float64 -> float
-    numpy.ndarray -> list
-    """
+    """Рекурсивная конвертация numpy типов в стандартные Python типы"""
     if isinstance(obj, dict):
         return {k: sanitize_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [sanitize_for_json(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(sanitize_for_json(item) for item in obj)
     elif isinstance(obj, (np.bool_, bool)):
         return bool(obj)
     elif isinstance(obj, (np.integer, int)):
         return int(obj)
     elif isinstance(obj, (np.floating, float)):
-        return float(obj)
+        val = float(obj)
+        if np.isnan(val) or np.isinf(val):
+            return 0.0
+        return val
     elif isinstance(obj, np.ndarray):
         return [sanitize_for_json(item) for item in obj.tolist()]
-    elif pd.isna(obj):
+    elif obj is None or (isinstance(obj, float) and (np.isnan(obj) or np.isinf(obj))):
         return None
     else:
         return obj
 
-# Константы
-BULLISH = 1
-BEARISH = -1
-NEUTRAL = 0
 
-
-@dataclass
-class PivotPoint:
-    """Структура для хранения pivot точки"""
-    price: float = 0.0
-    index: int = 0
-    time: str = ""
-    crossed: bool = False
-    
-    def update(self, price: float, index: int, time: str):
-        """Обновление pivot с сбросом флага crossed"""
-        if self.price != price:
-            self.price = price
-            self.index = index
-            self.time = time
-            self.crossed = False
-            return True
-        return False
-
-
-@dataclass
-class TrendState:
-    """Структура для хранения состояния тренда"""
-    bias: int = NEUTRAL
-    last_bos_price: float = 0.0
-    last_choch_price: float = 0.0
-    
-    def to_string(self) -> str:
-        if self.bias == BULLISH:
-            return "UPTREND"
-        elif self.bias == BEARISH:
-            return "DOWNTREND"
-        return "NEUTRAL"
-
-
-@dataclass
-class StructureState:
-    """Полное состояние структуры (Internal или Swing)"""
-    pivot_high: PivotPoint = field(default_factory=PivotPoint)
-    pivot_low: PivotPoint = field(default_factory=PivotPoint)
-    trend: TrendState = field(default_factory=TrendState)
-    
-    # История pivot точек
-    pivot_highs_history: List[Dict] = field(default_factory=list)
-    pivot_lows_history: List[Dict] = field(default_factory=list)
-
+# ============================================================================
+# ГЛАВНЫЙ КЛАСС
+# ============================================================================
 
 class SMCDetector:
     """
-    Детектор Smart Money Concepts уровней
-    Версия 2.0 с исправленной логикой
+    SMC Detector v4.0 с Bar-by-Bar Historical Replay
+    
+    Ключевое отличие от v3.0:
+    - Сканируем ВСЮ историю свеча за свечой
+    - Сохраняем ВСЕ события BOS/CHoCH с их индексами
+    - Можно отрисовать на графике как LuxAlgo
     """
     
     def __init__(self):
-        # Internal структура (краткосрочная)
-        self.internal = StructureState()
+        self.analysis_count = 0
         
-        # Swing структура (долгосрочная)  
-        self.swing = StructureState()
-        
-        # Кэш ATR
-        self._cached_atr: float = 0.0
-        self._cached_atr_len: int = 0
-        
-        # Счётчик вызовов для отладки
-        self._call_count: int = 0
-        
-        logger.info("SMCDetector v2.0 initialized")
+        # Параметры структуры
+        self.internal_left = DEFAULT_INTERNAL_LEFT
+        self.internal_right = DEFAULT_INTERNAL_RIGHT
+        self.swing_left = DEFAULT_SWING_LEFT
+        self.swing_right = DEFAULT_SWING_RIGHT
     
     def reset(self):
-        """Полный сброс состояния детектора"""
-        self.internal = StructureState()
-        self.swing = StructureState()
-        self._cached_atr = 0.0
-        self._cached_atr_len = 0
-        logger.info("SMCDetector state reset")
+        """Сброс состояния детектора"""
+        self.analysis_count = 0
+        logger.debug("SMC Detector reset")
     
-    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+    # ========================================================================
+    # PIVOT DETECTION
+    # ========================================================================
     
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Расчет ATR с кэшированием"""
-        try:
-            if len(df) == self._cached_atr_len and self._cached_atr > 0:
-                return self._cached_atr
-            
-            high = df['high']
-            low = df['low']
-            close = df['close']
-            
-            tr1 = high - low
-            tr2 = abs(high - close.shift(1))
-            tr3 = abs(low - close.shift(1))
-            
-            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = tr.rolling(window=min(period, len(df))).mean().iloc[-1]
-            
-            self._cached_atr = float(atr) if not pd.isna(atr) else 0.0
-            self._cached_atr_len = len(df)
-            
-            return self._cached_atr
-        except Exception as e:
-            logger.warning(f"ATR calculation error: {e}")
-            return 0.0
-    
-    def _get_time_str(self, df: pd.DataFrame, index: int) -> str:
-        """Безопасное получение времени"""
-        try:
-            if hasattr(df.index, 'strftime'):
-                return str(df.index[index])
-            elif hasattr(df.index[index], 'strftime'):
-                return df.index[index].strftime('%Y-%m-%d %H:%M:%S')
-            return str(index)
-        except:
-            return str(index)
-    
-    # ==================== PIVOT POINTS ====================
-    
-    def _find_pivot_points(self, df: pd.DataFrame, left_bars: int, right_bars: int) -> Tuple[List[Dict], List[Dict]]:
+    def _find_all_pivots(self, df: pd.DataFrame, left_bars: int, right_bars: int) -> Tuple[List[PivotPoint], List[PivotPoint]]:
         """
-        Правильное определение Pivot High/Low (как в Pine Script ta.pivothigh/ta.pivotlow)
+        Находит ВСЕ pivot точки в истории
         
         Pivot High на баре i существует, если:
-        - high[i] > всех high на барах [i-left_bars, i-1]
-        - high[i] >= всех high на барах [i+1, i+right_bars]
+        - high[i] > всех high на барах [i-left, i-1]
+        - high[i] >= всех high на барах [i+1, i+right]
         
-        Pivot Low на баре i существует, если:
-        - low[i] < всех low на барах [i-left_bars, i-1]
-        - low[i] <= всех low на барах [i+1, i+right_bars]
+        Args:
+            df: DataFrame с OHLC данными
+            left_bars: Количество баров слева для подтверждения
+            right_bars: Количество баров справа для подтверждения
+            
+        Returns:
+            (pivot_highs, pivot_lows) - списки PivotPoint
         """
         pivot_highs = []
         pivot_lows = []
         
         if len(df) < left_bars + right_bars + 1:
-            logger.warning(f"Insufficient data for pivot detection: {len(df)} bars, need {left_bars + right_bars + 1}")
             return pivot_highs, pivot_lows
         
         highs = df['high'].values
         lows = df['low'].values
         
-        # Проходим по барам, где есть достаточно данных слева и справа
+        # Сканируем историю (исключаем края где нет достаточно баров)
         for i in range(left_bars, len(df) - right_bars):
             current_high = highs[i]
             current_low = lows[i]
             
-            # === Pivot High ===
-            # Проверяем левую сторону (строго больше)
+            # Проверяем Pivot High
             left_highs = highs[i - left_bars:i]
-            is_pivot_high = current_high > np.max(left_highs) if len(left_highs) > 0 else False
+            right_highs = highs[i + 1:i + right_bars + 1]
             
-            # Проверяем правую сторону (больше или равно)
-            if is_pivot_high and right_bars > 0:
-                right_highs = highs[i + 1:i + right_bars + 1]
-                is_pivot_high = current_high >= np.max(right_highs) if len(right_highs) > 0 else False
+            if len(left_highs) > 0 and len(right_highs) > 0:
+                # Строго выше слева, >= справа (как в Pine Script)
+                if current_high > np.max(left_highs) and current_high >= np.max(right_highs):
+                    bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
+                    pivot_highs.append(PivotPoint(
+                        price=float(current_high),
+                        bar_index=i,
+                        bar_time=bar_time,
+                        is_high=True
+                    ))
             
-            if is_pivot_high:
-                pivot_highs.append({
-                    'price': float(current_high),
-                    'index': i,
-                    'time': self._get_time_str(df, i),
-                    'confirmed': True
-                })
-            
-            # === Pivot Low ===
+            # Проверяем Pivot Low
             left_lows = lows[i - left_bars:i]
-            is_pivot_low = current_low < np.min(left_lows) if len(left_lows) > 0 else False
+            right_lows = lows[i + 1:i + right_bars + 1]
             
-            if is_pivot_low and right_bars > 0:
-                right_lows = lows[i + 1:i + right_bars + 1]
-                is_pivot_low = current_low <= np.min(right_lows) if len(right_lows) > 0 else False
-            
-            if is_pivot_low:
-                pivot_lows.append({
-                    'price': float(current_low),
-                    'index': i,
-                    'time': self._get_time_str(df, i),
-                    'confirmed': True
-                })
+            if len(left_lows) > 0 and len(right_lows) > 0:
+                # Строго ниже слева, <= справа
+                if current_low < np.min(left_lows) and current_low <= np.min(right_lows):
+                    bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
+                    pivot_lows.append(PivotPoint(
+                        price=float(current_low),
+                        bar_index=i,
+                        bar_time=bar_time,
+                        is_high=False
+                    ))
         
         return pivot_highs, pivot_lows
     
-    def _find_unconfirmed_pivots(self, df: pd.DataFrame, left_bars: int) -> Tuple[Optional[Dict], Optional[Dict]]:
-        """
-        Находит потенциальные (неподтверждённые) pivot точки на последних барах
-        Эти точки ещё не имеют достаточно баров справа для подтверждения
-        """
-        if len(df) < left_bars + 1:
-            return None, None
-        
-        highs = df['high'].values
-        lows = df['low'].values
-        
-        unconfirmed_high = None
-        unconfirmed_low = None
-        
-        # Ищем в последних left_bars барах
-        for i in range(len(df) - 1, len(df) - left_bars - 1, -1):
-            if i < left_bars:
-                break
-            
-            current_high = highs[i]
-            current_low = lows[i]
-            
-            # Проверяем только левую сторону
-            left_highs = highs[i - left_bars:i]
-            left_lows = lows[i - left_bars:i]
-            
-            if unconfirmed_high is None and current_high > np.max(left_highs):
-                unconfirmed_high = {
-                    'price': float(current_high),
-                    'index': i,
-                    'time': self._get_time_str(df, i),
-                    'confirmed': False
-                }
-            
-            if unconfirmed_low is None and current_low < np.min(left_lows):
-                unconfirmed_low = {
-                    'price': float(current_low),
-                    'index': i,
-                    'time': self._get_time_str(df, i),
-                    'confirmed': False
-                }
-        
-        return unconfirmed_high, unconfirmed_low
+    # ========================================================================
+    # BAR-BY-BAR STRUCTURE DETECTION (КЛЮЧЕВОЕ ИЗМЕНЕНИЕ!)
+    # ========================================================================
     
-    # ==================== STRUCTURE BREAKS (BOS/CHoCH) ====================
-    
-    def _detect_structure_breaks(self, df: pd.DataFrame, pivot_highs: List[Dict], 
-                                  pivot_lows: List[Dict], state: StructureState,
-                                  is_internal: bool = False) -> Dict:
+    def _detect_structure_history(self, df: pd.DataFrame, 
+                                   pivot_highs: List[PivotPoint],
+                                   pivot_lows: List[PivotPoint],
+                                   structure_name: str = "swing") -> Tuple[List[StructureBreak], List[StructureBreak], int]:
         """
-        Определение BOS и CHoCH
+        🔥 ГЛАВНЫЙ МЕТОД: Bar-by-bar сканирование истории
         
-        BOS (Break of Structure): Пробой в направлении текущего тренда
-        CHoCH (Change of Character): Пробой против текущего тренда (разворот)
-        
-        ВАЖНО v2.1: Используем HIGH/LOW для определения пробоя, не CLOSE!
-        - Бычий пробой: HIGH > pivot_high.price (фитиль вверх)
-        - Медвежий пробой: LOW < pivot_low.price (фитиль вниз)
-        
-        Почему это важно для XAUUSD:
-        - Фитили часто снимают ликвидность без закрытия тела за уровнем
-        - Ждать закрытия свечи на M15 = опоздать на 15 минут
-        - Институциональные игроки охотятся за стопами фитилями
+        Логика:
+        1. Начинаем с NEUTRAL тренда
+        2. Идём по каждой свече от начала до конца
+        3. На каждом баре проверяем: пробит ли текущий pivot high/low?
+        4. Если пробит:
+           - Записываем событие (BOS или CHoCH)
+           - Обновляем тренд
+           - Ищем новый pivot для отслеживания
         
         Returns:
-            Dict с ключами 'bos' и 'choch', содержащими списки событий
+            (all_choch, all_bos, final_trend_bias)
         """
-        breaks = {'bos': [], 'choch': []}
-        structure_name = "Internal" if is_internal else "Swing"
+        all_choch: List[StructureBreak] = []
+        all_bos: List[StructureBreak] = []
         
         if not pivot_highs and not pivot_lows:
-            logger.debug(f"{structure_name}: No pivot points for structure break detection")
-            return breaks
+            return all_choch, all_bos, NEUTRAL
         
-        current_close = float(df['close'].iloc[-1])
-        current_high = float(df['high'].iloc[-1])
-        current_low = float(df['low'].iloc[-1])
+        # Инициализация состояния
+        current_trend = NEUTRAL
         
-        # Берём последний значимый pivot high
-        if pivot_highs:
-            last_pivot_high = pivot_highs[-1]
+        # Текущие pivot'ы для отслеживания (будут обновляться)
+        active_pivot_high: Optional[PivotPoint] = None
+        active_pivot_low: Optional[PivotPoint] = None
+        
+        # Индексы для поиска следующего pivot
+        ph_idx = 0  # Индекс в списке pivot_highs
+        pl_idx = 0  # Индекс в списке pivot_lows
+        
+        # Массивы OHLC
+        highs = df['high'].values
+        lows = df['low'].values
+        closes = df['close'].values
+        total_bars = len(df)
+        
+        # ====================================================================
+        # ГЛАВНЫЙ ЦИКЛ: Идём по каждому бару
+        # ====================================================================
+        for bar_i in range(total_bars):
+            current_high = highs[bar_i]
+            current_low = lows[bar_i]
+            current_close = closes[bar_i]
+            bar_time = str(df.index[bar_i]) if hasattr(df.index, '__getitem__') else str(bar_i)
             
-            # Проверяем, это новый уровень?
-            if state.pivot_high.update(
-                last_pivot_high['price'], 
-                last_pivot_high['index'],
-                last_pivot_high['time']
-            ):
-                logger.debug(f"{structure_name}: New Pivot High at {last_pivot_high['price']:.2f}")
-        
-        # Берём последний значимый pivot low
-        if pivot_lows:
-            last_pivot_low = pivot_lows[-1]
+            # ------------------------------------------------------------------
+            # 1. Обновляем активные pivot'ы (берём последний подтверждённый до текущего бара)
+            # ------------------------------------------------------------------
             
-            if state.pivot_low.update(
-                last_pivot_low['price'],
-                last_pivot_low['index'],
-                last_pivot_low['time']
-            ):
-                logger.debug(f"{structure_name}: New Pivot Low at {last_pivot_low['price']:.2f}")
+            # Найти последний pivot high, который УЖЕ подтверждён (его bar_index < bar_i)
+            while ph_idx < len(pivot_highs) and pivot_highs[ph_idx].bar_index < bar_i:
+                active_pivot_high = pivot_highs[ph_idx]
+                ph_idx += 1
+            
+            # Найти последний pivot low
+            while pl_idx < len(pivot_lows) and pivot_lows[pl_idx].bar_index < bar_i:
+                active_pivot_low = pivot_lows[pl_idx]
+                pl_idx += 1
+            
+            # ------------------------------------------------------------------
+            # 2. Проверяем пробой Pivot High (Bullish break)
+            # ------------------------------------------------------------------
+            if active_pivot_high and active_pivot_high.price > 0:
+                # Пробой по HIGH (фитиль достиг уровня)
+                if current_high > active_pivot_high.price:
+                    # Определяем тип: CHoCH если тренд был BEARISH, иначе BOS
+                    is_choch = (current_trend == BEARISH)
+                    break_type = 'BULLISH_CHOCH' if is_choch else 'BULLISH_BOS'
+                    
+                    # Пробой фитилём без закрытия?
+                    break_by_wick = current_close <= active_pivot_high.price
+                    
+                    event = StructureBreak(
+                        break_type=break_type,
+                        price=active_pivot_high.price,
+                        bar_index=bar_i,
+                        bar_time=bar_time,
+                        pivot_bar_index=active_pivot_high.bar_index,
+                        is_choch=is_choch,
+                        bars_ago=total_bars - 1 - bar_i,  # От последнего бара
+                        break_by_wick=break_by_wick
+                    )
+                    
+                    if is_choch:
+                        all_choch.append(event)
+                    else:
+                        all_bos.append(event)
+                    
+                    # Обновляем тренд
+                    current_trend = BULLISH
+                    
+                    # Сбрасываем pivot high (ищем новый)
+                    active_pivot_high = None
+            
+            # ------------------------------------------------------------------
+            # 3. Проверяем пробой Pivot Low (Bearish break)
+            # ------------------------------------------------------------------
+            if active_pivot_low and active_pivot_low.price > 0:
+                # Пробой по LOW
+                if current_low < active_pivot_low.price:
+                    is_choch = (current_trend == BULLISH)
+                    break_type = 'BEARISH_CHOCH' if is_choch else 'BEARISH_BOS'
+                    
+                    break_by_wick = current_close >= active_pivot_low.price
+                    
+                    event = StructureBreak(
+                        break_type=break_type,
+                        price=active_pivot_low.price,
+                        bar_index=bar_i,
+                        bar_time=bar_time,
+                        pivot_bar_index=active_pivot_low.bar_index,
+                        is_choch=is_choch,
+                        bars_ago=total_bars - 1 - bar_i,
+                        break_by_wick=break_by_wick
+                    )
+                    
+                    if is_choch:
+                        all_choch.append(event)
+                    else:
+                        all_bos.append(event)
+                    
+                    current_trend = BEARISH
+                    active_pivot_low = None
         
-        # === BULLISH BREAK (пробой pivot high вверх) ===
-        # v2.1: Используем HIGH вместо CLOSE для раннего обнаружения
-        if state.pivot_high.price > 0 and not state.pivot_high.crossed:
-            # Пробой = HIGH выше уровня (фитиль пробил)
-            if current_high > state.pivot_high.price:
-                if state.trend.bias == BEARISH:
-                    # CHoCH - смена тренда с медвежьего на бычий
-                    event = {
-                        'type': 'BULLISH_CHOCH',
-                        'price': state.pivot_high.price,
-                        'time': state.pivot_high.time,
-                        'break_price': current_high,  # v2.1: фиксируем high, не close
-                        'close_price': current_close,
-                        'break_by_wick': current_close <= state.pivot_high.price,  # v2.1: флаг пробоя фитилём
-                        'internal': is_internal
-                    }
-                    breaks['choch'].append(event)
-                    state.trend.last_choch_price = state.pivot_high.price
-                    wick_note = " (WICK)" if current_close <= state.pivot_high.price else ""
-                    logger.info(f"🔄 {structure_name} BULLISH CHoCH at {state.pivot_high.price:.2f} (high: {current_high:.2f}){wick_note}")
-                else:
-                    # BOS - продолжение бычьего тренда
-                    event = {
-                        'type': 'BULLISH_BOS',
-                        'price': state.pivot_high.price,
-                        'time': state.pivot_high.time,
-                        'break_price': current_high,
-                        'close_price': current_close,
-                        'break_by_wick': current_close <= state.pivot_high.price,
-                        'internal': is_internal
-                    }
-                    breaks['bos'].append(event)
-                    state.trend.last_bos_price = state.pivot_high.price
-                    wick_note = " (WICK)" if current_close <= state.pivot_high.price else ""
-                    logger.info(f"📈 {structure_name} BULLISH BOS at {state.pivot_high.price:.2f} (high: {current_high:.2f}){wick_note}")
-                
-                state.pivot_high.crossed = True
-                state.trend.bias = BULLISH
-        
-        # === BEARISH BREAK (пробой pivot low вниз) ===
-        # v2.1: Используем LOW вместо CLOSE для раннего обнаружения
-        if state.pivot_low.price > 0 and not state.pivot_low.crossed:
-            # Пробой = LOW ниже уровня (фитиль пробил)
-            if current_low < state.pivot_low.price:
-                if state.trend.bias == BULLISH:
-                    # CHoCH - смена тренда с бычьего на медвежий
-                    event = {
-                        'type': 'BEARISH_CHOCH',
-                        'price': state.pivot_low.price,
-                        'time': state.pivot_low.time,
-                        'break_price': current_low,  # v2.1: фиксируем low, не close
-                        'close_price': current_close,
-                        'break_by_wick': current_close >= state.pivot_low.price,
-                        'internal': is_internal
-                    }
-                    breaks['choch'].append(event)
-                    state.trend.last_choch_price = state.pivot_low.price
-                    wick_note = " (WICK)" if current_close >= state.pivot_low.price else ""
-                    logger.info(f"🔄 {structure_name} BEARISH CHoCH at {state.pivot_low.price:.2f} (low: {current_low:.2f}){wick_note}")
-                else:
-                    # BOS - продолжение медвежьего тренда
-                    event = {
-                        'type': 'BEARISH_BOS',
-                        'price': state.pivot_low.price,
-                        'time': state.pivot_low.time,
-                        'break_price': current_low,
-                        'close_price': current_close,
-                        'break_by_wick': current_close >= state.pivot_low.price,
-                        'internal': is_internal
-                    }
-                    breaks['bos'].append(event)
-                    state.trend.last_bos_price = state.pivot_low.price
-                    wick_note = " (WICK)" if current_close >= state.pivot_low.price else ""
-                    logger.info(f"📉 {structure_name} BEARISH BOS at {state.pivot_low.price:.2f} (low: {current_low:.2f}){wick_note}")
-                
-                state.pivot_low.crossed = True
-                state.trend.bias = BEARISH
-        
-        return breaks
+        return all_choch, all_bos, current_trend
     
-    def detect_market_structure(self, df: pd.DataFrame, 
-                                internal_left: int = 5, internal_right: int = 2,
-                                swing_left: int = 10, swing_right: int = 5) -> Dict:
+    def _structure_break_to_dict(self, sb: StructureBreak) -> Dict:
+        """Конвертация StructureBreak в словарь для JSON"""
+        return {
+            'type': sb.break_type,
+            'price': float(sb.price),
+            'bar_index': int(sb.bar_index),
+            'time': sb.bar_time,
+            'pivot_bar_index': int(sb.pivot_bar_index),
+            'is_choch': bool(sb.is_choch),
+            'bars_ago': int(sb.bars_ago),
+            'break_by_wick': bool(sb.break_by_wick)
+        }
+    
+    # ========================================================================
+    # MARKET STRUCTURE DETECTION (ОБНОВЛЁННЫЙ)
+    # ========================================================================
+    
+    def detect_market_structure(self, df: pd.DataFrame) -> Dict:
         """
-        Определение рыночной структуры (CHoCH, BOS) для Internal и Swing
+        Определение структуры рынка с bar-by-bar replay
         
-        Рекомендуемые параметры для XAUUSD M15:
-        - internal_left: 5 (1.25 часа)
-        - internal_right: 2 (30 мин) - для более быстрого подтверждения
-        - swing_left: 10 (2.5 часа)
-        - swing_right: 5 (1.25 часа)
-        
-        Args:
-            df: DataFrame с OHLC данными
-            internal_left: Количество баров слева для internal pivot
-            internal_right: Количество баров справа для internal pivot
-            swing_left: Количество баров слева для swing pivot
-            swing_right: Количество баров справа для swing pivot
-        
-        Returns:
-            Dict со структурой рынка
+        Возвращает:
+        - Все исторические BOS/CHoCH (для графика)
+        - Свежие BOS/CHoCH (для бота, последние N баров)
+        - Текущий тренд
+        - Активные pivot уровни
         """
-        structure = {
+        result = {
+            # Все исторические события (для графика)
+            'all_internal_choch': [],
+            'all_internal_bos': [],
+            'all_swing_choch': [],
+            'all_swing_bos': [],
+            
+            # Свежие события (для бота, последние FRESH_SIGNAL_BARS баров)
             'internal_choch': [],
             'internal_bos': [],
             'swing_choch': [],
             'swing_bos': [],
+            
+            # Тренды
             'internal_trend': 'NEUTRAL',
             'swing_trend': 'NEUTRAL',
-            'internal_pivot_high': None,
-            'internal_pivot_low': None,
-            'swing_pivot_high': None,
-            'swing_pivot_low': None,
-            'debug': {}
+            
+            # Pivot уровни
+            'internal_pivot_high': 0.0,
+            'internal_pivot_low': 0.0,
+            'swing_pivot_high': 0.0,
+            'swing_pivot_low': 0.0
         }
         
-        min_bars = max(internal_left, swing_left) + max(internal_right, swing_right) + 5
+        if len(df) < 20:
+            return result
         
-        if len(df) < min_bars:
-            logger.warning(f"Insufficient data: {len(df)} bars, need at least {min_bars}")
-            return structure
+        # ====================================================================
+        # INTERNAL STRUCTURE (size=5)
+        # ====================================================================
+        int_pivot_highs, int_pivot_lows = self._find_all_pivots(
+            df, self.internal_left, self.internal_right
+        )
         
-        # ===== INTERNAL STRUCTURE =====
-        int_highs, int_lows = self._find_pivot_points(df, internal_left, internal_right)
+        int_all_choch, int_all_bos, int_trend = self._detect_structure_history(
+            df, int_pivot_highs, int_pivot_lows, "internal"
+        )
         
-        # Добавляем неподтверждённые pivot для более быстрой реакции
-        unconf_high, unconf_low = self._find_unconfirmed_pivots(df, internal_left)
+        # Конвертируем в словари
+        result['all_internal_choch'] = [self._structure_break_to_dict(sb) for sb in int_all_choch]
+        result['all_internal_bos'] = [self._structure_break_to_dict(sb) for sb in int_all_bos]
         
-        # Сохраняем историю
-        self.internal.pivot_highs_history = int_highs
-        self.internal.pivot_lows_history = int_lows
+        # Фильтруем свежие (последние FRESH_SIGNAL_BARS баров)
+        result['internal_choch'] = [
+            self._structure_break_to_dict(sb) for sb in int_all_choch 
+            if sb.bars_ago <= FRESH_SIGNAL_BARS
+        ]
+        result['internal_bos'] = [
+            self._structure_break_to_dict(sb) for sb in int_all_bos 
+            if sb.bars_ago <= FRESH_SIGNAL_BARS
+        ]
         
-        logger.debug(f"Internal pivots: {len(int_highs)} highs, {len(int_lows)} lows")
+        # Тренд
+        result['internal_trend'] = 'UPTREND' if int_trend == BULLISH else \
+                                   'DOWNTREND' if int_trend == BEARISH else 'NEUTRAL'
         
-        # Определяем breaks
-        int_breaks = self._detect_structure_breaks(df, int_highs, int_lows, self.internal, is_internal=True)
+        # Последние pivot'ы
+        if int_pivot_highs:
+            result['internal_pivot_high'] = int_pivot_highs[-1].price
+        if int_pivot_lows:
+            result['internal_pivot_low'] = int_pivot_lows[-1].price
         
-        structure['internal_choch'] = int_breaks['choch']
-        structure['internal_bos'] = int_breaks['bos']
-        structure['internal_trend'] = self.internal.trend.to_string()
+        # ====================================================================
+        # SWING STRUCTURE (size=50)
+        # ====================================================================
+        sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(
+            df, self.swing_left, self.swing_right
+        )
         
-        if int_highs:
-            structure['internal_pivot_high'] = int_highs[-1]
-        if int_lows:
-            structure['internal_pivot_low'] = int_lows[-1]
+        sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(
+            df, sw_pivot_highs, sw_pivot_lows, "swing"
+        )
         
-        # ===== SWING STRUCTURE =====
-        sw_highs, sw_lows = self._find_pivot_points(df, swing_left, swing_right)
+        result['all_swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch]
+        result['all_swing_bos'] = [self._structure_break_to_dict(sb) for sb in sw_all_bos]
         
-        self.swing.pivot_highs_history = sw_highs
-        self.swing.pivot_lows_history = sw_lows
+        result['swing_choch'] = [
+            self._structure_break_to_dict(sb) for sb in sw_all_choch 
+            if sb.bars_ago <= FRESH_SIGNAL_BARS
+        ]
+        result['swing_bos'] = [
+            self._structure_break_to_dict(sb) for sb in sw_all_bos 
+            if sb.bars_ago <= FRESH_SIGNAL_BARS
+        ]
         
-        logger.debug(f"Swing pivots: {len(sw_highs)} highs, {len(sw_lows)} lows")
+        result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else \
+                                'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
-        sw_breaks = self._detect_structure_breaks(df, sw_highs, sw_lows, self.swing, is_internal=False)
+        if sw_pivot_highs:
+            result['swing_pivot_high'] = sw_pivot_highs[-1].price
+        if sw_pivot_lows:
+            result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
-        structure['swing_choch'] = sw_breaks['choch']
-        structure['swing_bos'] = sw_breaks['bos']
-        structure['swing_trend'] = self.swing.trend.to_string()
+        # Логирование
+        logger.info(f"Structure: Internal={result['internal_trend']} "
+                   f"(PH:{result['internal_pivot_high']:.2f}, PL:{result['internal_pivot_low']:.2f}), "
+                   f"Swing={result['swing_trend']} "
+                   f"(PH:{result['swing_pivot_high']:.2f}, PL:{result['swing_pivot_low']:.2f})")
+        logger.info(f"History: I-CHoCH:{len(result['all_internal_choch'])}, I-BOS:{len(result['all_internal_bos'])}, "
+                   f"S-CHoCH:{len(result['all_swing_choch'])}, S-BOS:{len(result['all_swing_bos'])}")
+        logger.info(f"Fresh (last {FRESH_SIGNAL_BARS} bars): I-CHoCH:{len(result['internal_choch'])}, "
+                   f"I-BOS:{len(result['internal_bos'])}, S-CHoCH:{len(result['swing_choch'])}, "
+                   f"S-BOS:{len(result['swing_bos'])}")
         
-        if sw_highs:
-            structure['swing_pivot_high'] = sw_highs[-1]
-        if sw_lows:
-            structure['swing_pivot_low'] = sw_lows[-1]
-        
-        # Debug info
-        structure['debug'] = {
-            'internal_pivots_count': {'highs': len(int_highs), 'lows': len(int_lows)},
-            'swing_pivots_count': {'highs': len(sw_highs), 'lows': len(sw_lows)},
-            'current_price': float(df['close'].iloc[-1]),
-            'internal_pivot_high_price': self.internal.pivot_high.price,
-            'internal_pivot_low_price': self.internal.pivot_low.price,
-            'swing_pivot_high_price': self.swing.pivot_high.price,
-            'swing_pivot_low_price': self.swing.pivot_low.price
-        }
-        
-        logger.info(f"Structure: Internal={structure['internal_trend']} "
-                   f"(PH:{self.internal.pivot_high.price:.2f}, PL:{self.internal.pivot_low.price:.2f}), "
-                   f"Swing={structure['swing_trend']} "
-                   f"(PH:{self.swing.pivot_high.price:.2f}, PL:{self.swing.pivot_low.price:.2f})")
-        
-        return structure
+        return result
     
-    # ==================== ORDER BLOCKS ====================
+    # ========================================================================
+    # ORDER BLOCKS
+    # ========================================================================
     
-    def _find_order_block_candle(self, df: pd.DataFrame, pivot_index: int, 
-                                  direction: int, lookback: int = 10) -> Optional[Dict]:
-        """
-        Находит свечу Order Block рядом с pivot точкой
-        
-        Для BULLISH pivot (pivot low): Ищем последнюю медвежью свечу перед разворотом
-        Для BEARISH pivot (pivot high): Ищем последнюю бычью свечу перед разворотом
-        """
-        try:
-            start_idx = max(0, pivot_index - lookback)
-            
-            for i in range(pivot_index - 1, start_idx - 1, -1):
-                if i < 0:
-                    break
-                
-                candle_open = df['open'].iloc[i]
-                candle_close = df['close'].iloc[i]
-                candle_high = df['high'].iloc[i]
-                candle_low = df['low'].iloc[i]
-                
-                is_bullish_candle = candle_close > candle_open
-                is_bearish_candle = candle_close < candle_open
-                
-                # Для bullish OB ищем медвежью свечу
-                if direction == BULLISH and is_bearish_candle:
-                    return {
-                        'type': 'BULL_OB',
-                        'top': float(candle_high),
-                        'bottom': float(candle_low),
-                        'open': float(candle_open),
-                        'close': float(candle_close),
-                        'index': i,
-                        'time': self._get_time_str(df, i),
-                        'strength': float(candle_high - candle_low)
-                    }
-                
-                # Для bearish OB ищем бычью свечу
-                if direction == BEARISH and is_bullish_candle:
-                    return {
-                        'type': 'BEAR_OB',
-                        'top': float(candle_high),
-                        'bottom': float(candle_low),
-                        'open': float(candle_open),
-                        'close': float(candle_close),
-                        'index': i,
-                        'time': self._get_time_str(df, i),
-                        'strength': float(candle_high - candle_low)
-                    }
-            
-            return None
-            
-        except Exception as e:
-            logger.warning(f"Error finding OB candle: {e}")
-            return None
-    
-    def detect_order_blocks(self, df: pd.DataFrame, 
-                           internal_left: int = 5, internal_right: int = 2,
-                           swing_left: int = 10, swing_right: int = 5) -> Dict:
-        """
-        Детекция Order Blocks на основе pivot точек
-        
-        Returns:
-            Dict с ключами 'internal' и 'swing'
-        """
-        order_blocks = {
-            'internal': [],
-            'swing': []
-        }
+    def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
+        """Детекция Order Blocks"""
+        order_blocks = {'internal': [], 'swing': []}
         
         try:
-            if len(df) < 20:
+            if len(df) < 10:
                 return order_blocks
             
             current_price = float(df['close'].iloc[-1])
-            atr = self._calculate_atr(df)
+            recent_df = df.tail(lookback)
             
-            # Internal Order Blocks
-            int_highs, int_lows = self._find_pivot_points(df, internal_left, internal_right)
-            
-            for pivot in int_lows[-5:]:  # Bullish OB от pivot lows
-                ob = self._find_order_block_candle(df, pivot['index'], BULLISH)
-                if ob:
-                    # Проверяем, что блок ещё "живой" (цена выше low блока)
-                    if current_price >= ob['bottom'] - atr * 0.5:
-                        ob['internal'] = True
-                        ob['pivot_price'] = pivot['price']
-                        order_blocks['internal'].append(ob)
-            
-            for pivot in int_highs[-5:]:  # Bearish OB от pivot highs
-                ob = self._find_order_block_candle(df, pivot['index'], BEARISH)
-                if ob:
-                    if current_price <= ob['top'] + atr * 0.5:
-                        ob['internal'] = True
-                        ob['pivot_price'] = pivot['price']
-                        order_blocks['internal'].append(ob)
-            
-            # Swing Order Blocks
-            sw_highs, sw_lows = self._find_pivot_points(df, swing_left, swing_right)
-            
-            for pivot in sw_lows[-3:]:
-                ob = self._find_order_block_candle(df, pivot['index'], BULLISH, lookback=15)
-                if ob:
-                    if current_price >= ob['bottom'] - atr:
-                        ob['internal'] = False
-                        ob['pivot_price'] = pivot['price']
-                        order_blocks['swing'].append(ob)
-            
-            for pivot in sw_highs[-3:]:
-                ob = self._find_order_block_candle(df, pivot['index'], BEARISH, lookback=15)
-                if ob:
-                    if current_price <= ob['top'] + atr:
-                        ob['internal'] = False
-                        ob['pivot_price'] = pivot['price']
-                        order_blocks['swing'].append(ob)
+            for i in range(2, len(recent_df) - 1):
+                # Bullish OB: медвежья свеча перед бычьим движением
+                curr = recent_df.iloc[i]
+                prev = recent_df.iloc[i - 1]
+                next_bar = recent_df.iloc[i + 1] if i + 1 < len(recent_df) else None
+                
+                if next_bar is not None:
+                    # Bullish OB
+                    if prev['close'] < prev['open'] and next_bar['close'] > curr['high']:
+                        if current_price >= prev['low']:
+                            order_blocks['internal'].append({
+                                'type': 'BULL_OB',
+                                'top': float(prev['open']),
+                                'bottom': float(prev['low']),
+                                'bar_index': i - 1,
+                                'bars_ago': len(recent_df) - i
+                            })
+                    
+                    # Bearish OB
+                    if prev['close'] > prev['open'] and next_bar['close'] < curr['low']:
+                        if current_price <= prev['high']:
+                            order_blocks['internal'].append({
+                                'type': 'BEAR_OB',
+                                'top': float(prev['high']),
+                                'bottom': float(prev['open']),
+                                'bar_index': i - 1,
+                                'bars_ago': len(recent_df) - i
+                            })
             
             # Ограничиваем количество
             order_blocks['internal'] = order_blocks['internal'][-5:]
@@ -656,14 +515,12 @@ class SMCDetector:
         
         return order_blocks
     
-    # ==================== FAIR VALUE GAP ====================
+    # ========================================================================
+    # FAIR VALUE GAPS
+    # ========================================================================
     
-    def detect_fvg(self, df: pd.DataFrame, lookback: int = 50, min_gap_atr_ratio: float = 0.3) -> List[Dict]:
-        """
-        Детекция Fair Value Gaps
-        
-        FVG образуется когда есть gap между high свечи 1 и low свечи 3
-        """
+    def detect_fvg(self, df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
+        """Детекция Fair Value Gaps"""
         fvg_list = []
         
         try:
@@ -672,53 +529,44 @@ class SMCDetector:
             
             recent_df = df.tail(lookback).reset_index(drop=True)
             current_price = float(df['close'].iloc[-1])
+            
+            # ATR для минимального размера gap
             atr = self._calculate_atr(df)
-            min_gap = atr * min_gap_atr_ratio if atr > 0 else current_price * 0.0003
+            min_gap = atr * 0.3 if atr > 0 else current_price * 0.0003
             
             for i in range(1, len(recent_df) - 1):
-                candle1_high = recent_df['high'].iloc[i - 1]
-                candle1_low = recent_df['low'].iloc[i - 1]
-                candle2_open = recent_df['open'].iloc[i]
-                candle2_close = recent_df['close'].iloc[i]
-                candle3_high = recent_df['high'].iloc[i + 1]
-                candle3_low = recent_df['low'].iloc[i + 1]
+                candle1 = recent_df.iloc[i - 1]
+                candle3 = recent_df.iloc[i + 1]
                 
-                # BULLISH FVG: low свечи 3 > high свечи 1
-                if candle3_low > candle1_high:
-                    gap_size = candle3_low - candle1_high
-                    
-                    if gap_size >= min_gap:
-                        # Проверяем, что FVG ещё не заполнен
-                        if current_price >= candle1_high:
-                            fvg_list.append({
-                                'type': 'BULL_FVG',
-                                'top': float(candle3_low),
-                                'bottom': float(candle1_high),
-                                'price': float((candle3_low + candle1_high) / 2),
-                                'gap_size': float(gap_size),
-                                'index': i,
-                                'filled': current_price <= candle1_high
-                            })
+                # Bullish FVG
+                if candle3['low'] > candle1['high']:
+                    gap_size = candle3['low'] - candle1['high']
+                    if gap_size > min_gap:
+                        fvg_list.append({
+                            'type': 'BULL_FVG',
+                            'top': float(candle3['low']),
+                            'bottom': float(candle1['high']),
+                            'price': float((candle3['low'] + candle1['high']) / 2),
+                            'gap_size': float(gap_size),
+                            'bar_index': i,
+                            'bars_ago': len(recent_df) - 1 - i
+                        })
                 
-                # BEARISH FVG: high свечи 3 < low свечи 1
-                elif candle3_high < candle1_low:
-                    gap_size = candle1_low - candle3_high
-                    
-                    if gap_size >= min_gap:
-                        if current_price <= candle1_low:
-                            fvg_list.append({
-                                'type': 'BEAR_FVG',
-                                'top': float(candle1_low),
-                                'bottom': float(candle3_high),
-                                'price': float((candle1_low + candle3_high) / 2),
-                                'gap_size': float(gap_size),
-                                'index': i,
-                                'filled': current_price >= candle1_low
-                            })
+                # Bearish FVG
+                elif candle3['high'] < candle1['low']:
+                    gap_size = candle1['low'] - candle3['high']
+                    if gap_size > min_gap:
+                        fvg_list.append({
+                            'type': 'BEAR_FVG',
+                            'top': float(candle1['low']),
+                            'bottom': float(candle3['high']),
+                            'price': float((candle1['low'] + candle3['high']) / 2),
+                            'gap_size': float(gap_size),
+                            'bar_index': i,
+                            'bars_ago': len(recent_df) - 1 - i
+                        })
             
-            # Сортируем по размеру gap и берём топ-5
-            fvg_list = sorted(fvg_list, key=lambda x: x['gap_size'], reverse=True)[:5]
-            
+            fvg_list = fvg_list[-5:]
             logger.info(f"FVG detected: {len(fvg_list)}")
             
         except Exception as e:
@@ -726,87 +574,131 @@ class SMCDetector:
         
         return fvg_list
     
-    # ==================== EQUAL HIGHS/LOWS ====================
+    # ========================================================================
+    # LIQUIDITY (SUPPORT/RESISTANCE)
+    # ========================================================================
     
-    def detect_equal_highs_lows(self, df: pd.DataFrame, lookback: int = 50,
-                                bars_confirmation: int = 3,
-                                threshold_atr_ratio: float = 0.1) -> Dict:
-        """
-        Детекция Equal Highs/Lows (двойные/тройные вершины/донья)
-        """
-        equal_levels = {
-            'eqh': [],
-            'eql': []
-        }
+    def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
+        """Детекция уровней ликвидности (S/R)"""
+        liquidity = []
         
         try:
-            if len(df) < 20:
+            if len(df) < 10:
+                return liquidity
+            
+            recent_df = df.tail(lookback)
+            highs = recent_df['high'].values
+            lows = recent_df['low'].values
+            
+            # Swing Highs
+            for i in range(3, len(recent_df) - 3):
+                if highs[i] > max(highs[i-3:i]) and highs[i] > max(highs[i+1:i+4]):
+                    liquidity.append({
+                        'type': 'RESISTANCE',
+                        'price': float(highs[i]),
+                        'strength': 1
+                    })
+            
+            # Swing Lows
+            for i in range(3, len(recent_df) - 3):
+                if lows[i] < min(lows[i-3:i]) and lows[i] < min(lows[i+1:i+4]):
+                    liquidity.append({
+                        'type': 'SUPPORT',
+                        'price': float(lows[i]),
+                        'strength': 1
+                    })
+            
+            # Кластеризация близких уровней
+            liquidity = self._cluster_levels(liquidity)
+            liquidity = sorted(liquidity, key=lambda x: x['strength'], reverse=True)[:4]
+            
+            logger.info(f"Liquidity levels: {len(liquidity)}")
+            
+        except Exception as e:
+            logger.error(f"Error detecting liquidity: {e}")
+        
+        return liquidity
+    
+    def _cluster_levels(self, levels: List[Dict], threshold: float = 0.002) -> List[Dict]:
+        """Группировка близких уровней"""
+        if not levels:
+            return []
+        
+        sorted_levels = sorted(levels, key=lambda x: x['price'])
+        clusters = []
+        current_cluster = [sorted_levels[0]]
+        
+        for level in sorted_levels[1:]:
+            cluster_avg = sum(l['price'] for l in current_cluster) / len(current_cluster)
+            if abs(level['price'] - cluster_avg) / cluster_avg < threshold:
+                current_cluster.append(level)
+            else:
+                avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
+                clusters.append({
+                    'type': current_cluster[0]['type'],
+                    'price': float(avg_price),
+                    'strength': len(current_cluster)
+                })
+                current_cluster = [level]
+        
+        if current_cluster:
+            avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
+            clusters.append({
+                'type': current_cluster[0]['type'],
+                'price': float(avg_price),
+                'strength': len(current_cluster)
+            })
+        
+        return clusters
+    
+    # ========================================================================
+    # EQUAL HIGHS/LOWS
+    # ========================================================================
+    
+    def detect_equal_highs_lows(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
+        """Детекция Equal Highs/Lows"""
+        equal_levels = {'eqh': [], 'eql': []}
+        
+        try:
+            if len(df) < 10:
                 return equal_levels
             
             atr = self._calculate_atr(df)
-            threshold = atr * threshold_atr_ratio if atr > 0 else df['close'].iloc[-1] * 0.001
+            threshold = atr * 0.1 if atr > 0 else df['close'].iloc[-1] * 0.001
             
-            recent_df = df.tail(lookback).reset_index(drop=True)
+            recent_df = df.tail(lookback)
             
-            # Находим локальные максимумы
-            local_highs = []
-            for i in range(bars_confirmation, len(recent_df) - bars_confirmation):
-                current = recent_df['high'].iloc[i]
-                
-                is_local_max = True
-                for j in range(1, bars_confirmation + 1):
-                    if current <= recent_df['high'].iloc[i - j] or current <= recent_df['high'].iloc[i + j]:
-                        is_local_max = False
-                        break
-                
-                if is_local_max:
-                    local_highs.append({
-                        'price': float(current),
-                        'index': i
-                    })
+            # Находим swing highs
+            swing_highs = []
+            for i in range(2, len(recent_df) - 2):
+                if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and \
+                   recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
+                    swing_highs.append({'price': float(recent_df['high'].iloc[i]), 'index': i})
             
-            # Находим локальные минимумы
-            local_lows = []
-            for i in range(bars_confirmation, len(recent_df) - bars_confirmation):
-                current = recent_df['low'].iloc[i]
-                
-                is_local_min = True
-                for j in range(1, bars_confirmation + 1):
-                    if current >= recent_df['low'].iloc[i - j] or current >= recent_df['low'].iloc[i + j]:
-                        is_local_min = False
-                        break
-                
-                if is_local_min:
-                    local_lows.append({
-                        'price': float(current),
-                        'index': i
-                    })
-            
-            # Ищем Equal Highs
-            for i in range(len(local_highs)):
-                for j in range(i + 1, len(local_highs)):
-                    if abs(local_highs[i]['price'] - local_highs[j]['price']) < threshold:
-                        avg_price = (local_highs[i]['price'] + local_highs[j]['price']) / 2
-                        
-                        # Проверяем дубликаты
-                        is_dup = any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eqh'])
-                        
-                        if not is_dup:
+            # Equal Highs
+            for i in range(len(swing_highs) - 1):
+                for j in range(i + 1, len(swing_highs)):
+                    if abs(swing_highs[i]['price'] - swing_highs[j]['price']) < threshold:
+                        avg_price = (swing_highs[i]['price'] + swing_highs[j]['price']) / 2
+                        if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eqh']):
                             equal_levels['eqh'].append({
                                 'price': float(avg_price),
                                 'type': 'EQUAL_HIGHS',
                                 'touches': 2
                             })
             
-            # Ищем Equal Lows
-            for i in range(len(local_lows)):
-                for j in range(i + 1, len(local_lows)):
-                    if abs(local_lows[i]['price'] - local_lows[j]['price']) < threshold:
-                        avg_price = (local_lows[i]['price'] + local_lows[j]['price']) / 2
-                        
-                        is_dup = any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eql'])
-                        
-                        if not is_dup:
+            # Swing Lows и Equal Lows
+            swing_lows = []
+            for i in range(2, len(recent_df) - 2):
+                if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and \
+                   recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
+                    swing_lows.append({'price': float(recent_df['low'].iloc[i]), 'index': i})
+            
+            for i in range(len(swing_lows) - 1):
+                for j in range(i + 1, len(swing_lows)):
+                    if abs(swing_lows[i]['price'] - swing_lows[j]['price']) < threshold:
+                        avg_price = (swing_lows[i]['price'] + swing_lows[j]['price']) / 2
+                        if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eql']):
                             equal_levels['eql'].append({
                                 'price': float(avg_price),
                                 'type': 'EQUAL_LOWS',
@@ -819,131 +711,19 @@ class SMCDetector:
             logger.info(f"Equal levels: EQH={len(equal_levels['eqh'])}, EQL={len(equal_levels['eql'])}")
             
         except Exception as e:
-            logger.error(f"Error detecting equal levels: {e}")
+            logger.error(f"Error detecting EQH/EQL: {e}")
         
         return equal_levels
     
-    # ==================== LIQUIDITY / SUPPORT-RESISTANCE ====================
+    # ========================================================================
+    # PREMIUM/DISCOUNT ZONES
+    # ========================================================================
     
-    def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
+    def calculate_premium_discount_zones(self, df: pd.DataFrame, 
+                                          swing_pivot_high: float = 0,
+                                          swing_pivot_low: float = 0) -> Dict:
         """
-        Определение значимых уровней ликвидности (Support/Resistance)
-        """
-        liquidity = []
-        
-        try:
-            if len(df) < 20:
-                return liquidity
-            
-            recent_df = df.tail(lookback)
-            atr = self._calculate_atr(df)
-            
-            highs = recent_df['high'].values
-            lows = recent_df['low'].values
-            
-            # Находим swing highs (минимум 3 свечи с каждой стороны)
-            swing_highs = []
-            swing_lows = []
-            
-            for i in range(3, len(recent_df) - 3):
-                # Swing High
-                is_swing_high = True
-                for j in range(1, 4):
-                    if highs[i] <= highs[i - j] or highs[i] <= highs[i + j]:
-                        is_swing_high = False
-                        break
-                
-                if is_swing_high:
-                    swing_highs.append({'price': float(highs[i]), 'index': i})
-                
-                # Swing Low
-                is_swing_low = True
-                for j in range(1, 4):
-                    if lows[i] >= lows[i - j] or lows[i] >= lows[i + j]:
-                        is_swing_low = False
-                        break
-                
-                if is_swing_low:
-                    swing_lows.append({'price': float(lows[i]), 'index': i})
-            
-            # Кластеризация уровней
-            def cluster_levels(levels, threshold_ratio=0.002):
-                if not levels:
-                    return []
-                
-                sorted_levels = sorted(levels, key=lambda x: x['price'])
-                clusters = []
-                current_cluster = [sorted_levels[0]]
-                
-                for level in sorted_levels[1:]:
-                    cluster_avg = sum(l['price'] for l in current_cluster) / len(current_cluster)
-                    
-                    if abs(level['price'] - cluster_avg) / cluster_avg < threshold_ratio:
-                        current_cluster.append(level)
-                    else:
-                        avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-                        clusters.append({
-                            'price': avg_price,
-                            'strength': len(current_cluster)
-                        })
-                        current_cluster = [level]
-                
-                if current_cluster:
-                    avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-                    clusters.append({
-                        'price': avg_price,
-                        'strength': len(current_cluster)
-                    })
-                
-                return clusters
-            
-            high_clusters = cluster_levels(swing_highs)
-            low_clusters = cluster_levels(swing_lows)
-            
-            for cluster in high_clusters:
-                if cluster['strength'] >= 2:
-                    liquidity.append({
-                        'type': 'RESISTANCE',
-                        'price': float(cluster['price']),
-                        'strength': cluster['strength']
-                    })
-            
-            for cluster in low_clusters:
-                if cluster['strength'] >= 2:
-                    liquidity.append({
-                        'type': 'SUPPORT',
-                        'price': float(cluster['price']),
-                        'strength': cluster['strength']
-                    })
-            
-            # Топ-4 по силе
-            liquidity = sorted(liquidity, key=lambda x: x['strength'], reverse=True)[:4]
-            
-            logger.info(f"Liquidity levels: {len(liquidity)}")
-            
-        except Exception as e:
-            logger.error(f"Error detecting liquidity: {e}")
-        
-        return liquidity
-    
-    # ==================== PREMIUM/DISCOUNT ZONES ====================
-    
-    def calculate_premium_discount_zones(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
-        """
-        Расчёт Premium/Discount зон v2.1
-        
-        Premium: Верхняя 1/3 диапазона (зона продаж)
-        Discount: Нижняя 1/3 диапазона (зона покупок)
-        Equilibrium: Средняя 1/3 (50% диапазона)
-        
-        ВАЖНО v2.1: Используем swing pivot'ы для определения диапазона
-        - Приоритет: self.swing.pivot_high.price / self.swing.pivot_low.price
-        - Fallback: экстремумы последних 50 свечей (НЕ 250!)
-        
-        Почему это важно:
-        - Если считать по 250 свечам, вчерашний лой тянет эквилибриум вниз
-        - Цена может казаться в середине, хотя она уже перекуплена
-        - Swing pivot'ы дают актуальный структурный диапазон
+        Расчёт Premium/Discount зон на основе Swing Pivot'ов
         """
         try:
             if len(df) < 10:
@@ -951,46 +731,32 @@ class SMCDetector:
             
             current_price = float(df['close'].iloc[-1])
             
-            # ===== v2.1: Определяем диапазон на основе SWING PIVOT'ов =====
-            swing_high_price = self.swing.pivot_high.price
-            swing_low_price = self.swing.pivot_low.price
-            
-            # Проверяем, что swing pivot'ы валидны (не равны 0)
-            use_swing_pivots = swing_high_price > 0 and swing_low_price > 0
-            
-            if use_swing_pivots:
-                range_high = swing_high_price
-                range_low = swing_low_price
+            # Используем Swing Pivot'ы если доступны, иначе последние 50 баров
+            if swing_pivot_high > 0 and swing_pivot_low > 0:
+                range_high = swing_pivot_high
+                range_low = swing_pivot_low
                 range_source = "SWING_PIVOTS"
-                logger.debug(f"Zones using SWING PIVOTS: High={range_high:.2f}, Low={range_low:.2f}")
             else:
-                # Fallback: используем последние 50 свечей (не весь датафрейм!)
-                recent_df = df.tail(min(lookback, 50))  # v2.1: максимум 50 свечей
-                range_high = float(recent_df['high'].max())
-                range_low = float(recent_df['low'].min())
+                recent = df.tail(50)
+                range_high = float(recent['high'].max())
+                range_low = float(recent['low'].min())
                 range_source = "LAST_50_BARS"
-                logger.debug(f"Zones using LAST 50 BARS: High={range_high:.2f}, Low={range_low:.2f}")
             
-            range_size = range_high - range_low
-            
-            if range_size <= 0:
-                logger.warning(f"Invalid range size: {range_size}")
+            if range_high <= range_low:
                 return self._get_empty_zones()
             
-            # Equilibrium (50%)
+            range_size = range_high - range_low
             equilibrium = (range_high + range_low) / 2
             
-            # Premium zone (верхняя треть, выше 66.6%)
-            premium_bottom = range_low + range_size * 0.666
+            # Зоны
             premium_top = range_high
+            premium_bottom = range_high - (range_size * 0.236)  # 23.6% от верха
             
-            # Discount zone (нижняя треть, ниже 33.3%)
-            discount_top = range_low + range_size * 0.333
             discount_bottom = range_low
+            discount_top = range_low + (range_size * 0.236)  # 23.6% от низа
             
-            # Equilibrium zone (средняя треть, 33.3% - 66.6%)
-            eq_bottom = range_low + range_size * 0.333
-            eq_top = range_low + range_size * 0.666
+            equilibrium_top = equilibrium + (range_size * 0.05)
+            equilibrium_bottom = equilibrium - (range_size * 0.05)
             
             # Определяем текущую зону
             if current_price >= premium_bottom:
@@ -1000,129 +766,109 @@ class SMCDetector:
             else:
                 current_zone = "EQUILIBRIUM"
             
-            # Рассчитываем позицию в диапазоне (0% = low, 100% = high)
-            position_in_range = ((current_price - range_low) / range_size) * 100 if range_size > 0 else 50.0
+            # Позиция в диапазоне (0-100%)
+            position_pct = ((current_price - range_low) / range_size) * 100 if range_size > 0 else 50
             
-            zones = {
-                'premium': {
-                    'top': premium_top,
-                    'bottom': premium_bottom
-                },
-                'equilibrium': {
-                    'top': eq_top,
-                    'bottom': eq_bottom,
-                    'price': equilibrium
-                },
-                'discount': {
-                    'top': discount_top,
-                    'bottom': discount_bottom
-                },
+            return {
+                'premium': {'top': float(premium_top), 'bottom': float(premium_bottom)},
+                'equilibrium': {'top': float(equilibrium_top), 'bottom': float(equilibrium_bottom), 'price': float(equilibrium)},
+                'discount': {'top': float(discount_top), 'bottom': float(discount_bottom)},
                 'current_zone': current_zone,
-                'range_high': range_high,
-                'range_low': range_low,
-                'range_size': range_size,
-                'range_source': range_source,  # v2.1: откуда взят диапазон
-                'position_in_range_pct': round(position_in_range, 1)  # v2.1: позиция в %
+                'range_high': float(range_high),
+                'range_low': float(range_low),
+                'range_source': range_source,
+                'position_in_range_pct': float(position_pct)
             }
-            
-            logger.debug(f"Zones ({range_source}): {current_zone} ({position_in_range:.1f}%), EQ={equilibrium:.2f}")
-            
-            return zones
             
         except Exception as e:
             logger.error(f"Error calculating zones: {e}")
             return self._get_empty_zones()
     
-    # ==================== ADVANCED DATA ====================
+    # ========================================================================
+    # ADVANCED DATA
+    # ========================================================================
     
-    def calculate_advanced_smc_data(self, df: pd.DataFrame) -> Dict:
-        """
-        Расширенные SMC данные (PDH/PDL, Swings, Equilibrium)
-        """
+    def calculate_advanced_smc_data(self, df: pd.DataFrame, zones: Dict) -> Dict:
+        """Расширенные SMC данные"""
         try:
             if len(df) < 10:
                 return self._get_empty_advanced_data()
             
-            # Daily High/Low
             dh, dl = self._calculate_dh_dl(df)
-            
-            # Previous Day High/Low
             pdh, pdl = self._calculate_pdh_pdl(df)
             
-            # Zones
-            zones = self.calculate_premium_discount_zones(df)
-            
-            # Swing points
-            swing_highs = [p['price'] for p in self.swing.pivot_highs_history[-5:]]
-            swing_lows = [p['price'] for p in self.swing.pivot_lows_history[-5:]]
-            
-            advanced_data = {
+            return {
                 "key_levels": {
                     "DH": float(dh),
                     "DL": float(dl),
                     "PDH": float(pdh),
                     "PDL": float(pdl),
-                    "Equilibrium_Price": float(zones['equilibrium']['price']),
-                    "Current_Zone": zones['current_zone']
+                    "Equilibrium_Price": zones.get('equilibrium', {}).get('price', 0),
+                    "Current_Zone": zones.get('current_zone', 'UNKNOWN')
                 },
                 "structure_points": {
-                    "nearest_swing_high": float(swing_highs[-1]) if swing_highs else float(dh),
-                    "nearest_swing_low": float(swing_lows[-1]) if swing_lows else float(dl),
-                    "all_swing_highs": swing_highs,
-                    "all_swing_lows": swing_lows
+                    "nearest_swing_high": zones.get('range_high', 0),
+                    "nearest_swing_low": zones.get('range_low', 0)
                 },
                 "range": {
-                    "high": zones['range_high'],
-                    "low": zones['range_low'],
-                    "size": zones['range_size']
+                    "high": zones.get('range_high', 0),
+                    "low": zones.get('range_low', 0),
+                    "size": zones.get('range_high', 0) - zones.get('range_low', 0),
+                    "source": zones.get('range_source', 'UNKNOWN')
                 },
                 "zones": zones
             }
-            
-            return advanced_data
-            
         except Exception as e:
-            logger.error(f"Error calculating advanced SMC: {e}")
+            logger.error(f"Error in advanced data: {e}")
             return self._get_empty_advanced_data()
+    
+    # ========================================================================
+    # HELPER METHODS
+    # ========================================================================
+    
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Расчёт ATR"""
+        try:
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            tr1 = high - low
+            tr2 = abs(high - close.shift(1))
+            tr3 = abs(low - close.shift(1))
+            
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = tr.rolling(window=min(period, len(df))).mean().iloc[-1]
+            
+            return float(atr) if not pd.isna(atr) else 0.0
+        except:
+            return 0.0
     
     def _calculate_dh_dl(self, df: pd.DataFrame) -> Tuple[float, float]:
         """Daily High/Low"""
         try:
             if isinstance(df.index, pd.DatetimeIndex):
-                last_date = df.index[-1].date()
-                today_data = df[df.index.date == last_date]
-                
+                today = df.index[-1].date()
+                today_data = df[df.index.date == today]
                 if len(today_data) > 0:
                     return float(today_data['high'].max()), float(today_data['low'].min())
-            
-            # Fallback: последние 24 бара (на M15 = 6 часов)
-            return float(df['high'].tail(24).max()), float(df['low'].tail(24).min())
-            
-        except Exception as e:
-            logger.warning(f"Error in DH/DL: {e}")
+            return float(df.tail(24)['high'].max()), float(df.tail(24)['low'].min())
+        except:
             return float(df['high'].max()), float(df['low'].min())
     
     def _calculate_pdh_pdl(self, df: pd.DataFrame) -> Tuple[float, float]:
         """Previous Day High/Low"""
         try:
             if isinstance(df.index, pd.DatetimeIndex):
-                last_date = df.index[-1]
-                
+                last_date = df.index[-1].date()
                 for days_back in range(1, 4):
                     prev_date = last_date - pd.Timedelta(days=days_back)
-                    prev_data = df[df.index.date == prev_date.date()]
-                    
+                    prev_data = df[df.index.date == prev_date]
                     if len(prev_data) > 0:
                         return float(prev_data['high'].max()), float(prev_data['low'].min())
-            
-            # Fallback
-            return float(df['high'].tail(96).max()), float(df['low'].tail(96).min())
-            
-        except Exception as e:
-            logger.warning(f"Error in PDH/PDL: {e}")
+            return float(df.tail(96)['high'].max()), float(df.tail(96)['low'].min())
+        except:
             return float(df['high'].max()), float(df['low'].min())
-    
-    # ==================== EMPTY STRUCTURES ====================
     
     def _get_empty_zones(self) -> Dict:
         return {
@@ -1132,27 +878,21 @@ class SMCDetector:
             'current_zone': 'UNKNOWN',
             'range_high': 0.0,
             'range_low': 0.0,
-            'range_size': 0.0,
             'range_source': 'NONE',
             'position_in_range_pct': 50.0
         }
     
     def _get_empty_advanced_data(self) -> Dict:
         return {
-            "key_levels": {
-                "DH": 0.0, "DL": 0.0, "PDH": 0.0, "PDL": 0.0,
-                "Equilibrium_Price": 0.0, "Current_Zone": "UNKNOWN"
-            },
-            "structure_points": {
-                "nearest_swing_high": 0.0, "nearest_swing_low": 0.0,
-                "all_swing_highs": [], "all_swing_lows": []
-            },
-            "range": {"high": 0.0, "low": 0.0, "size": 0.0},
+            "key_levels": {"DH": 0.0, "DL": 0.0, "PDH": 0.0, "PDL": 0.0, 
+                          "Equilibrium_Price": 0.0, "Current_Zone": "UNKNOWN"},
+            "structure_points": {"nearest_swing_high": 0.0, "nearest_swing_low": 0.0},
+            "range": {"high": 0.0, "low": 0.0, "size": 0.0, "source": "NONE"},
             "zones": self._get_empty_zones()
         }
     
     def _get_empty_result(self) -> Dict:
-        return {
+        return sanitize_for_json({
             'order_blocks': [],
             'order_blocks_internal': [],
             'order_blocks_swing': [],
@@ -1164,43 +904,42 @@ class SMCDetector:
             'internal_bos': [],
             'swing_choch': [],
             'swing_bos': [],
+            'all_choch': [],
+            'all_bos': [],
+            'all_internal_choch': [],
+            'all_internal_bos': [],
+            'all_swing_choch': [],
+            'all_swing_bos': [],
             'eqh': [],
             'eql': [],
             'trend': 'NEUTRAL',
             'internal_trend': 'NEUTRAL',
+            'internal_pivot_high': 0.0,
+            'internal_pivot_low': 0.0,
+            'swing_pivot_high': 0.0,
+            'swing_pivot_low': 0.0,
             'advanced': self._get_empty_advanced_data(),
-            'signals_count': 0,
-            'debug': {}
-        }
+            'signals_count': 0
+        })
     
-    # ==================== MAIN ANALYZE METHOD ====================
+    # ========================================================================
+    # ГЛАВНЫЙ МЕТОД АНАЛИЗА
+    # ========================================================================
     
-    def analyze(self, df, 
-                internal_left: int = 5, internal_right: int = 2,
-                swing_left: int = 10, swing_right: int = 5) -> Dict:
+    def analyze(self, df) -> Dict:
         """
-        Полный SMC анализ
-        
-        Параметры для XAUUSD M15:
-        - internal_left: 5 (1.25 часа слева)
-        - internal_right: 2 (30 мин справа для быстрого подтверждения)
-        - swing_left: 10 (2.5 часа слева)
-        - swing_right: 5 (1.25 часа справа)
+        Полный SMC анализ v4.0 с Bar-by-Bar Replay
         
         Args:
-            df: DataFrame или список словарей с OHLC
-            internal_left: Бары слева для internal pivot
-            internal_right: Бары справа для internal pivot
-            swing_left: Бары слева для swing pivot
-            swing_right: Бары справа для swing pivot
+            df: DataFrame или список OHLC данных
+            
+        Returns:
+            Полный результат анализа со ВСЕМИ историческими событиями
         """
-        self._call_count += 1
-        
         try:
-            # Преобразуем list в DataFrame
+            # Преобразуем в DataFrame если нужно
             if isinstance(df, list):
                 if not df:
-                    logger.warning("Empty data list")
                     return self._get_empty_result()
                 df = pd.DataFrame(df)
             
@@ -1208,153 +947,171 @@ class SMCDetector:
                 logger.error(f"Invalid data type: {type(df)}")
                 return self._get_empty_result()
             
-            # Проверяем колонки
             required = ['open', 'high', 'low', 'close']
-            missing = [c for c in required if c not in df.columns]
-            
-            if missing:
-                logger.error(f"Missing columns: {missing}")
+            if not all(col in df.columns for col in required):
+                logger.error("Missing required columns")
                 return self._get_empty_result()
             
-            # Минимум данных
-            min_bars = max(internal_left, swing_left) + max(internal_right, swing_right) + 10
-            
-            if len(df) < min_bars:
-                logger.warning(f"Insufficient data: {len(df)} bars, need {min_bars}")
+            if len(df) < 20:
+                logger.warning(f"Insufficient data: {len(df)} bars")
                 return self._get_empty_result()
             
-            logger.info(f"=== SMC Analysis #{self._call_count} | {len(df)} bars | "
-                       f"Price: {df['close'].iloc[-1]:.2f} ===")
+            self.analysis_count += 1
+            current_price = float(df['close'].iloc[-1])
             
-            # 1. Market Structure (BOS/CHoCH)
-            market_structure = self.detect_market_structure(
-                df, internal_left, internal_right, swing_left, swing_right
-            )
+            logger.info(f"=== SMC Analysis #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
-            # 2. Order Blocks
-            order_blocks = self.detect_order_blocks(
-                df, internal_left, internal_right, swing_left, swing_right
-            )
+            # ================================================================
+            # 1. MARKET STRUCTURE (Bar-by-Bar Replay)
+            # ================================================================
+            market_structure = self.detect_market_structure(df)
             
-            # 3. Fair Value Gaps
+            # ================================================================
+            # 2. ORDER BLOCKS
+            # ================================================================
+            order_blocks = self.detect_order_blocks(df)
+            
+            # ================================================================
+            # 3. FAIR VALUE GAPS
+            # ================================================================
             fvg = self.detect_fvg(df)
             
-            # 4. Liquidity (S/R)
+            # ================================================================
+            # 4. LIQUIDITY
+            # ================================================================
             liquidity = self.detect_liquidity(df)
             
-            # 5. Equal Highs/Lows
+            # ================================================================
+            # 5. EQUAL HIGHS/LOWS
+            # ================================================================
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. Advanced Data
-            advanced_data = self.calculate_advanced_smc_data(df)
+            # ================================================================
+            # 6. PREMIUM/DISCOUNT ZONES
+            # ================================================================
+            zones = self.calculate_premium_discount_zones(
+                df,
+                swing_pivot_high=market_structure.get('swing_pivot_high', 0),
+                swing_pivot_low=market_structure.get('swing_pivot_low', 0)
+            )
             
-            # Объединяем результаты
+            # ================================================================
+            # 7. ADVANCED DATA
+            # ================================================================
+            advanced = self.calculate_advanced_smc_data(df, zones)
+            
+            # ================================================================
+            # СБОРКА РЕЗУЛЬТАТА
+            # ================================================================
             all_order_blocks = order_blocks['internal'] + order_blocks['swing']
-            all_choch = market_structure['internal_choch'] + market_structure['swing_choch']
-            all_bos = market_structure['internal_bos'] + market_structure['swing_bos']
             
-            smc_data = {
+            # Объединяем свежие события для совместимости
+            fresh_choch = market_structure['internal_choch'] + market_structure['swing_choch']
+            fresh_bos = market_structure['internal_bos'] + market_structure['swing_bos']
+            
+            # Объединяем ВСЮ историю
+            all_choch = market_structure['all_internal_choch'] + market_structure['all_swing_choch']
+            all_bos = market_structure['all_internal_bos'] + market_structure['all_swing_bos']
+            
+            result = {
+                # Order Blocks
                 'order_blocks': all_order_blocks,
                 'order_blocks_internal': order_blocks['internal'],
                 'order_blocks_swing': order_blocks['swing'],
+                
+                # FVG & Liquidity
                 'fvg': fvg,
                 'liquidity': liquidity,
-                'choch': all_choch,
-                'bos': all_bos,
+                
+                # Свежие события (для бота)
+                'choch': fresh_choch,
+                'bos': fresh_bos,
                 'internal_choch': market_structure['internal_choch'],
                 'internal_bos': market_structure['internal_bos'],
                 'swing_choch': market_structure['swing_choch'],
                 'swing_bos': market_structure['swing_bos'],
+                
+                # ВСЯ ИСТОРИЯ (для графика)
+                'all_choch': all_choch,
+                'all_bos': all_bos,
+                'all_internal_choch': market_structure['all_internal_choch'],
+                'all_internal_bos': market_structure['all_internal_bos'],
+                'all_swing_choch': market_structure['all_swing_choch'],
+                'all_swing_bos': market_structure['all_swing_bos'],
+                
+                # Тренды
                 'trend': market_structure['swing_trend'],
                 'internal_trend': market_structure['internal_trend'],
+                
+                # Pivot уровни
+                'internal_pivot_high': market_structure['internal_pivot_high'],
+                'internal_pivot_low': market_structure['internal_pivot_low'],
+                'swing_pivot_high': market_structure['swing_pivot_high'],
+                'swing_pivot_low': market_structure['swing_pivot_low'],
+                
+                # Equal Highs/Lows
                 'eqh': equal_levels['eqh'],
                 'eql': equal_levels['eql'],
-                'advanced': advanced_data,
-                'pivot_high_internal': market_structure.get('internal_pivot_high'),
-                'pivot_low_internal': market_structure.get('internal_pivot_low'),
-                'pivot_high_swing': market_structure.get('swing_pivot_high'),
-                'pivot_low_swing': market_structure.get('swing_pivot_low'),
-                'debug': market_structure.get('debug', {})
+                
+                # Advanced
+                'advanced': advanced
             }
             
-            total_signals = (len(all_order_blocks) + len(fvg) + len(liquidity) +
-                           len(all_choch) + len(all_bos) +
-                           len(equal_levels['eqh']) + len(equal_levels['eql']))
+            # Счётчик сигналов
+            total = (len(all_order_blocks) + len(fvg) + len(liquidity) + 
+                    len(all_choch) + len(all_bos) + 
+                    len(equal_levels['eqh']) + len(equal_levels['eql']))
             
-            smc_data['signals_count'] = total_signals
+            result['signals_count'] = total
             
-            logger.info(f"SMC Result: Signals={total_signals} | "
+            logger.info(f"SMC Result: Signals={total} | "
                        f"Trend: I={market_structure['internal_trend']}, S={market_structure['swing_trend']} | "
-                       f"Zone={advanced_data['key_levels']['Current_Zone']} | "
+                       f"Zone={zones['current_zone']} | "
                        f"OB:{len(all_order_blocks)} FVG:{len(fvg)} S/R:{len(liquidity)} "
                        f"CHoCH:{len(all_choch)} BOS:{len(all_bos)}")
             
-            # 🔧 КРИТИЧНО v2.1.1: Конвертируем numpy типы в стандартные Python типы
-            # Это НЕОБХОДИМО для корректной JSON сериализации в Flask API
-            # Без этого Flask выдаёт: "Object of type bool is not JSON serializable"
-            return sanitize_for_json(smc_data)
+            return sanitize_for_json(result)
             
         except Exception as e:
-            logger.error(f"SMC Analysis error: {e}")
+            logger.error(f"Error in SMC analysis: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            # Санитизируем даже пустой результат на всякий случай
-            return sanitize_for_json(self._get_empty_result())
+            return self._get_empty_result()
 
 
 # Глобальный экземпляр
 smc_detector = SMCDetector()
 
 
-# ==================== ТЕСТОВЫЙ КОД ====================
+# ============================================================================
+# ТЕСТ
+# ============================================================================
 
-def test_detector():
-    """
-    Тест детектора на синтетических данных v2.1
-    """
-    import random
+if __name__ == "__main__":
+    print("=" * 60)
+    print("SMC Detector v4.0 - Bar-by-Bar Historical Replay")
+    print("=" * 60)
     
-    # Генерируем тестовые данные (симуляция XAUUSD)
+    # Генерируем тестовые данные с трендом
     np.random.seed(42)
-    n_bars = 200
+    n = 250
     
-    # Базовая цена
-    base_price = 2650.0
+    # Симулируем XAUUSD с трендом
+    base_price = 2650
     prices = [base_price]
     
-    # Генерируем случайное движение с трендом
-    for i in range(n_bars - 1):
+    for i in range(1, n):
         # Добавляем тренд + шум
-        if i < 50:
-            trend = 0.5  # Рост
-        elif i < 100:
-            trend = -0.3  # Падение
-        elif i < 150:
-            trend = 0.4  # Рост
-        else:
-            trend = -0.2  # Падение
-        
-        change = trend + np.random.normal(0, 2)
+        trend = 0.1 if i < 100 else -0.15 if i < 180 else 0.2
+        change = trend + np.random.randn() * 2
         prices.append(prices[-1] + change)
     
-    # Создаём OHLC с выраженными фитилями для теста v2.1
+    # Создаём OHLC
     data = []
     for i, close in enumerate(prices):
-        # Делаем длинные фитили для теста пробоя по high/low
-        wick_size = abs(np.random.normal(0, 3))  # Увеличенные фитили
-        body_size = abs(np.random.normal(0, 1))
-        
-        if np.random.random() > 0.5:
-            # Бычья свеча с длинным верхним фитилём
-            open_price = close - body_size
-            high = close + wick_size
-            low = open_price - abs(np.random.normal(0, 0.5))
-        else:
-            # Медвежья свеча с длинным нижним фитилём
-            open_price = close + body_size
-            high = open_price + abs(np.random.normal(0, 0.5))
-            low = close - wick_size
-        
+        high = close + abs(np.random.randn()) * 3
+        low = close - abs(np.random.randn()) * 3
+        open_price = prices[i-1] if i > 0 else close
         data.append({
             'open': open_price,
             'high': high,
@@ -1363,72 +1120,35 @@ def test_detector():
         })
     
     df = pd.DataFrame(data)
-    df.index = pd.date_range(start='2024-01-01', periods=len(df), freq='15min')
     
-    # Тестируем
-    detector = SMCDetector()
+    # Анализ
+    result = smc_detector.analyze(df)
     
-    print("\n" + "="*70)
-    print("SMC DETECTOR v2.1 TEST")
-    print("="*70)
-    print("\nНовые функции v2.1:")
-    print("  ✅ Пробой BOS/CHoCH по HIGH/LOW (фитилям)")
-    print("  ✅ Premium/Discount на основе Swing Pivot'ов")
-    print("="*70)
+    print(f"\n📊 РЕЗУЛЬТАТ АНАЛИЗА:")
+    print(f"   Текущая цена: ${df['close'].iloc[-1]:.2f}")
+    print(f"   Internal Trend: {result['internal_trend']}")
+    print(f"   Swing Trend: {result['trend']}")
+    print(f"   Zone: {result['advanced']['key_levels']['Current_Zone']}")
     
-    result = detector.analyze(df)
+    print(f"\n📍 PIVOT УРОВНИ:")
+    print(f"   Internal PH: ${result['internal_pivot_high']:.2f}")
+    print(f"   Internal PL: ${result['internal_pivot_low']:.2f}")
+    print(f"   Swing PH: ${result['swing_pivot_high']:.2f}")
+    print(f"   Swing PL: ${result['swing_pivot_low']:.2f}")
     
-    print(f"\n📊 Тренды:")
-    print(f"  Internal Trend: {result['internal_trend']}")
-    print(f"  Swing Trend: {result['swing_trend']}")
+    print(f"\n📜 ВСЯ ИСТОРИЯ:")
+    print(f"   Internal CHoCH: {len(result['all_internal_choch'])}")
+    print(f"   Internal BOS: {len(result['all_internal_bos'])}")
+    print(f"   Swing CHoCH: {len(result['all_swing_choch'])}")
+    print(f"   Swing BOS: {len(result['all_swing_bos'])}")
     
-    # v2.1: Показываем информацию о зонах
-    zones = result['advanced']['zones']
-    print(f"\n🎯 Зоны (v2.1):")
-    print(f"  Источник диапазона: {zones.get('range_source', 'N/A')}")
-    print(f"  Range High: {zones['range_high']:.2f}")
-    print(f"  Range Low: {zones['range_low']:.2f}")
-    print(f"  Equilibrium: {zones['equilibrium']['price']:.2f}")
-    print(f"  Текущая зона: {zones['current_zone']}")
-    print(f"  Позиция в диапазоне: {zones.get('position_in_range_pct', 50):.1f}%")
+    print(f"\n🔥 СВЕЖИЕ (последние {FRESH_SIGNAL_BARS} баров):")
+    print(f"   CHoCH: {len(result['choch'])}")
+    print(f"   BOS: {len(result['bos'])}")
     
-    print(f"\n📈 Сигналы:")
-    print(f"  CHoCH: {len(result['choch'])} (Internal: {len(result['internal_choch'])}, Swing: {len(result['swing_choch'])})")
-    print(f"  BOS: {len(result['bos'])} (Internal: {len(result['internal_bos'])}, Swing: {len(result['swing_bos'])})")
-    print(f"  Order Blocks: {len(result['order_blocks'])}")
-    print(f"  FVG: {len(result['fvg'])}")
-    print(f"  Liquidity: {len(result['liquidity'])}")
-    print(f"  EQH: {len(result['eqh'])}, EQL: {len(result['eql'])}")
+    if result['all_internal_choch']:
+        print(f"\n📌 Примеры Internal CHoCH:")
+        for ch in result['all_internal_choch'][-3:]:
+            print(f"   → {ch['type']} @ ${ch['price']:.2f} (bar {ch['bar_index']}, {ch['bars_ago']} bars ago)")
     
-    print(f"\n🔍 Pivot точки:")
-    print(f"  Internal Pivot High: {result['debug'].get('internal_pivot_high_price', 0):.2f}")
-    print(f"  Internal Pivot Low: {result['debug'].get('internal_pivot_low_price', 0):.2f}")
-    print(f"  Swing Pivot High: {result['debug'].get('swing_pivot_high_price', 0):.2f}")
-    print(f"  Swing Pivot Low: {result['debug'].get('swing_pivot_low_price', 0):.2f}")
-    
-    # v2.1: Показываем детали пробоев с информацией о фитилях
-    if result['choch']:
-        print(f"\n🔄 CHoCH (пробои разворота):")
-        for ch in result['choch']:
-            wick_note = " [WICK]" if ch.get('break_by_wick', False) else " [BODY]"
-            print(f"  - {ch['type']} at {ch['price']:.2f}, break by {ch.get('break_price', 0):.2f}{wick_note}")
-    
-    if result['bos']:
-        print(f"\n📈 BOS (пробои структуры):")
-        for b in result['bos']:
-            wick_note = " [WICK]" if b.get('break_by_wick', False) else " [BODY]"
-            print(f"  - {b['type']} at {b['price']:.2f}, break by {b.get('break_price', 0):.2f}{wick_note}")
-    
-    print("\n" + "="*70)
-    print("TEST COMPLETE - v2.1 with WICK detection and SWING-based zones")
-    print("="*70)
-
-
-if __name__ == "__main__":
-    # Настраиваем логирование
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(message)s'
-    )
-    
-    test_detector()
+    print("\n✅ Тест пройден!")
