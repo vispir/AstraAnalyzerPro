@@ -163,8 +163,8 @@ const AIPanel = ({ levels, account, analysis }) => {
               boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
             }}
           >
-            <option value="gemini" style={{ background: '#1e293b' }}>Gemini API - Gemini 2.5 Pro</option>
-            <option value="gateway" style={{ background: '#1e293b' }}>AI Gateway - Gemini 2.5 Pro</option>
+            <option value="gemini" style={{ background: '#1e293b' }}>Gemini API - Gemini 3 Preview</option>
+            <option value="gateway" style={{ background: '#1e293b' }}>AI Gateway - Gemini 3 Pro</option>
             <option value="openrouter" style={{ background: '#1e293b' }}>OpenRouter - DeepSeek R1</option>
           </select>
         </div>
