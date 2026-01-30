@@ -321,7 +321,9 @@ def format_debug_report(status_data):
         msg += "<b>📊 SMC Паттерны:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
-        msg += f"├ Swing BOS: {smc.get('swing_bos', 0)} | CHoCH: {smc.get('swing_choch', 0)}\n"
+        # Total (вся история 250 свечей) + Fresh (последние 30 баров)
+        msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (Total) | Fresh: {smc.get('swing_bos', 0)}\n"
+        msg += f"├ Swing CHoCH: {smc.get('swing_choch_total', 0)} (Total) | Fresh: {smc.get('swing_choch', 0)}\n"
         msg += f"└ Internal BOS: {smc.get('int_bos', 0)} | CHoCH: {smc.get('int_choch', 0)}\n\n"
     
     # Найденные сигналы (разделённые по типу)
@@ -603,14 +605,20 @@ def run_analysis_cycle():
     
     logger.info(f"📊 Найдено: Swing={len(swing_signals)}, Internal={len(internal_signals)}")
     
-    # SMC Summary для БД
+    # SMC Summary для БД (Total = вся история 250 свечей, Fresh = последние 30 баров)
     smc_summary = {
         'ob': len(analysis.get('order_blocks', [])),
         'fvg': len(analysis.get('fvg', [])),
+        # Свежие (Fresh) - для фильтров
         'swing_bos': len(analysis.get('swing_bos', [])),
         'swing_choch': len(analysis.get('swing_choch', [])),
         'int_bos': len(analysis.get('internal_bos', [])),
-        'int_choch': len(analysis.get('internal_choch', []))
+        'int_choch': len(analysis.get('internal_choch', [])),
+        # Total (вся история) - для отчёта
+        'swing_bos_total': len(analysis.get('all_swing_bos', [])),
+        'swing_choch_total': len(analysis.get('all_swing_choch', [])),
+        'int_bos_total': len(analysis.get('all_internal_bos', [])),
+        'int_choch_total': len(analysis.get('all_internal_choch', []))
     }
     
     # Проверка близости к структурам
