@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-charts';
 
 // ============================================================
@@ -33,12 +33,23 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   const linesRef = useRef({ entry: null, sl: null, tp: null });
   const draggingRef = useRef(null);
   const levelsRef = useRef(levels);
+  
+  // Состояние видимости SMC (сохраняем в localStorage)
+  const [smcVisible, setSmcVisible] = useState(() => {
+    const saved = localStorage.getItem('astra_smc_visible');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+  
+  // Сохраняем состояние SMC в localStorage
+  useEffect(() => {
+    localStorage.setItem('astra_smc_visible', JSON.stringify(smcVisible));
+  }, [smcVisible]);
 
   // ============================================================
   // DRAW SMC ON CANVAS
   // ============================================================
   const drawSMCOverlay = useCallback(() => {
-    if (!canvasRef.current || !chartRef.current || !seriesRef.current || !analysis) return;
+    if (!canvasRef.current || !chartRef.current || !seriesRef.current) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -49,9 +60,18 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     // Очищаем canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Если SMC выключен или нет данных анализа - не рисуем
+    if (!smcVisible || !analysis) return;
+
     // Получаем видимый диапазон
     const visibleRange = timeScale.getVisibleLogicalRange();
     if (!visibleRange) return;
+
+    // Вычисляем ширину области графика (без шкалы цен справа)
+    // timeScale.width() возвращает ширину области свечей
+    const chartContentWidth = timeScale.width ? timeScale.width() : (canvas.width - 60);
+    const priceScaleWidth = canvas.width - chartContentWidth;
+    const chartRightEdge = canvas.width - priceScaleWidth;
 
     // ============================================================
     // 1. ORDER BLOCKS (Прямоугольники)
@@ -69,7 +89,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       
       if (topY === null || bottomY === null || leftX === null) return;
 
-      const rightX = canvas.width;
+      // Используем chartRightEdge вместо canvas.width
+      const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
@@ -102,7 +123,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       
       if (topY === null || bottomY === null || leftX === null) return;
 
-      const rightX = canvas.width;
+      // Используем chartRightEdge вместо canvas.width
+      const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
@@ -122,9 +144,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     });
 
     // ============================================================
-    // 3. BOS/CHoCH LINES
+    // 3. BOS/CHoCH LINES (Internal + Swing)
     // ============================================================
-    const drawBreakLine = (breaks) => {
+    const drawBreakLine = (breaks, isInternal = false) => {
       breaks.forEach(brk => {
         if (brk.bar_index === undefined || brk.pivot_bar_index === undefined) return;
         
@@ -143,29 +165,36 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         
         ctx.beginPath();
         ctx.moveTo(pivotX, priceY);
-        ctx.lineTo(breakX, priceY);
+        // Ограничиваем линию правой границей графика
+        ctx.lineTo(Math.min(breakX, chartRightEdge), priceY);
         
         if (isChoch) {
           ctx.setLineDash([6, 3]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_CHOCH : SMC_COLORS.BEARISH_CHOCH;
-          ctx.lineWidth = 2;
+          ctx.lineWidth = isInternal ? 1.5 : 2;
         } else {
           ctx.setLineDash([]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = isInternal ? 1 : 1.5;
         }
         ctx.stroke();
         ctx.setLineDash([]);
 
         const labelText = isChoch ? 'CHoCH' : 'BOS';
         ctx.fillStyle = ctx.strokeStyle;
-        ctx.font = 'bold 10px Arial';
-        ctx.fillText(labelText, (pivotX + breakX) / 2 - 15, priceY - 5);
+        ctx.font = isInternal ? '9px Arial' : 'bold 10px Arial';
+        const labelX = Math.min((pivotX + breakX) / 2 - 15, chartRightEdge - 40);
+        ctx.fillText(labelText, labelX, priceY - 5);
       });
     };
 
-    drawBreakLine(analysis.all_swing_bos || []);
-    drawBreakLine(analysis.all_swing_choch || []);
+    // Рисуем Internal структуру (более частые, тонкие линии)
+    drawBreakLine(analysis.all_internal_bos || [], true);
+    drawBreakLine(analysis.all_internal_choch || [], true);
+    
+    // Рисуем Swing структуру (реже, толще линии)
+    drawBreakLine(analysis.all_swing_bos || [], false);
+    drawBreakLine(analysis.all_swing_choch || [], false);
 
     // ============================================================
     // 4. EQUAL HIGHS/LOWS (Пунктирные линии)
@@ -180,20 +209,21 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.moveTo(0, priceY);
-        ctx.lineTo(canvas.width, priceY);
+        // Ограничиваем линию правой границей графика
+        ctx.lineTo(chartRightEdge, priceY);
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = color;
         ctx.font = '9px Arial';
-        ctx.fillText(label, canvas.width - 30, priceY - 3);
+        ctx.fillText(label, chartRightEdge - 35, priceY - 3);
       });
     };
 
     drawEqualLevels(analysis.eqh || [], SMC_COLORS.EQH, 'EQH');
     drawEqualLevels(analysis.eql || [], SMC_COLORS.EQL, 'EQL');
 
-  }, [analysis, history]);
+  }, [analysis, history, smcVisible]);
 
   // ============================================================
   // CHART INITIALIZATION
@@ -363,6 +393,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     drawSMCOverlay();
   }, [analysis, drawSMCOverlay]);
 
+  // Перерисовываем при переключении SMC
+  useEffect(() => {
+    drawSMCOverlay();
+  }, [smcVisible, drawSMCOverlay]);
+
   useEffect(() => {
     const s = seriesRef.current;
     if (!s) return;
@@ -404,29 +439,106 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
           Соединение с сервером отсутствует
         </div>
       )}
-      {analysis && (
-        <div style={{
-          position: 'absolute',
-          top: '10px',
-          left: '10px',
-          background: 'rgba(11, 14, 20, 0.85)',
-          padding: '8px 12px',
-          borderRadius: '6px',
-          fontSize: '11px',
-          color: '#d1d4dc',
-          zIndex: 20,
-          display: 'flex',
-          gap: '12px',
-          flexWrap: 'wrap'
-        }}>
-          <span style={{ color: '#26a69a' }}>● OB Bull</span>
-          <span style={{ color: '#ef5350' }}>● OB Bear</span>
-          <span style={{ color: '#26a69a' }}>◇ FVG</span>
-          <span style={{ color: '#2962ff' }}>— BOS</span>
-          <span style={{ color: '#f44336' }}>┄ CHoCH</span>
-          <span style={{ color: '#ff9800' }}>⋯ EQH/EQL</span>
-        </div>
-      )}
+      
+      {/* SMC Toggle Button + Legend */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        left: '10px',
+        zIndex: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px'
+      }}>
+        {/* Toggle Button */}
+        <button
+          onClick={() => setSmcVisible(prev => !prev)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 14px',
+            background: smcVisible 
+              ? 'linear-gradient(135deg, rgba(41, 98, 255, 0.2), rgba(0, 210, 255, 0.15))'
+              : 'rgba(17, 22, 30, 0.85)',
+            border: smcVisible 
+              ? '1px solid rgba(41, 98, 255, 0.5)'
+              : '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '8px',
+            color: smcVisible ? '#00d2ff' : '#848e9c',
+            fontSize: '11px',
+            fontWeight: '600',
+            fontFamily: 'Inter, sans-serif',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            backdropFilter: 'blur(10px)',
+            boxShadow: smcVisible 
+              ? '0 0 20px rgba(41, 98, 255, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+              : '0 2px 8px rgba(0, 0, 0, 0.3)',
+          }}
+          onMouseEnter={(e) => {
+            e.target.style.transform = 'translateY(-1px)';
+            e.target.style.boxShadow = smcVisible 
+              ? '0 4px 24px rgba(41, 98, 255, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+              : '0 4px 12px rgba(0, 0, 0, 0.4)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = 'translateY(0)';
+            e.target.style.boxShadow = smcVisible 
+              ? '0 0 20px rgba(41, 98, 255, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+              : '0 2px 8px rgba(0, 0, 0, 0.3)';
+          }}
+        >
+          {/* Toggle Icon */}
+          <div style={{
+            width: '32px',
+            height: '16px',
+            background: smcVisible 
+              ? 'linear-gradient(90deg, #2962ff, #00d2ff)'
+              : 'rgba(255, 255, 255, 0.1)',
+            borderRadius: '8px',
+            position: 'relative',
+            transition: 'all 0.3s ease',
+          }}>
+            <div style={{
+              width: '12px',
+              height: '12px',
+              background: smcVisible ? '#fff' : '#848e9c',
+              borderRadius: '50%',
+              position: 'absolute',
+              top: '2px',
+              left: smcVisible ? '18px' : '2px',
+              transition: 'all 0.3s ease',
+              boxShadow: smcVisible ? '0 0 8px rgba(0, 210, 255, 0.5)' : 'none',
+            }} />
+          </div>
+          <span>SMC</span>
+        </button>
+        
+        {/* Legend (only when SMC is visible and analysis exists) */}
+        {smcVisible && analysis && (
+          <div style={{
+            background: 'rgba(11, 14, 20, 0.85)',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '10px',
+            color: '#d1d4dc',
+            display: 'flex',
+            gap: '10px',
+            flexWrap: 'wrap',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+            maxWidth: '320px'
+          }}>
+            <span style={{ color: '#26a69a' }}>● OB Bull</span>
+            <span style={{ color: '#ef5350' }}>● OB Bear</span>
+            <span style={{ color: '#26a69a' }}>◇ FVG</span>
+            <span style={{ color: '#2962ff' }}>— BOS</span>
+            <span style={{ color: '#f44336' }}>┄ CHoCH</span>
+            <span style={{ color: '#ff9800' }}>⋯ EQH/EQL</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

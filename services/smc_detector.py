@@ -29,8 +29,8 @@ NEUTRAL = 0
 # Параметры структуры (как LuxAlgo)
 DEFAULT_INTERNAL_LEFT = 5
 DEFAULT_INTERNAL_RIGHT = 5
-DEFAULT_SWING_LEFT = 50
-DEFAULT_SWING_RIGHT = 50
+DEFAULT_SWING_LEFT = 20   # Было 50 - слишком агрессивно для отображения
+DEFAULT_SWING_RIGHT = 20  # Было 50 - уменьшено для большей чувствительности
 
 # v5.2 Ultra Sensitive параметры
 FRESH_SIGNAL_BARS = 25              # Свежий сигнал (было 10)
@@ -674,6 +674,9 @@ class SMCDetector:
             current_price = float(df['close'].iloc[-1])
             recent_df = df.tail(lookback)
             
+            # Вычисляем смещение для конвертации локального индекса в глобальный
+            global_offset = len(df) - len(recent_df)
+            
             for i in range(2, len(recent_df) - 1):
                 curr = recent_df.iloc[i]
                 prev = recent_df.iloc[i - 1]
@@ -687,7 +690,7 @@ class SMCDetector:
                                 'type': 'BULL_OB',
                                 'top': float(prev['open']),
                                 'bottom': float(prev['low']),
-                                'bar_index': i - 1,
+                                'bar_index': global_offset + i - 1,  # Конвертация в глобальный индекс
                                 'bars_ago': len(recent_df) - i
                             })
                     
@@ -698,7 +701,7 @@ class SMCDetector:
                                 'type': 'BEAR_OB',
                                 'top': float(prev['high']),
                                 'bottom': float(prev['open']),
-                                'bar_index': i - 1,
+                                'bar_index': global_offset + i - 1,  # Конвертация в глобальный индекс
                                 'bars_ago': len(recent_df) - i
                             })
             
@@ -725,6 +728,9 @@ class SMCDetector:
             atr = self._calculate_atr(df)
             min_gap = atr * 0.3 if atr > 0 else 1.0
             
+            # Вычисляем смещение для конвертации локального индекса в глобальный
+            global_offset = len(df) - len(recent_df)
+            
             for i in range(1, len(recent_df) - 1):
                 candle1 = recent_df.iloc[i - 1]
                 candle3 = recent_df.iloc[i + 1]
@@ -739,7 +745,7 @@ class SMCDetector:
                             'bottom': float(candle1['high']),
                             'price': float((candle3['low'] + candle1['high']) / 2),
                             'gap_size': float(gap_size),
-                            'bar_index': i,
+                            'bar_index': global_offset + i,  # Конвертация в глобальный индекс
                             'bars_ago': len(recent_df) - 1 - i
                         })
                 
@@ -753,7 +759,7 @@ class SMCDetector:
                             'bottom': float(candle3['high']),
                             'price': float((candle1['low'] + candle3['high']) / 2),
                             'gap_size': float(gap_size),
-                            'bar_index': i,
+                            'bar_index': global_offset + i,  # Конвертация в глобальный индекс
                             'bars_ago': len(recent_df) - 1 - i
                         })
             
