@@ -96,11 +96,19 @@ class TradingCalculator:
             # 2. Считаем индикаторы
             indicators = self._calculate_indicators(df)
             
-            # 3. Формируем анализ с полными данными (приоритет HEAD)
+            # 3. Формируем анализ с полными данными v7.0
             analysis = {
+                # Order Blocks v7.0 (с mitigation/breaker статусом)
                 "order_blocks": smc_data.get('order_blocks', []),
+                "breaker_blocks": smc_data.get('breaker_blocks', []),
+                
+                # FVG v7.0 (с fill статусом)
                 "fvg": smc_data.get('fvg', []),
-                "liquidity": self._format_liquidity_legacy(smc_data),
+                
+                # Liquidity v7.0 (с sweep статусом)
+                "liquidity": smc_data.get('liquidity', []),
+                "liquidity_legacy": self._format_liquidity_legacy(smc_data),
+                
                 "bos_choch": self._format_bos_choch_legacy(smc_data),
                 "trend": smc_data.get('trend', 'NEUTRAL'),
                 "levels": {
@@ -108,7 +116,7 @@ class TradingCalculator:
                     "support": float(df['low'].min())
                 },
                 "indicators": indicators,
-                "advanced": smc_data.get('advanced', {}),  # Добавляем advanced данные
+                "advanced": smc_data.get('advanced', {}),
                 "choch": smc_data.get('choch', []),
                 "bos": smc_data.get('bos', []),
                 "eqh": smc_data.get('eqh', []),

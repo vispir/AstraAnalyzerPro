@@ -1,9 +1,15 @@
 """
-SMC Detector v6.0 - LuxAlgo Style
-==================================
-КРИТИЧЕСКИЕ ИЗМЕНЕНИЯ v6.0:
+SMC Detector v7.0 - Professional Trading Analyzer
+==================================================
+УЛУЧШЕНИЯ v7.0:
+- Узкие зоны Premium/Discount на основе актуальных Swing High/Low (не 250 свечей!)
+- Order Blocks с полным lifecycle: active → mitigated → invalidated → breaker
+- FVG с fill статусом: open → partially_filled → filled
+- Liquidity Pools и Liquidity Sweeps детекция
+- ATR-фильтр шума для BOS/CHoCH (убирает микро-пробои)
+
+СОХРАНЕНО из v6.0:
 - Параметры pivot detection как в LuxAlgo (swing: 8/4, internal: 3/2)
-- Потенциальные pivot'ы для последних баров (без right confirmation)
 - Флаг 'confirmed' для фильтрации сигналов TG бота
 - Двухуровневая система: визуализация (все) vs сигналы (confirmed only)
 
@@ -52,6 +58,10 @@ IMPULSE_THRESHOLD = 2               # Минимум BOS для IMPULSE_TREND
 # Пороги зон
 PREMIUM_THRESHOLD = 66.6            # > 66.6% = Premium
 DISCOUNT_THRESHOLD = 33.3           # < 33.3% = Discount
+
+# v6.1 Фильтр шума - минимальный порог пробоя
+MIN_BREAK_ATR_RATIO = 0.15          # Пробой должен быть минимум 0.15 ATR (убирает микро-шум)
+MIN_BREAK_PERCENT = 0.03            # Или минимум 0.03% от цены (для страховки)
 
 
 # ============================================================================
@@ -243,13 +253,18 @@ class SMCDetector:
     def _detect_structure_history(self, df: pd.DataFrame, 
                                    pivot_highs: List[PivotPoint],
                                    pivot_lows: List[PivotPoint],
-                                   structure_name: str = "swing") -> Tuple[List[StructureBreak], List[StructureBreak], int]:
+                                   structure_name: str = "swing",
+                                   atr: float = 0.0) -> Tuple[List[StructureBreak], List[StructureBreak], int]:
         """
-        Bar-by-bar сканирование истории (v6.0)
+        Bar-by-bar сканирование истории (v6.1)
         
-        Добавлено:
+        Добавлено v6.0:
         - confirmed: True если пробой ТЕЛОМ (close), False если только тенью
         - Для TG бота: использовать только confirmed=True
+        
+        Добавлено v6.1:
+        - ATR-фильтр: игнорируем микро-пробои меньше MIN_BREAK_ATR_RATIO * ATR
+        - Убирает шум на графике
         """
         all_choch = []
         all_bos = []
@@ -267,6 +282,12 @@ class SMCDetector:
         lows = df['low'].values
         closes = df['close'].values
         total_bars = len(df)
+        
+        # v6.1: Минимальный порог пробоя (ATR-based или процентный)
+        current_price = closes[-1] if len(closes) > 0 else 0
+        min_break_atr = atr * MIN_BREAK_ATR_RATIO if atr > 0 else 0
+        min_break_pct = current_price * (MIN_BREAK_PERCENT / 100) if current_price > 0 else 0
+        min_break_threshold = max(min_break_atr, min_break_pct)
         
         for bar_i in range(total_bars):
             current_high = highs[bar_i]
@@ -287,7 +308,10 @@ class SMCDetector:
             # BULLISH BREAK (пробой вверх)
             # ============================================================
             if active_pivot_high and active_pivot_high.price > 0:
-                if current_high > active_pivot_high.price:
+                break_distance = current_high - active_pivot_high.price
+                
+                # v6.1: Пробой должен быть значимым (больше порога)
+                if break_distance > min_break_threshold:
                     is_choch = (current_trend == BEARISH)
                     break_type = 'BULLISH_CHOCH' if is_choch else 'BULLISH_BOS'
                     
@@ -320,7 +344,10 @@ class SMCDetector:
             # BEARISH BREAK (пробой вниз)
             # ============================================================
             if active_pivot_low and active_pivot_low.price > 0:
-                if current_low < active_pivot_low.price:
+                break_distance = active_pivot_low.price - current_low
+                
+                # v6.1: Пробой должен быть значимым (больше порога)
+                if break_distance > min_break_threshold:
                     is_choch = (current_trend == BULLISH)
                     break_type = 'BEARISH_CHOCH' if is_choch else 'BEARISH_BOS'
                     
@@ -369,12 +396,14 @@ class SMCDetector:
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
         """
-        Определение структуры рынка v6.0
+        Определение структуры рынка v6.1
         
         Возвращает:
         - all_*: ВСЕ события для визуализации на графике
         - *_fresh: свежие события (bars_ago <= FRESH_SIGNAL_BARS) для визуализации
         - *_confirmed: ПОДТВЕРЖДЁННЫЕ свежие события для TG бота
+        
+        v6.1: Добавлен ATR-фильтр для устранения шума
         """
         result = {
             'all_internal_choch': [], 'all_internal_bos': [],
@@ -392,11 +421,15 @@ class SMCDetector:
         if len(df) < 15:
             return result
         
+        # v6.1: Рассчитываем ATR для фильтрации шума
+        atr = self._calculate_atr(df)
+        logger.debug(f"v6.1 ATR filter: ATR={atr:.2f}, min_break={atr * MIN_BREAK_ATR_RATIO:.2f}")
+        
         # ================================================================
         # INTERNAL STRUCTURE (чувствительная, для микро-движений)
         # ================================================================
         int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
-        int_all_choch, int_all_bos, int_trend = self._detect_structure_history(df, int_pivot_highs, int_pivot_lows, "internal")
+        int_all_choch, int_all_bos, int_trend = self._detect_structure_history(df, int_pivot_highs, int_pivot_lows, "internal", atr)
         
         result['all_internal_choch'] = [self._structure_break_to_dict(sb) for sb in int_all_choch]
         result['all_internal_bos'] = [self._structure_break_to_dict(sb) for sb in int_all_bos]
@@ -426,7 +459,7 @@ class SMCDetector:
         # SWING STRUCTURE (основная структура)
         # ================================================================
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
-        sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(df, sw_pivot_highs, sw_pivot_lows, "swing")
+        sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(df, sw_pivot_highs, sw_pivot_lows, "swing", atr)
         
         result['all_swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch]
         result['all_swing_bos'] = [self._structure_break_to_dict(sb) for sb in sw_all_bos]
@@ -453,16 +486,18 @@ class SMCDetector:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
         # ================================================================
-        # ЛОГИРОВАНИЕ v6.0
+        # ЛОГИРОВАНИЕ v6.1
         # ================================================================
         confirmed_count = (len(result['swing_bos_confirmed']) + len(result['swing_choch_confirmed']) +
                           len(result['internal_bos_confirmed']) + len(result['internal_choch_confirmed']))
         
-        logger.info(f"v6.0 Structure: Internal pivots H={len(int_pivot_highs)} L={len(int_pivot_lows)}, "
+        min_break = atr * MIN_BREAK_ATR_RATIO if atr > 0 else 0
+        logger.info(f"v6.1 Structure: ATR={atr:.2f}, min_break={min_break:.2f} | "
+                   f"Internal pivots H={len(int_pivot_highs)} L={len(int_pivot_lows)}, "
                    f"Swing pivots H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
-        logger.info(f"v6.0 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, "
+        logger.info(f"v6.1 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, "
                    f"Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
-        logger.info(f"v6.0 CONFIRMED (for TG bot): {confirmed_count} signals | "
+        logger.info(f"v6.1 CONFIRMED (for TG bot): {confirmed_count} signals | "
                    f"Trends: I={result['internal_trend']}, S={result['swing_trend']}")
         
         # Логируем последние события
@@ -478,12 +513,17 @@ class SMCDetector:
         return result
     
     # ========================================================================
-    # РАСЧЁТ ЗОН PREMIUM/DISCOUNT (ИСПРАВЛЕНО ДЛЯ ФРОНТЕНДА!)
+    # РАСЧЁТ ЗОН PREMIUM/DISCOUNT v7.0 (SWING-BASED)
     # ========================================================================
     
-    def calculate_zones(self, df: pd.DataFrame) -> Dict:
+    def calculate_zones(self, df: pd.DataFrame, swing_high: float = 0, swing_low: float = 0) -> Dict:
         """
-        Расчёт зон Premium/Discount на основе LOOKBACK_BARS свечей
+        Расчёт зон Premium/Discount v7.0
+        
+        УЛУЧШЕНИЯ:
+        - Использует актуальные Swing High/Low вместо 250 свечей
+        - Более узкие и точные зоны
+        - Fallback на последние 50 свечей если swing не найден
         
         ВАЖНО: Формат для фронтенда AIPanel.jsx:
         analysis.advanced.key_levels.Current_Zone
@@ -492,14 +532,23 @@ class SMCDetector:
             if len(df) < 10:
                 return self._get_empty_zones()
             
-            # Берём последние LOOKBACK_BARS свечей (или все если меньше)
-            lookback = min(LOOKBACK_BARS, len(df))
-            recent_df = df.tail(lookback)
-            
-            # Глобальные экстремумы
-            h_max = float(recent_df['high'].max())
-            l_min = float(recent_df['low'].min())
             current_close = float(df['close'].iloc[-1])
+            
+            # ================================================================
+            # v7.0: Используем Swing High/Low если переданы
+            # Это даёт более точный и узкий диапазон
+            # ================================================================
+            if swing_high > 0 and swing_low > 0 and swing_high > swing_low:
+                h_max = swing_high
+                l_min = swing_low
+                range_source = 'SWING_POINTS'
+            else:
+                # Fallback: используем последние 50 свечей (не 250!)
+                lookback = min(50, len(df))
+                recent_df = df.tail(lookback)
+                h_max = float(recent_df['high'].max())
+                l_min = float(recent_df['low'].min())
+                range_source = 'LOOKBACK_50'
             
             # Защита от деления на ноль
             if h_max == l_min:
@@ -508,6 +557,9 @@ class SMCDetector:
             else:
                 # Позиция в диапазоне (0% = дно, 100% = вершина)
                 pos_pct = ((current_close - l_min) / (h_max - l_min)) * 100
+                
+                # Ограничиваем 0-100% (цена может выйти за пределы swing)
+                pos_pct = max(0, min(100, pos_pct))
                 
                 # Определяем зону
                 if pos_pct > PREMIUM_THRESHOLD:
@@ -540,11 +592,11 @@ class SMCDetector:
                 'current_zone': zone_name,
                 'range_high': float(h_max),
                 'range_low': float(l_min),
-                'range_source': 'LOOKBACK_250',
+                'range_source': range_source,
                 'position_in_range_pct': float(round(pos_pct, 2))
             }
             
-            logger.info(f"Zones: {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}]")
+            logger.info(f"v7.0 Zones ({range_source}): {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}] (size: {range_size:.2f})")
             
             return zones
             
@@ -812,52 +864,156 @@ class SMCDetector:
         return context
     
     # ========================================================================
-    # ORDER BLOCKS
+    # ORDER BLOCKS v7.0 (MITIGATION / INVALIDATION / BREAKER)
     # ========================================================================
     
     def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
-        order_blocks = {'internal': [], 'swing': []}
+        """
+        Order Blocks v7.0 с профессиональной логикой:
+        
+        status:
+        - 'active': OB активен, цена ещё не касалась его
+        - 'mitigated': цена вернулась к OB (хорошая зона входа)
+        - 'invalidated': цена прошла через OB полностью (OB больше не актуален)
+        - 'breaker': пробитый OB стал зоной противоположного направления
+        """
+        order_blocks = {'internal': [], 'swing': [], 'breakers': []}
         
         try:
             if len(df) < 10:
                 return order_blocks
             
             current_price = float(df['close'].iloc[-1])
-            recent_df = df.tail(lookback)
+            atr = self._calculate_atr(df)
+            min_ob_size = atr * 0.2 if atr > 0 else 0  # Минимальный размер OB
             
-            # Вычисляем смещение для конвертации локального индекса в глобальный
+            recent_df = df.tail(lookback).reset_index(drop=True)
             global_offset = len(df) - len(recent_df)
+            
+            raw_obs = []
             
             for i in range(2, len(recent_df) - 1):
                 curr = recent_df.iloc[i]
                 prev = recent_df.iloc[i - 1]
-                next_bar = recent_df.iloc[i + 1] if i + 1 < len(recent_df) else None
+                next_bar = recent_df.iloc[i + 1]
                 
-                if next_bar is not None:
-                    # Bullish OB
-                    if prev['close'] < prev['open'] and next_bar['close'] > curr['high']:
-                        if current_price >= prev['low']:
-                            order_blocks['internal'].append({
-                                'type': 'BULL_OB',
-                                'top': float(prev['open']),
-                                'bottom': float(prev['low']),
-                                'bar_index': global_offset + i - 1,  # Конвертация в глобальный индекс
-                                'bars_ago': len(recent_df) - i
-                            })
+                # ============================================================
+                # BULLISH ORDER BLOCK
+                # Условие: медвежья свеча перед сильным бычьим импульсом
+                # ============================================================
+                if prev['close'] < prev['open']:  # Медвежья свеча
+                    impulse_up = next_bar['close'] > curr['high']  # Импульс вверх
+                    body_size = abs(prev['open'] - prev['close'])
                     
-                    # Bearish OB
-                    if prev['close'] > prev['open'] and next_bar['close'] < curr['low']:
-                        if current_price <= prev['high']:
-                            order_blocks['internal'].append({
-                                'type': 'BEAR_OB',
-                                'top': float(prev['high']),
-                                'bottom': float(prev['open']),
-                                'bar_index': global_offset + i - 1,  # Конвертация в глобальный индекс
-                                'bars_ago': len(recent_df) - i
-                            })
+                    if impulse_up and body_size >= min_ob_size:
+                        ob_top = float(prev['open'])
+                        ob_bottom = float(prev['low'])
+                        
+                        raw_obs.append({
+                            'type': 'BULL_OB',
+                            'top': ob_top,
+                            'bottom': ob_bottom,
+                            'bar_index': global_offset + i - 1,
+                            'bars_ago': len(recent_df) - i,
+                            'formation_bar': i - 1
+                        })
+                
+                # ============================================================
+                # BEARISH ORDER BLOCK
+                # Условие: бычья свеча перед сильным медвежьим импульсом
+                # ============================================================
+                if prev['close'] > prev['open']:  # Бычья свеча
+                    impulse_down = next_bar['close'] < curr['low']  # Импульс вниз
+                    body_size = abs(prev['close'] - prev['open'])
+                    
+                    if impulse_down and body_size >= min_ob_size:
+                        ob_top = float(prev['high'])
+                        ob_bottom = float(prev['open'])
+                        
+                        raw_obs.append({
+                            'type': 'BEAR_OB',
+                            'top': ob_top,
+                            'bottom': ob_bottom,
+                            'bar_index': global_offset + i - 1,
+                            'bars_ago': len(recent_df) - i,
+                            'formation_bar': i - 1
+                        })
             
+            # ============================================================
+            # ПРОВЕРКА СТАТУСА КАЖДОГО OB (mitigation / invalidation)
+            # ============================================================
+            for ob in raw_obs:
+                formation_bar = ob['formation_bar']
+                ob_top = ob['top']
+                ob_bottom = ob['bottom']
+                is_bull = ob['type'] == 'BULL_OB'
+                
+                status = 'active'
+                mitigated_at = None
+                
+                # Проверяем все свечи ПОСЛЕ формирования OB
+                for j in range(formation_bar + 2, len(recent_df)):
+                    candle = recent_df.iloc[j]
+                    candle_high = candle['high']
+                    candle_low = candle['low']
+                    candle_close = candle['close']
+                    
+                    if is_bull:
+                        # BULL OB: ждём возврат цены к зоне сверху
+                        if candle_low <= ob_top and candle_low >= ob_bottom:
+                            # Цена коснулась OB — mitigated
+                            if status == 'active':
+                                status = 'mitigated'
+                                mitigated_at = global_offset + j
+                        
+                        # Цена прошла НИЖЕ OB полностью — invalidated
+                        if candle_close < ob_bottom:
+                            status = 'invalidated'
+                            break
+                    else:
+                        # BEAR OB: ждём возврат цены к зоне снизу
+                        if candle_high >= ob_bottom and candle_high <= ob_top:
+                            # Цена коснулась OB — mitigated
+                            if status == 'active':
+                                status = 'mitigated'
+                                mitigated_at = global_offset + j
+                        
+                        # Цена прошла ВЫШЕ OB полностью — invalidated
+                        if candle_close > ob_top:
+                            status = 'invalidated'
+                            break
+                
+                # Добавляем OB с статусом
+                ob_data = {
+                    'type': ob['type'],
+                    'top': ob['top'],
+                    'bottom': ob['bottom'],
+                    'bar_index': ob['bar_index'],
+                    'bars_ago': ob['bars_ago'],
+                    'status': status,
+                    'mitigated_at': mitigated_at
+                }
+                
+                # Показываем только активные и mitigated OB (не invalidated)
+                if status in ['active', 'mitigated']:
+                    order_blocks['internal'].append(ob_data)
+                elif status == 'invalidated':
+                    # Превращаем в Breaker Block (противоположная зона)
+                    breaker_type = 'BEAR_BREAKER' if is_bull else 'BULL_BREAKER'
+                    order_blocks['breakers'].append({
+                        'type': breaker_type,
+                        'top': ob['top'],
+                        'bottom': ob['bottom'],
+                        'bar_index': ob['bar_index'],
+                        'original_type': ob['type']
+                    })
+            
+            # Ограничиваем количество
             order_blocks['internal'] = order_blocks['internal'][-5:]
-            order_blocks['swing'] = order_blocks['swing'][-3:]
+            order_blocks['breakers'] = order_blocks['breakers'][-3:]
+            
+            logger.debug(f"v7.0 Order Blocks: {len(order_blocks['internal'])} active/mitigated, "
+                        f"{len(order_blocks['breakers'])} breakers")
             
         except Exception as e:
             logger.error(f"Error detecting order blocks: {e}")
@@ -865,10 +1021,18 @@ class SMCDetector:
         return order_blocks
     
     # ========================================================================
-    # FAIR VALUE GAPS
+    # FAIR VALUE GAPS v7.0 (MITIGATION STATUS)
     # ========================================================================
     
     def detect_fvg(self, df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
+        """
+        Fair Value Gaps v7.0 с mitigation статусом:
+        
+        status:
+        - 'open': FVG не заполнен
+        - 'partially_filled': FVG частично заполнен
+        - 'filled': FVG полностью заполнен (больше не актуален)
+        """
         fvg_list = []
         
         try:
@@ -877,44 +1041,106 @@ class SMCDetector:
             
             recent_df = df.tail(lookback).reset_index(drop=True)
             atr = self._calculate_atr(df)
-            min_gap = atr * 0.3 if atr > 0 else 1.0
+            min_gap = atr * 0.2 if atr > 0 else 0.5  # Уменьшил порог
             
-            # Вычисляем смещение для конвертации локального индекса в глобальный
             global_offset = len(df) - len(recent_df)
+            raw_fvgs = []
             
             for i in range(1, len(recent_df) - 1):
                 candle1 = recent_df.iloc[i - 1]
                 candle3 = recent_df.iloc[i + 1]
                 
-                # Bullish FVG
+                # Bullish FVG (gap up)
                 if candle3['low'] > candle1['high']:
                     gap_size = candle3['low'] - candle1['high']
-                    if gap_size > min_gap:
-                        fvg_list.append({
+                    if gap_size >= min_gap:
+                        raw_fvgs.append({
                             'type': 'BULL_FVG',
                             'top': float(candle3['low']),
                             'bottom': float(candle1['high']),
                             'price': float((candle3['low'] + candle1['high']) / 2),
                             'gap_size': float(gap_size),
-                            'bar_index': global_offset + i,  # Конвертация в глобальный индекс
-                            'bars_ago': len(recent_df) - 1 - i
+                            'bar_index': global_offset + i,
+                            'bars_ago': len(recent_df) - 1 - i,
+                            'formation_bar': i
                         })
                 
-                # Bearish FVG
+                # Bearish FVG (gap down)
                 elif candle3['high'] < candle1['low']:
                     gap_size = candle1['low'] - candle3['high']
-                    if gap_size > min_gap:
-                        fvg_list.append({
+                    if gap_size >= min_gap:
+                        raw_fvgs.append({
                             'type': 'BEAR_FVG',
                             'top': float(candle1['low']),
                             'bottom': float(candle3['high']),
                             'price': float((candle1['low'] + candle3['high']) / 2),
                             'gap_size': float(gap_size),
-                            'bar_index': global_offset + i,  # Конвертация в глобальный индекс
-                            'bars_ago': len(recent_df) - 1 - i
+                            'bar_index': global_offset + i,
+                            'bars_ago': len(recent_df) - 1 - i,
+                            'formation_bar': i
                         })
             
+            # ============================================================
+            # ПРОВЕРКА MITIGATION СТАТУСА
+            # ============================================================
+            for fvg in raw_fvgs:
+                formation_bar = fvg['formation_bar']
+                fvg_top = fvg['top']
+                fvg_bottom = fvg['bottom']
+                is_bull = fvg['type'] == 'BULL_FVG'
+                
+                status = 'open'
+                fill_percent = 0.0
+                
+                # Проверяем свечи после формирования FVG
+                for j in range(formation_bar + 2, len(recent_df)):
+                    candle = recent_df.iloc[j]
+                    
+                    if is_bull:
+                        # BULL FVG: заполняется когда цена падает в gap
+                        if candle['low'] <= fvg_top:
+                            # Расчёт процента заполнения
+                            penetration = fvg_top - max(candle['low'], fvg_bottom)
+                            fill_percent = max(fill_percent, (penetration / (fvg_top - fvg_bottom)) * 100)
+                            
+                            if candle['low'] <= fvg_bottom:
+                                status = 'filled'
+                                fill_percent = 100.0
+                                break
+                            else:
+                                status = 'partially_filled'
+                    else:
+                        # BEAR FVG: заполняется когда цена растёт в gap
+                        if candle['high'] >= fvg_bottom:
+                            penetration = min(candle['high'], fvg_top) - fvg_bottom
+                            fill_percent = max(fill_percent, (penetration / (fvg_top - fvg_bottom)) * 100)
+                            
+                            if candle['high'] >= fvg_top:
+                                status = 'filled'
+                                fill_percent = 100.0
+                                break
+                            else:
+                                status = 'partially_filled'
+                
+                # Добавляем только open и partially_filled FVG
+                if status != 'filled':
+                    fvg_data = {
+                        'type': fvg['type'],
+                        'top': fvg['top'],
+                        'bottom': fvg['bottom'],
+                        'price': fvg['price'],
+                        'gap_size': fvg['gap_size'],
+                        'bar_index': fvg['bar_index'],
+                        'bars_ago': fvg['bars_ago'],
+                        'status': status,
+                        'fill_percent': round(fill_percent, 1)
+                    }
+                    fvg_list.append(fvg_data)
+            
+            # Ограничиваем количество
             fvg_list = fvg_list[-5:]
+            
+            logger.debug(f"v7.0 FVG: {len(fvg_list)} active gaps")
             
         except Exception as e:
             logger.error(f"Error detecting FVG: {e}")
@@ -922,28 +1148,86 @@ class SMCDetector:
         return fvg_list
     
     # ========================================================================
-    # LIQUIDITY
+    # LIQUIDITY v7.0 (POOLS + SWEEPS)
     # ========================================================================
     
     def detect_liquidity(self, df: pd.DataFrame, lookback: int = 100) -> List[Dict]:
+        """
+        Liquidity v7.0:
+        - Liquidity Pools: зоны где сосредоточены стопы (равные хаи/лои)
+        - Liquidity Sweeps: когда цена выметает ликвидность и разворачивается
+        """
         liquidity = []
         
         try:
             if len(df) < 10:
                 return liquidity
             
-            recent_df = df.tail(lookback)
+            recent_df = df.tail(lookback).reset_index(drop=True)
+            global_offset = len(df) - len(recent_df)
             highs = recent_df['high'].values
             lows = recent_df['low'].values
+            closes = recent_df['close'].values
             
+            # ============================================================
+            # LIQUIDITY POOLS (зоны скопления стопов)
+            # ============================================================
             for i in range(3, len(recent_df) - 3):
+                # Swing High = Resistance / Sell-side liquidity
                 if highs[i] > max(highs[i-3:i]) and highs[i] > max(highs[i+1:i+4]):
-                    liquidity.append({'type': 'RESISTANCE', 'price': float(highs[i]), 'strength': 1})
+                    liquidity.append({
+                        'type': 'SELL_SIDE_LIQ',
+                        'price': float(highs[i]),
+                        'bar_index': global_offset + i,
+                        'strength': 1,
+                        'swept': False
+                    })
                 
+                # Swing Low = Support / Buy-side liquidity
                 if lows[i] < min(lows[i-3:i]) and lows[i] < min(lows[i+1:i+4]):
-                    liquidity.append({'type': 'SUPPORT', 'price': float(lows[i]), 'strength': 1})
+                    liquidity.append({
+                        'type': 'BUY_SIDE_LIQ',
+                        'price': float(lows[i]),
+                        'bar_index': global_offset + i,
+                        'strength': 1,
+                        'swept': False
+                    })
             
-            liquidity = sorted(liquidity, key=lambda x: x['price'], reverse=True)[:4]
+            # ============================================================
+            # LIQUIDITY SWEEPS (выметание ликвидности)
+            # ============================================================
+            # Проверяем каждый уровень ликвидности
+            for liq in liquidity:
+                liq_bar = liq['bar_index'] - global_offset
+                liq_price = liq['price']
+                is_sell_side = liq['type'] == 'SELL_SIDE_LIQ'
+                
+                # Проверяем свечи после формирования уровня
+                for j in range(liq_bar + 1, len(recent_df)):
+                    candle_high = highs[j]
+                    candle_low = lows[j]
+                    candle_close = closes[j]
+                    
+                    if is_sell_side:
+                        # Sweep of highs: цена пробила high, но закрылась ниже
+                        if candle_high > liq_price and candle_close < liq_price:
+                            liq['swept'] = True
+                            liq['sweep_bar'] = global_offset + j
+                            liq['type'] = 'SWEPT_HIGH'
+                            break
+                    else:
+                        # Sweep of lows: цена пробила low, но закрылась выше
+                        if candle_low < liq_price and candle_close > liq_price:
+                            liq['swept'] = True
+                            liq['sweep_bar'] = global_offset + j
+                            liq['type'] = 'SWEPT_LOW'
+                            break
+            
+            # Сортируем: swept уровни важнее
+            liquidity = sorted(liquidity, key=lambda x: (x.get('swept', False), x['price']), reverse=True)[:6]
+            
+            logger.debug(f"v7.0 Liquidity: {len(liquidity)} levels, "
+                        f"swept={sum(1 for l in liquidity if l.get('swept', False))}")
             
         except Exception as e:
             logger.error(f"Error detecting liquidity: {e}")
@@ -1023,6 +1307,7 @@ class SMCDetector:
     def _get_empty_result(self) -> Dict:
         return sanitize_for_json({
             'order_blocks': [], 'order_blocks_internal': [], 'order_blocks_swing': [],
+            'breaker_blocks': [],  # v7.0
             'fvg': [], 'liquidity': [],
             'choch': [], 'bos': [],
             'internal_choch': [], 'internal_bos': [],
@@ -1040,7 +1325,7 @@ class SMCDetector:
             'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0,
             'advanced': self._get_empty_advanced(),
             'signals_count': 0,
-            'confirmed_signals_count': 0,  # v6.0
+            'confirmed_signals_count': 0,
             'impulse_context': {
                 'market_condition': 'RANGING',
                 'has_breakout': False, 'is_void_run': False, 'is_impulse': False,
@@ -1055,9 +1340,16 @@ class SMCDetector:
     
     def analyze(self, df) -> Dict:
         """
-        Полный SMC анализ v6.0 LuxAlgo Style
+        Полный SMC анализ v7.0 Professional
         
-        Возвращает две категории сигналов:
+        Улучшения v7.0:
+        - Узкие зоны Premium/Discount на основе Swing Points
+        - Order Blocks с mitigation/invalidation/breaker статусом
+        - FVG с fill статусом
+        - Liquidity Sweeps
+        - ATR-фильтр шума
+        
+        Возвращает:
         1. ВСЕ сигналы (all_*, fresh) - для визуализации на графике
         2. CONFIRMED сигналы (*_confirmed) - для TG бота (консервативные)
         """
@@ -1080,7 +1372,7 @@ class SMCDetector:
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v6.0 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v7.0 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
             # 1. Market Structure (v6.0 с confirmed флагами)
             market_structure = self.detect_market_structure(df)
@@ -1097,32 +1389,36 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. Зоны Premium/Discount
-            zones = self.calculate_zones(df)
+            # 6. Зоны Premium/Discount v7.0 (используем swing points для узких зон)
+            swing_high = market_structure.get('swing_pivot_high', 0)
+            swing_low = market_structure.get('swing_pivot_low', 0)
+            zones = self.calculate_zones(df, swing_high, swing_low)
             
             # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)
             
             # ================================================================
-            # СБОРКА РЕЗУЛЬТАТА v6.0
+            # СБОРКА РЕЗУЛЬТАТА v7.0
             # ================================================================
             all_order_blocks = order_blocks['internal'] + order_blocks['swing']
+            breaker_blocks = order_blocks.get('breakers', [])
             fresh_choch = market_structure['internal_choch'] + market_structure['swing_choch']
             fresh_bos = market_structure['internal_bos'] + market_structure['swing_bos']
             all_choch = market_structure['all_internal_choch'] + market_structure['all_swing_choch']
             all_bos = market_structure['all_internal_bos'] + market_structure['all_swing_bos']
             
-            # v6.0: Confirmed сигналы для TG бота
+            # Confirmed сигналы для TG бота
             confirmed_choch = market_structure['internal_choch_confirmed'] + market_structure['swing_choch_confirmed']
             confirmed_bos = market_structure['internal_bos_confirmed'] + market_structure['swing_bos_confirmed']
             
             result = {
-                # Order Blocks
+                # Order Blocks v7.0 (с mitigation статусом)
                 'order_blocks': all_order_blocks,
                 'order_blocks_internal': order_blocks['internal'],
                 'order_blocks_swing': order_blocks['swing'],
+                'breaker_blocks': breaker_blocks,  # v7.0: пробитые OB
                 
-                # FVG & Liquidity
+                # FVG & Liquidity v7.0 (с fill статусом и sweeps)
                 'fvg': fvg,
                 'liquidity': liquidity,
                 
@@ -1173,14 +1469,20 @@ class SMCDetector:
             impulse_context = self.detect_impulse_context_v52(df, result)
             result['impulse_context'] = impulse_context
             
-            # Статистика
+            # Статистика v7.0
             total = len(all_order_blocks) + len(fvg) + len(liquidity) + len(all_choch) + len(all_bos)
             confirmed_total = len(confirmed_choch) + len(confirmed_bos)
             result['signals_count'] = total
             result['confirmed_signals_count'] = confirmed_total
             
-            logger.info(f"SMC v6.0 Result: Total={total} | CONFIRMED={confirmed_total} | "
-                       f"Trend={market_structure['swing_trend']} | Zone={zones['current_zone']} ({zones['position_in_range_pct']:.1f}%)")
+            # Подсчёт активных/mitigated OB
+            active_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'active')
+            mitigated_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'mitigated')
+            
+            logger.info(f"SMC v7.0 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
+                       f"FVG={len(fvg)} | Liq={len(liquidity)} | CONFIRMED={confirmed_total}")
+            logger.info(f"SMC v7.0 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
+                       f"Range: [{zones['range_low']:.2f} - {zones['range_high']:.2f}]")
             
             return sanitize_for_json(result)
             
