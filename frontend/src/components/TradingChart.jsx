@@ -340,15 +340,25 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.setLineDash([]);
 
         // ============================================================
-        // МЕТКА (как на TradingView - над линией)
+        //  // МЕТКА с тёмным фоном для контраста (как на TradingView)
         // ============================================================
         const labelText = isChoch ? 'CHoCH' : 'BOS';
-        ctx.fillStyle = ctx.strokeStyle;
         ctx.font = isInternal ? '9px Inter, Arial' : 'bold 10px Inter, Arial';
+        const bosLabelWidth = ctx.measureText(labelText).width;
         
-        // Позиционируем метку ближе к точке пробоя, выше линии
+        // Позиционируем метку ближе к точке пробоя
         const labelX = Math.max(5, Math.min(breakX - 25, chartRightEdge - 35));
         const labelY = isBullish ? priceY + 12 : priceY - 5;
+        // Тёмный фон под текстом
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(labelX - 2, labelY - 9, bosLabelWidth + 4, 12);
+        
+        // Яркий текст
+        if (isChoch) {
+          ctx.fillStyle = isBullish ? '#64b5f6' : '#ff8a80'; // Голубой / Светло-красный для CHoCH
+        } else {
+          ctx.fillStyle = isBullish ? '#1de9b6' : '#ff5252'; // Зелёный / Красный для BOS
+        }
         ctx.fillText(labelText, labelX, labelY);
       });
     };
