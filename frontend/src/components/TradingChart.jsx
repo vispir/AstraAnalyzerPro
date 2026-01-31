@@ -74,11 +74,105 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     const chartRightEdge = canvas.width - priceScaleWidth;
 
     // ============================================================
-    // 1. ORDER BLOCKS (Прямоугольники)
+    // 0. PREMIUM/DISCOUNT/EQUILIBRIUM ZONES (ФОН - рисуем первым)
     // ============================================================
-    const orderBlocks = analysis.order_blocks || [];
+    const advancedZones = analysis.advanced?.zones;
+    if (advancedZones && advancedZones.range_high > 0 && advancedZones.range_low > 0) {
+      const premiumTop = advancedZones.premium?.top || advancedZones.range_high;
+      const premiumBottom = advancedZones.premium?.bottom || 0;
+      const discountTop = advancedZones.discount?.top || 0;
+      const discountBottom = advancedZones.discount?.bottom || advancedZones.range_low;
+      const equilibriumPrice = advancedZones.equilibrium?.price || (premiumBottom + discountTop) / 2;
+      
+      // Конвертируем цены в Y координаты
+      const premiumTopY = series.priceToCoordinate(premiumTop);
+      const premiumBottomY = series.priceToCoordinate(premiumBottom);
+      const discountTopY = series.priceToCoordinate(discountTop);
+      const discountBottomY = series.priceToCoordinate(discountBottom);
+      const equilibriumY = series.priceToCoordinate(equilibriumPrice);
+      
+      // PREMIUM ZONE (красноватая сверху)
+      if (premiumTopY !== null && premiumBottomY !== null) {
+        const premHeight = Math.abs(premiumBottomY - premiumTopY);
+        ctx.fillStyle = 'rgba(239, 83, 80, 0.06)';
+        ctx.fillRect(0, Math.min(premiumTopY, premiumBottomY), chartRightEdge, premHeight);
+        
+        ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
+        ctx.font = '9px Inter, Arial';
+        ctx.fillText('Premium', chartRightEdge - 50, Math.min(premiumTopY, premiumBottomY) + 12);
+      }
+      
+      // DISCOUNT ZONE (зеленоватая снизу)
+      if (discountTopY !== null && discountBottomY !== null) {
+        const discHeight = Math.abs(discountBottomY - discountTopY);
+        ctx.fillStyle = 'rgba(38, 166, 154, 0.06)';
+        ctx.fillRect(0, Math.min(discountTopY, discountBottomY), chartRightEdge, discHeight);
+        
+        ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
+        ctx.font = '9px Inter, Arial';
+        ctx.fillText('Discount', chartRightEdge - 50, Math.max(discountTopY, discountBottomY) - 5);
+      }
+      
+      // EQUILIBRIUM LINE (пунктирная линия посередине)
+      if (equilibriumY !== null) {
+        ctx.beginPath();
+        ctx.setLineDash([8, 4]);
+        ctx.strokeStyle = 'rgba(156, 39, 176, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.moveTo(0, equilibriumY);
+        ctx.lineTo(chartRightEdge, equilibriumY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        ctx.fillStyle = 'rgba(156, 39, 176, 0.6)';
+        ctx.font = '9px Inter, Arial';
+        ctx.fillText('Equilibrium', chartRightEdge - 60, equilibriumY - 3);
+      }
+      
+      // Swing High/Low маркеры
+      const swingHighY = series.priceToCoordinate(advancedZones.range_high);
+      const swingLowY = series.priceToCoordinate(advancedZones.range_low);
+      
+      if (swingHighY !== null) {
+        ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = 'rgba(239, 83, 80, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, swingHighY);
+        ctx.lineTo(chartRightEdge, swingHighY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
+        ctx.font = '8px Inter, Arial';
+        ctx.fillText('Swing High', chartRightEdge - 55, swingHighY + 10);
+      }
+      
+      if (swingLowY !== null) {
+        ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = 'rgba(38, 166, 154, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, swingLowY);
+        ctx.lineTo(chartRightEdge, swingLowY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
+        ctx.font = '8px Inter, Arial';
+        ctx.fillText('Swing Low', chartRightEdge - 55, swingLowY - 4);
+      }
+    }
+
+    // ============================================================
+    // 1. ORDER BLOCKS (Прямоугольники) - Ограничено последние 3
+    // ============================================================
+    const orderBlocks = (analysis.order_blocks || []).slice(-3); // Показываем только последние 3
     orderBlocks.forEach(ob => {
       if (ob.bar_index === undefined) return;
+      
+      // Проверяем границы индекса
+      if (ob.bar_index < 0 || ob.bar_index >= history.length) return;
       
       const time = history[ob.bar_index]?.time;
       if (!time) return;
@@ -89,30 +183,50 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       
       if (topY === null || bottomY === null || leftX === null) return;
 
-      // Используем chartRightEdge вместо canvas.width
       const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
       const isBull = ob.type?.includes('BULL');
+      
+      // Заливка с прозрачностью
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_OB : SMC_COLORS.BEAR_OB;
       ctx.fillRect(leftX, y, rightX - leftX, height);
 
+      // Граница слева (как в LuxAlgo)
       ctx.strokeStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(leftX, y);
+      ctx.lineTo(leftX, y + height);
+      ctx.stroke();
+      
+      // Горизонтальные пунктирные линии сверху и снизу
+      ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1;
-      ctx.strokeRect(leftX, y, rightX - leftX, height);
+      ctx.beginPath();
+      ctx.moveTo(leftX, y);
+      ctx.lineTo(rightX, y);
+      ctx.moveTo(leftX, y + height);
+      ctx.lineTo(rightX, y + height);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
+      // Метка
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
-      ctx.font = 'bold 10px Arial';
-      ctx.fillText(isBull ? 'BULL OB' : 'BEAR OB', leftX + 5, y + 12);
+      ctx.font = 'bold 9px Inter, Arial';
+      ctx.fillText(isBull ? 'BULL OB' : 'BEAR OB', leftX + 4, y + 11);
     });
 
     // ============================================================
-    // 2. FAIR VALUE GAPS (Прямоугольники с пунктиром)
+    // 2. FAIR VALUE GAPS (Прямоугольники с пунктиром) - Последние 3
     // ============================================================
-    const fvgList = analysis.fvg || [];
+    const fvgList = (analysis.fvg || []).slice(-3); // Показываем только последние 3
     fvgList.forEach(fvg => {
       if (fvg.bar_index === undefined) return;
+      
+      // Проверяем границы индекса
+      if (fvg.bar_index < 0 || fvg.bar_index >= history.length) return;
       
       const time = history[fvg.bar_index]?.time;
       if (!time) return;
@@ -123,78 +237,112 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       
       if (topY === null || bottomY === null || leftX === null) return;
 
-      // Используем chartRightEdge вместо canvas.width
       const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
       const isBull = fvg.type?.includes('BULL');
+      
+      // Заливка с меньшей прозрачностью
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_FVG : SMC_COLORS.BEAR_FVG;
       ctx.fillRect(leftX, y, rightX - leftX, height);
 
-      ctx.setLineDash([4, 4]);
+      // Пунктирные границы
+      ctx.setLineDash([3, 3]);
       ctx.strokeStyle = isBull ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
       ctx.lineWidth = 1;
       ctx.strokeRect(leftX, y, rightX - leftX, height);
       ctx.setLineDash([]);
 
+      // Метка FVG
       ctx.fillStyle = isBull ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
-      ctx.font = '9px Arial';
-      ctx.fillText('FVG', leftX + 5, y + 10);
+      ctx.font = '8px Inter, Arial';
+      ctx.fillText('FVG', leftX + 3, y + 9);
     });
 
     // ============================================================
     // 3. BOS/CHoCH LINES (Internal + Swing)
     // ============================================================
     const drawBreakLine = (breaks, isInternal = false) => {
+      if (!breaks || !Array.isArray(breaks)) return;
+      
       breaks.forEach(brk => {
-        if (brk.bar_index === undefined || brk.pivot_bar_index === undefined) return;
+        // Проверяем наличие необходимых полей
+        if (brk.bar_index === undefined || brk.pivot_bar_index === undefined) {
+          return;
+        }
         
-        const pivotTime = history[brk.pivot_bar_index]?.time;
-        const breakTime = history[brk.bar_index]?.time;
-        if (!pivotTime || !breakTime) return;
+        // Проверяем границы индексов
+        if (brk.bar_index >= history.length || brk.pivot_bar_index >= history.length) {
+          return;
+        }
+        if (brk.bar_index < 0 || brk.pivot_bar_index < 0) {
+          return;
+        }
+        
+        const pivotCandle = history[brk.pivot_bar_index];
+        const breakCandle = history[brk.bar_index];
+        
+        if (!pivotCandle?.time || !breakCandle?.time) {
+          return;
+        }
 
         const priceY = series.priceToCoordinate(brk.price);
-        const pivotX = timeScale.timeToCoordinate(pivotTime);
-        const breakX = timeScale.timeToCoordinate(breakTime);
+        const pivotX = timeScale.timeToCoordinate(pivotCandle.time);
+        const breakX = timeScale.timeToCoordinate(breakCandle.time);
         
         if (priceY === null || pivotX === null || breakX === null) return;
 
         const isBullish = brk.type?.includes('BULLISH');
         const isChoch = brk.is_choch;
         
+        // Рисуем линию от pivot до точки пробоя
         ctx.beginPath();
         ctx.moveTo(pivotX, priceY);
-        // Ограничиваем линию правой границей графика
         ctx.lineTo(Math.min(breakX, chartRightEdge), priceY);
         
         if (isChoch) {
           ctx.setLineDash([6, 3]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_CHOCH : SMC_COLORS.BEARISH_CHOCH;
-          ctx.lineWidth = isInternal ? 1.5 : 2;
+          ctx.lineWidth = isInternal ? 1.5 : 2.5;
         } else {
           ctx.setLineDash([]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
-          ctx.lineWidth = isInternal ? 1 : 1.5;
+          ctx.lineWidth = isInternal ? 1 : 2;
         }
         ctx.stroke();
         ctx.setLineDash([]);
 
+        // Рисуем метку
         const labelText = isChoch ? 'CHoCH' : 'BOS';
         ctx.fillStyle = ctx.strokeStyle;
-        ctx.font = isInternal ? '9px Arial' : 'bold 10px Arial';
-        const labelX = Math.min((pivotX + breakX) / 2 - 15, chartRightEdge - 40);
+        ctx.font = isInternal ? '9px Inter, Arial' : 'bold 10px Inter, Arial';
+        
+        // Позиционируем метку посередине линии, выше неё
+        const midX = (pivotX + Math.min(breakX, chartRightEdge)) / 2;
+        const labelWidth = ctx.measureText(labelText).width;
+        const labelX = Math.max(5, Math.min(midX - labelWidth / 2, chartRightEdge - labelWidth - 5));
         ctx.fillText(labelText, labelX, priceY - 5);
       });
     };
 
     // Рисуем Internal структуру (более частые, тонкие линии)
-    drawBreakLine(analysis.all_internal_bos || [], true);
-    drawBreakLine(analysis.all_internal_choch || [], true);
+    const allInternalBos = analysis.all_internal_bos || [];
+    const allInternalChoch = analysis.all_internal_choch || [];
+    drawBreakLine(allInternalBos, true);
+    drawBreakLine(allInternalChoch, true);
     
     // Рисуем Swing структуру (реже, толще линии)
-    drawBreakLine(analysis.all_swing_bos || [], false);
-    drawBreakLine(analysis.all_swing_choch || [], false);
+    const allSwingBos = analysis.all_swing_bos || [];
+    const allSwingChoch = analysis.all_swing_choch || [];
+    drawBreakLine(allSwingBos, false);
+    drawBreakLine(allSwingChoch, false);
+    
+    // Debug: логируем количество элементов
+    if (allInternalBos.length || allSwingBos.length || allInternalChoch.length || allSwingChoch.length) {
+      console.log(`SMC Structure: Internal BOS=${allInternalBos.length}, CHoCH=${allInternalChoch.length}, ` +
+                  `Swing BOS=${allSwingBos.length}, CHoCH=${allSwingChoch.length}, History length=${history.length}`);
+    }
 
     // ============================================================
     // 4. EQUAL HIGHS/LOWS (Пунктирные линии)
@@ -386,8 +534,24 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     if (seriesRef.current && history && history.length > 0) {
       seriesRef.current.setData(history);
       setTimeout(drawSMCOverlay, 100);
+      
+      // Debug: логируем данные анализа
+      if (analysis) {
+        console.log('SMC Analysis received:', {
+          history_length: history.length,
+          order_blocks: analysis.order_blocks?.length || 0,
+          fvg: analysis.fvg?.length || 0,
+          all_internal_bos: analysis.all_internal_bos?.length || 0,
+          all_internal_choch: analysis.all_internal_choch?.length || 0,
+          all_swing_bos: analysis.all_swing_bos?.length || 0,
+          all_swing_choch: analysis.all_swing_choch?.length || 0,
+          eqh: analysis.eqh?.length || 0,
+          eql: analysis.eql?.length || 0,
+          sample_bos: analysis.all_internal_bos?.[0] || 'none'
+        });
+      }
     }
-  }, [history, drawSMCOverlay]);
+  }, [history, drawSMCOverlay, analysis]);
 
   useEffect(() => {
     drawSMCOverlay();
@@ -518,24 +682,34 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         {/* Legend (only when SMC is visible and analysis exists) */}
         {smcVisible && analysis && (
           <div style={{
-            background: 'rgba(11, 14, 20, 0.85)',
+            background: 'rgba(11, 14, 20, 0.9)',
             padding: '8px 12px',
             borderRadius: '6px',
-            fontSize: '10px',
+            fontSize: '9px',
             color: '#d1d4dc',
             display: 'flex',
-            gap: '10px',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
+            gap: '4px',
             backdropFilter: 'blur(10px)',
             border: '1px solid rgba(255, 255, 255, 0.05)',
-            maxWidth: '320px'
+            maxWidth: '180px'
           }}>
-            <span style={{ color: '#26a69a' }}>● OB Bull</span>
-            <span style={{ color: '#ef5350' }}>● OB Bear</span>
-            <span style={{ color: '#26a69a' }}>◇ FVG</span>
-            <span style={{ color: '#2962ff' }}>— BOS</span>
-            <span style={{ color: '#f44336' }}>┄ CHoCH</span>
-            <span style={{ color: '#ff9800' }}>⋯ EQH/EQL</span>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#26a69a' }}>● OB Bull</span>
+              <span style={{ color: '#ef5350' }}>● OB Bear</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#26a69a' }}>◇ FVG</span>
+              <span style={{ color: '#ff9800' }}>⋯ EQH/EQL</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#26a69a' }}>— BOS</span>
+              <span style={{ color: '#2962ff' }}>┄ CHoCH</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '4px', marginTop: '2px' }}>
+              <span style={{ color: 'rgba(239, 83, 80, 0.7)' }}>▓ Premium</span>
+              <span style={{ color: 'rgba(38, 166, 154, 0.7)' }}>▓ Discount</span>
+            </div>
           </div>
         )}
       </div>

@@ -27,10 +27,13 @@ BEARISH = -1
 NEUTRAL = 0
 
 # Параметры структуры (как LuxAlgo)
-DEFAULT_INTERNAL_LEFT = 5
-DEFAULT_INTERNAL_RIGHT = 5
-DEFAULT_SWING_LEFT = 20   # Было 50 - слишком агрессивно для отображения
-DEFAULT_SWING_RIGHT = 20  # Было 50 - уменьшено для большей чувствительности
+# ВАЖНО: Эти параметры влияют на Telegram бота!
+# - Swing: консервативные для избежания ложных LLM запросов
+# - Internal: более чувствительные для детального анализа
+DEFAULT_INTERNAL_LEFT = 5    # Internal структура - стандарт
+DEFAULT_INTERNAL_RIGHT = 5   # Баланс между частотой и надёжностью
+DEFAULT_SWING_LEFT = 20      # Swing структура - консервативная (для бота)
+DEFAULT_SWING_RIGHT = 20     # Избегаем ложных срабатываний
 
 # v5.2 Ultra Sensitive параметры
 FRESH_SIGNAL_BARS = 25              # Свежий сигнал (было 10)
@@ -322,7 +325,22 @@ class SMCDetector:
         if sw_pivot_lows:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
-        logger.info(f"Structure: Internal={result['internal_trend']}, Swing={result['swing_trend']}")
+        # Подробное логирование для отладки
+        logger.info(f"Structure Detection: Internal pivots H={len(int_pivot_highs)} L={len(int_pivot_lows)}, "
+                   f"Swing pivots H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
+        logger.info(f"BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, "
+                   f"Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        logger.info(f"Trends: Internal={result['internal_trend']}, Swing={result['swing_trend']}")
+        
+        # Логируем последние несколько BOS/CHoCH для отладки
+        if int_all_bos:
+            last_bos = int_all_bos[-1]
+            logger.debug(f"Last Internal BOS: type={last_bos.break_type}, price={last_bos.price:.2f}, "
+                        f"bar_idx={last_bos.bar_index}, pivot_idx={last_bos.pivot_bar_index}")
+        if sw_all_bos:
+            last_bos = sw_all_bos[-1]
+            logger.debug(f"Last Swing BOS: type={last_bos.break_type}, price={last_bos.price:.2f}, "
+                        f"bar_idx={last_bos.bar_index}, pivot_idx={last_bos.pivot_bar_index}")
         
         return result
     
