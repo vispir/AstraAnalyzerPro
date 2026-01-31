@@ -212,10 +212,18 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Метка
-      ctx.fillStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
+      // Метка OB с тёмным фоном для контраста
+      const labelText = isBull ? 'BULL OB' : 'BEAR OB';
       ctx.font = 'bold 9px Inter, Arial';
-      ctx.fillText(isBull ? 'BULL OB' : 'BEAR OB', leftX + 4, y + 11);
+      const labelWidth = ctx.measureText(labelText).width;
+      
+      // Тёмный фон под текстом
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(leftX + 2, y + 2, labelWidth + 4, 12);
+      
+      // Сам текст - более яркий цвет
+      ctx.fillStyle = isBull ? '#1de9b6' : '#ff5252';
+      ctx.fillText(labelText, leftX + 4, y + 11);
     });
 
     // ============================================================
@@ -254,9 +262,16 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       ctx.strokeRect(leftX, y, rightX - leftX, height);
       ctx.setLineDash([]);
 
-      // Метка FVG
-      ctx.fillStyle = isBull ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
+      // Метка FVG с тёмным фоном для контраста
       ctx.font = '8px Inter, Arial';
+      const fvgLabelWidth = ctx.measureText('FVG').width;
+      
+      // Тёмный фон
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(leftX + 1, y + 1, fvgLabelWidth + 4, 10);
+      
+      // Текст - яркий
+      ctx.fillStyle = isBull ? '#1de9b6' : '#ff5252';
       ctx.fillText('FVG', leftX + 3, y + 9);
     });
 
@@ -339,7 +354,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     };
 
     // ============================================================
-    // ОТРИСОВКА СТРУКТУРЫ (только свежие, последние N баров)
+    // ОТРИСОВКА СТРУКТУРЫ (ВСЕ BOS/CHoCH без фильтрации)
     // Для визуализации используем all_* массивы
     // ============================================================
     const allInternalBos = analysis.all_internal_bos || [];
@@ -347,29 +362,20 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     const allSwingBos = analysis.all_swing_bos || [];
     const allSwingChoch = analysis.all_swing_choch || [];
     
-    // Фильтруем - показываем только последние 30 баров для Internal, 50 для Swing
-    const maxInternalBarsAgo = 30;
-    const maxSwingBarsAgo = 50;
+    // Рисуем Internal структуру (более частые, тонкие линии) - ВСЕ без фильтрации
+    drawBreakLine(allInternalBos, true);
+    drawBreakLine(allInternalChoch, true);
     
-    const filteredInternalBos = allInternalBos.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
-    const filteredInternalChoch = allInternalChoch.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
-    const filteredSwingBos = allSwingBos.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
-    const filteredSwingChoch = allSwingChoch.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
-    
-    // Рисуем Internal структуру (более частые, тонкие линии)
-    drawBreakLine(filteredInternalBos, true);
-    drawBreakLine(filteredInternalChoch, true);
-    
-    // Рисуем Swing структуру (реже, толще линии)
-    drawBreakLine(filteredSwingBos, false);
-    drawBreakLine(filteredSwingChoch, false);
+    // Рисуем Swing структуру (реже, толще линии) - ВСЕ без фильтрации
+    drawBreakLine(allSwingBos, false);
+    drawBreakLine(allSwingChoch, false);
     
     // Debug: логируем количество элементов
-    const totalBosChoch = filteredInternalBos.length + filteredInternalChoch.length + 
-                          filteredSwingBos.length + filteredSwingChoch.length;
+    const totalBosChoch = allInternalBos.length + allInternalChoch.length + 
+                          allSwingBos.length + allSwingChoch.length;
     if (totalBosChoch > 0) {
-      console.log(`SMC Structure v6: Internal BOS=${filteredInternalBos.length}, CHoCH=${filteredInternalChoch.length}, ` +
-                  `Swing BOS=${filteredSwingBos.length}, CHoCH=${filteredSwingChoch.length}, ` +
+      console.log(`SMC Structure v6: Internal BOS=${allInternalBos.length}, CHoCH=${allInternalChoch.length}, ` +
+        `Swing BOS=${allSwingBos.length}, CHoCH=${allSwingChoch.length}, ` +
                   `Total drawn=${totalBosChoch}, History=${history.length}`);
     }
 
