@@ -1,13 +1,15 @@
 """
-SMC Detector v5.2 - Ultra Sensitive
-====================================
-Критические изменения:
-- FRESH_SIGNAL_BARS = 25 (помним пробой дольше)
-- IMPULSE_CANDLE_THRESHOLD = 1.5 (чувствительность к импульсу)
-- has_breakout: цена < минимума 20 свечей
-- is_void_run: цена в пределах 0.5% от минимума 250 свечей
-- is_impulse: движение > 1.5x средней свечи
-- ИСПРАВЛЕНО: advanced.key_levels.Current_Zone для фронтенда
+SMC Detector v6.0 - LuxAlgo Style
+==================================
+КРИТИЧЕСКИЕ ИЗМЕНЕНИЯ v6.0:
+- Параметры pivot detection как в LuxAlgo (swing: 8/4, internal: 3/2)
+- Потенциальные pivot'ы для последних баров (без right confirmation)
+- Флаг 'confirmed' для фильтрации сигналов TG бота
+- Двухуровневая система: визуализация (все) vs сигналы (confirmed only)
+
+Для TG бота:
+- confirmed=True: пробой ТЕЛОМ свечи (close), не тенью
+- bars_ago <= CONFIRMED_SIGNAL_BARS для торговых решений
 """
 
 import pandas as pd
@@ -19,24 +21,25 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# КОНСТАНТЫ v5.2 ULTRA SENSITIVE
+# КОНСТАНТЫ v6.0 - LuxAlgo Style
 # ============================================================================
 
 BULLISH = 1
 BEARISH = -1
 NEUTRAL = 0
 
-# Параметры структуры (как LuxAlgo)
-# ВАЖНО: Эти параметры влияют на Telegram бота!
-# - Swing: консервативные для избежания ложных LLM запросов
-# - Internal: более чувствительные для детального анализа
-DEFAULT_INTERNAL_LEFT = 5    # Internal структура - стандарт
-DEFAULT_INTERNAL_RIGHT = 5   # Баланс между частотой и надёжностью
-DEFAULT_SWING_LEFT = 20      # Swing структура - консервативная (для бота)
-DEFAULT_SWING_RIGHT = 20     # Избегаем ложных срабатываний
+# Параметры структуры v6.0 (как LuxAlgo)
+# Internal: очень чувствительные для микро-структуры
+DEFAULT_INTERNAL_LEFT = 3    # Быстрое определение internal swing
+DEFAULT_INTERNAL_RIGHT = 2   # Минимальное подтверждение справа
 
-# v5.2 Ultra Sensitive параметры
-FRESH_SIGNAL_BARS = 25              # Свежий сигнал (было 10)
+# Swing: чувствительные для основной структуры (как LuxAlgo length=5-10)
+DEFAULT_SWING_LEFT = 8       # Основные swing points
+DEFAULT_SWING_RIGHT = 4      # Быстрое подтверждение (было 20!)
+
+# v6.0 Параметры сигналов
+FRESH_SIGNAL_BARS = 25              # Свежий сигнал для визуализации
+CONFIRMED_SIGNAL_BARS = 5           # Только для TG бота - очень свежие
 LOOKBACK_BARS = 250                 # Глубина анализа
 
 # Параметры детекции импульса v5.2
@@ -73,6 +76,7 @@ class StructureBreak:
     is_choch: bool = False
     bars_ago: int = 0
     break_by_wick: bool = False
+    confirmed: bool = False  # v6.0: пробой телом (для TG бота)
 
 
 # ============================================================================
@@ -125,17 +129,29 @@ class SMCDetector:
     # ========================================================================
     
     def _find_all_pivots(self, df: pd.DataFrame, left_bars: int, right_bars: int) -> Tuple[List[PivotPoint], List[PivotPoint]]:
-        """Находит ВСЕ pivot точки в истории"""
+        """
+        Находит ВСЕ pivot точки в истории (v6.0 LuxAlgo style)
+        
+        Включает:
+        1. Подтверждённые pivot'ы (есть данные слева И справа)
+        2. Потенциальные pivot'ы для последних баров (только слева, partial confirmation)
+        """
         pivot_highs = []
         pivot_lows = []
         
-        if len(df) < left_bars + right_bars + 1:
+        if len(df) < left_bars + 1:
             return pivot_highs, pivot_lows
         
         highs = df['high'].values
         lows = df['low'].values
+        total_bars = len(df)
         
-        for i in range(left_bars, len(df) - right_bars):
+        # ================================================================
+        # 1. ПОДТВЕРЖДЁННЫЕ PIVOT'ы (полная валидация слева И справа)
+        # ================================================================
+        confirmed_end = total_bars - right_bars
+        
+        for i in range(left_bars, confirmed_end):
             current_high = highs[i]
             current_low = lows[i]
             
@@ -167,6 +183,57 @@ class SMCDetector:
                         is_high=False
                     ))
         
+        # ================================================================
+        # 2. ПОТЕНЦИАЛЬНЫЕ PIVOT'ы для последних баров (v6.0 LuxAlgo style)
+        # Проверяем только левую сторону + частичную правую (сколько есть)
+        # ================================================================
+        min_right_confirm = max(1, right_bars // 2)  # Минимум 50% правых баров
+        
+        for i in range(confirmed_end, total_bars - min_right_confirm):
+            current_high = highs[i]
+            current_low = lows[i]
+            available_right = total_bars - i - 1
+            
+            # Проверяем левую сторону полностью
+            left_highs = highs[i - left_bars:i]
+            left_lows = lows[i - left_bars:i]
+            
+            # Проверяем доступную правую сторону
+            if available_right > 0:
+                right_highs = highs[i + 1:i + 1 + available_right]
+                right_lows = lows[i + 1:i + 1 + available_right]
+            else:
+                right_highs = np.array([])
+                right_lows = np.array([])
+            
+            # Потенциальный Pivot High
+            if len(left_highs) > 0:
+                is_left_valid = current_high > np.max(left_highs)
+                is_right_valid = len(right_highs) == 0 or current_high >= np.max(right_highs)
+                
+                if is_left_valid and is_right_valid:
+                    bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
+                    pivot_highs.append(PivotPoint(
+                        price=float(current_high),
+                        bar_index=i,
+                        bar_time=bar_time,
+                        is_high=True
+                    ))
+            
+            # Потенциальный Pivot Low
+            if len(left_lows) > 0:
+                is_left_valid = current_low < np.min(left_lows)
+                is_right_valid = len(right_lows) == 0 or current_low <= np.min(right_lows)
+                
+                if is_left_valid and is_right_valid:
+                    bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
+                    pivot_lows.append(PivotPoint(
+                        price=float(current_low),
+                        bar_index=i,
+                        bar_time=bar_time,
+                        is_high=False
+                    ))
+        
         return pivot_highs, pivot_lows
     
     # ========================================================================
@@ -177,7 +244,13 @@ class SMCDetector:
                                    pivot_highs: List[PivotPoint],
                                    pivot_lows: List[PivotPoint],
                                    structure_name: str = "swing") -> Tuple[List[StructureBreak], List[StructureBreak], int]:
-        """Bar-by-bar сканирование истории"""
+        """
+        Bar-by-bar сканирование истории (v6.0)
+        
+        Добавлено:
+        - confirmed: True если пробой ТЕЛОМ (close), False если только тенью
+        - Для TG бота: использовать только confirmed=True
+        """
         all_choch = []
         all_bos = []
         
@@ -210,12 +283,18 @@ class SMCDetector:
                 active_pivot_low = pivot_lows[pl_idx]
                 pl_idx += 1
             
-            # Bullish break
+            # ============================================================
+            # BULLISH BREAK (пробой вверх)
+            # ============================================================
             if active_pivot_high and active_pivot_high.price > 0:
                 if current_high > active_pivot_high.price:
                     is_choch = (current_trend == BEARISH)
                     break_type = 'BULLISH_CHOCH' if is_choch else 'BULLISH_BOS'
+                    
+                    # v6.0: confirmed = пробой ТЕЛОМ свечи (close > pivot)
+                    # break_by_wick = пробой только тенью (close <= pivot)
                     break_by_wick = current_close <= active_pivot_high.price
+                    confirmed = not break_by_wick  # confirmed если close > pivot
                     
                     event = StructureBreak(
                         break_type=break_type,
@@ -225,7 +304,8 @@ class SMCDetector:
                         pivot_bar_index=active_pivot_high.bar_index,
                         is_choch=is_choch,
                         bars_ago=total_bars - 1 - bar_i,
-                        break_by_wick=break_by_wick
+                        break_by_wick=break_by_wick,
+                        confirmed=confirmed
                     )
                     
                     if is_choch:
@@ -236,12 +316,17 @@ class SMCDetector:
                     current_trend = BULLISH
                     active_pivot_high = None
             
-            # Bearish break
+            # ============================================================
+            # BEARISH BREAK (пробой вниз)
+            # ============================================================
             if active_pivot_low and active_pivot_low.price > 0:
                 if current_low < active_pivot_low.price:
                     is_choch = (current_trend == BULLISH)
                     break_type = 'BEARISH_CHOCH' if is_choch else 'BEARISH_BOS'
+                    
+                    # v6.0: confirmed = пробой ТЕЛОМ свечи (close < pivot)
                     break_by_wick = current_close >= active_pivot_low.price
+                    confirmed = not break_by_wick  # confirmed если close < pivot
                     
                     event = StructureBreak(
                         break_type=break_type,
@@ -251,7 +336,8 @@ class SMCDetector:
                         pivot_bar_index=active_pivot_low.bar_index,
                         is_choch=is_choch,
                         bars_ago=total_bars - 1 - bar_i,
-                        break_by_wick=break_by_wick
+                        break_by_wick=break_by_wick,
+                        confirmed=confirmed
                     )
                     
                     if is_choch:
@@ -273,7 +359,8 @@ class SMCDetector:
             'pivot_bar_index': int(sb.pivot_bar_index),
             'is_choch': bool(sb.is_choch),
             'bars_ago': int(sb.bars_ago),
-            'break_by_wick': bool(sb.break_by_wick)
+            'break_by_wick': bool(sb.break_by_wick),
+            'confirmed': bool(sb.confirmed)  # v6.0: для TG бота
         }
     
     # ========================================================================
@@ -281,28 +368,53 @@ class SMCDetector:
     # ========================================================================
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
-        """Определение структуры рынка"""
+        """
+        Определение структуры рынка v6.0
+        
+        Возвращает:
+        - all_*: ВСЕ события для визуализации на графике
+        - *_fresh: свежие события (bars_ago <= FRESH_SIGNAL_BARS) для визуализации
+        - *_confirmed: ПОДТВЕРЖДЁННЫЕ свежие события для TG бота
+        """
         result = {
             'all_internal_choch': [], 'all_internal_bos': [],
             'all_swing_choch': [], 'all_swing_bos': [],
             'internal_choch': [], 'internal_bos': [],
             'swing_choch': [], 'swing_bos': [],
+            # v6.0: Подтверждённые сигналы для TG бота
+            'internal_choch_confirmed': [], 'internal_bos_confirmed': [],
+            'swing_choch_confirmed': [], 'swing_bos_confirmed': [],
             'internal_trend': 'NEUTRAL', 'swing_trend': 'NEUTRAL',
             'internal_pivot_high': 0.0, 'internal_pivot_low': 0.0,
             'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0
         }
         
-        if len(df) < 20:
+        if len(df) < 15:
             return result
         
-        # Internal structure
+        # ================================================================
+        # INTERNAL STRUCTURE (чувствительная, для микро-движений)
+        # ================================================================
         int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
         int_all_choch, int_all_bos, int_trend = self._detect_structure_history(df, int_pivot_highs, int_pivot_lows, "internal")
         
         result['all_internal_choch'] = [self._structure_break_to_dict(sb) for sb in int_all_choch]
         result['all_internal_bos'] = [self._structure_break_to_dict(sb) for sb in int_all_bos]
+        
+        # Свежие (для визуализации)
         result['internal_choch'] = [self._structure_break_to_dict(sb) for sb in int_all_choch if sb.bars_ago <= FRESH_SIGNAL_BARS]
         result['internal_bos'] = [self._structure_break_to_dict(sb) for sb in int_all_bos if sb.bars_ago <= FRESH_SIGNAL_BARS]
+        
+        # v6.0: Подтверждённые (для TG бота)
+        result['internal_choch_confirmed'] = [
+            self._structure_break_to_dict(sb) for sb in int_all_choch 
+            if sb.confirmed and sb.bars_ago <= CONFIRMED_SIGNAL_BARS
+        ]
+        result['internal_bos_confirmed'] = [
+            self._structure_break_to_dict(sb) for sb in int_all_bos 
+            if sb.confirmed and sb.bars_ago <= CONFIRMED_SIGNAL_BARS
+        ]
+        
         result['internal_trend'] = 'UPTREND' if int_trend == BULLISH else 'DOWNTREND' if int_trend == BEARISH else 'NEUTRAL'
         
         if int_pivot_highs:
@@ -310,14 +422,29 @@ class SMCDetector:
         if int_pivot_lows:
             result['internal_pivot_low'] = int_pivot_lows[-1].price
         
-        # Swing structure
+        # ================================================================
+        # SWING STRUCTURE (основная структура)
+        # ================================================================
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(df, sw_pivot_highs, sw_pivot_lows, "swing")
         
         result['all_swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch]
         result['all_swing_bos'] = [self._structure_break_to_dict(sb) for sb in sw_all_bos]
+        
+        # Свежие (для визуализации)
         result['swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch if sb.bars_ago <= FRESH_SIGNAL_BARS]
         result['swing_bos'] = [self._structure_break_to_dict(sb) for sb in sw_all_bos if sb.bars_ago <= FRESH_SIGNAL_BARS]
+        
+        # v6.0: Подтверждённые (для TG бота)
+        result['swing_choch_confirmed'] = [
+            self._structure_break_to_dict(sb) for sb in sw_all_choch 
+            if sb.confirmed and sb.bars_ago <= CONFIRMED_SIGNAL_BARS
+        ]
+        result['swing_bos_confirmed'] = [
+            self._structure_break_to_dict(sb) for sb in sw_all_bos 
+            if sb.confirmed and sb.bars_ago <= CONFIRMED_SIGNAL_BARS
+        ]
+        
         result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
         if sw_pivot_highs:
@@ -325,22 +452,28 @@ class SMCDetector:
         if sw_pivot_lows:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
-        # Подробное логирование для отладки
-        logger.info(f"Structure Detection: Internal pivots H={len(int_pivot_highs)} L={len(int_pivot_lows)}, "
-                   f"Swing pivots H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
-        logger.info(f"BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, "
-                   f"Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
-        logger.info(f"Trends: Internal={result['internal_trend']}, Swing={result['swing_trend']}")
+        # ================================================================
+        # ЛОГИРОВАНИЕ v6.0
+        # ================================================================
+        confirmed_count = (len(result['swing_bos_confirmed']) + len(result['swing_choch_confirmed']) +
+                          len(result['internal_bos_confirmed']) + len(result['internal_choch_confirmed']))
         
-        # Логируем последние несколько BOS/CHoCH для отладки
-        if int_all_bos:
-            last_bos = int_all_bos[-1]
-            logger.debug(f"Last Internal BOS: type={last_bos.break_type}, price={last_bos.price:.2f}, "
-                        f"bar_idx={last_bos.bar_index}, pivot_idx={last_bos.pivot_bar_index}")
+        logger.info(f"v6.0 Structure: Internal pivots H={len(int_pivot_highs)} L={len(int_pivot_lows)}, "
+                   f"Swing pivots H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
+        logger.info(f"v6.0 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, "
+                   f"Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        logger.info(f"v6.0 CONFIRMED (for TG bot): {confirmed_count} signals | "
+                   f"Trends: I={result['internal_trend']}, S={result['swing_trend']}")
+        
+        # Логируем последние события
         if sw_all_bos:
             last_bos = sw_all_bos[-1]
-            logger.debug(f"Last Swing BOS: type={last_bos.break_type}, price={last_bos.price:.2f}, "
-                        f"bar_idx={last_bos.bar_index}, pivot_idx={last_bos.pivot_bar_index}")
+            logger.debug(f"Last Swing BOS: {last_bos.break_type}, price={last_bos.price:.2f}, "
+                        f"confirmed={last_bos.confirmed}, bars_ago={last_bos.bars_ago}")
+        if sw_all_choch:
+            last_choch = sw_all_choch[-1]
+            logger.debug(f"Last Swing CHoCH: {last_choch.break_type}, price={last_choch.price:.2f}, "
+                        f"confirmed={last_choch.confirmed}, bars_ago={last_choch.bars_ago}")
         
         return result
     
@@ -897,12 +1030,17 @@ class SMCDetector:
             'all_choch': [], 'all_bos': [],
             'all_internal_choch': [], 'all_internal_bos': [],
             'all_swing_choch': [], 'all_swing_bos': [],
+            # v6.0: Confirmed сигналы для TG бота
+            'choch_confirmed': [], 'bos_confirmed': [],
+            'internal_choch_confirmed': [], 'internal_bos_confirmed': [],
+            'swing_choch_confirmed': [], 'swing_bos_confirmed': [],
             'eqh': [], 'eql': [],
             'trend': 'NEUTRAL', 'internal_trend': 'NEUTRAL',
             'internal_pivot_high': 0.0, 'internal_pivot_low': 0.0,
             'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0,
             'advanced': self._get_empty_advanced(),
             'signals_count': 0,
+            'confirmed_signals_count': 0,  # v6.0
             'impulse_context': {
                 'market_condition': 'RANGING',
                 'has_breakout': False, 'is_void_run': False, 'is_impulse': False,
@@ -916,7 +1054,13 @@ class SMCDetector:
     # ========================================================================
     
     def analyze(self, df) -> Dict:
-        """Полный SMC анализ v5.2 Ultra Sensitive"""
+        """
+        Полный SMC анализ v6.0 LuxAlgo Style
+        
+        Возвращает две категории сигналов:
+        1. ВСЕ сигналы (all_*, fresh) - для визуализации на графике
+        2. CONFIRMED сигналы (*_confirmed) - для TG бота (консервативные)
+        """
         try:
             if isinstance(df, list):
                 if not df:
@@ -930,15 +1074,15 @@ class SMCDetector:
             if not all(col in df.columns for col in required):
                 return self._get_empty_result()
             
-            if len(df) < 20:
+            if len(df) < 15:
                 return self._get_empty_result()
             
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v5.2 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v6.0 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
-            # 1. Market Structure
+            # 1. Market Structure (v6.0 с confirmed флагами)
             market_structure = self.detect_market_structure(df)
             
             # 2. Order Blocks
@@ -953,25 +1097,38 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. РАСЧЁТ ЗОН (ИСПРАВЛЕНО ДЛЯ ФРОНТЕНДА!)
+            # 6. Зоны Premium/Discount
             zones = self.calculate_zones(df)
             
-            # 7. ADVANCED DATA (ДЛЯ AIPanel.jsx!)
+            # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)
             
-            # Собираем результат
+            # ================================================================
+            # СБОРКА РЕЗУЛЬТАТА v6.0
+            # ================================================================
             all_order_blocks = order_blocks['internal'] + order_blocks['swing']
             fresh_choch = market_structure['internal_choch'] + market_structure['swing_choch']
             fresh_bos = market_structure['internal_bos'] + market_structure['swing_bos']
             all_choch = market_structure['all_internal_choch'] + market_structure['all_swing_choch']
             all_bos = market_structure['all_internal_bos'] + market_structure['all_swing_bos']
             
+            # v6.0: Confirmed сигналы для TG бота
+            confirmed_choch = market_structure['internal_choch_confirmed'] + market_structure['swing_choch_confirmed']
+            confirmed_bos = market_structure['internal_bos_confirmed'] + market_structure['swing_bos_confirmed']
+            
             result = {
+                # Order Blocks
                 'order_blocks': all_order_blocks,
                 'order_blocks_internal': order_blocks['internal'],
                 'order_blocks_swing': order_blocks['swing'],
+                
+                # FVG & Liquidity
                 'fvg': fvg,
                 'liquidity': liquidity,
+                
+                # ============================================================
+                # BOS/CHoCH для ВИЗУАЛИЗАЦИИ (все уровни на графике)
+                # ============================================================
                 'choch': fresh_choch,
                 'bos': fresh_bos,
                 'internal_choch': market_structure['internal_choch'],
@@ -984,29 +1141,46 @@ class SMCDetector:
                 'all_internal_bos': market_structure['all_internal_bos'],
                 'all_swing_choch': market_structure['all_swing_choch'],
                 'all_swing_bos': market_structure['all_swing_bos'],
+                
+                # ============================================================
+                # v6.0: CONFIRMED сигналы для TG БОТА (консервативные)
+                # Только пробой ТЕЛОМ + bars_ago <= 5
+                # ============================================================
+                'choch_confirmed': confirmed_choch,
+                'bos_confirmed': confirmed_bos,
+                'internal_choch_confirmed': market_structure['internal_choch_confirmed'],
+                'internal_bos_confirmed': market_structure['internal_bos_confirmed'],
+                'swing_choch_confirmed': market_structure['swing_choch_confirmed'],
+                'swing_bos_confirmed': market_structure['swing_bos_confirmed'],
+                
+                # Trends & Pivots
                 'trend': market_structure['swing_trend'],
                 'internal_trend': market_structure['internal_trend'],
                 'internal_pivot_high': market_structure['internal_pivot_high'],
                 'internal_pivot_low': market_structure['internal_pivot_low'],
                 'swing_pivot_high': market_structure['swing_pivot_high'],
                 'swing_pivot_low': market_structure['swing_pivot_low'],
+                
+                # Equal Highs/Lows
                 'eqh': equal_levels['eqh'],
                 'eql': equal_levels['eql'],
-                # ИСПРАВЛЕНО: Полная структура advanced для фронтенда!
+                
+                # Advanced
                 'advanced': advanced
             }
             
-            # 8. v5.2 Impulse Context
+            # 8. Impulse Context
             impulse_context = self.detect_impulse_context_v52(df, result)
             result['impulse_context'] = impulse_context
             
+            # Статистика
             total = len(all_order_blocks) + len(fvg) + len(liquidity) + len(all_choch) + len(all_bos)
+            confirmed_total = len(confirmed_choch) + len(confirmed_bos)
             result['signals_count'] = total
+            result['confirmed_signals_count'] = confirmed_total
             
-            logger.info(f"SMC v5.2 Result: Signals={total} | Trend={market_structure['swing_trend']} | "
-                       f"Zone={zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
-                       f"Impulse: breakout={impulse_context['has_breakout']}, void={impulse_context['is_void_run']}, "
-                       f"impulse={impulse_context['is_impulse']}")
+            logger.info(f"SMC v6.0 Result: Total={total} | CONFIRMED={confirmed_total} | "
+                       f"Trend={market_structure['swing_trend']} | Zone={zones['current_zone']} ({zones['position_in_range_pct']:.1f}%)")
             
             return sanitize_for_json(result)
             

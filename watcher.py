@@ -1,10 +1,11 @@
 """
-Astra Watcher v5.2 - Ultra Sensitive
-=====================================
-Критические изменения:
+Astra Watcher v6.0 - Confirmed Signals
+=======================================
+Критические изменения v6.0:
+- Используем CONFIRMED сигналы (*_confirmed) для торговых решений
+- confirmed = пробой ТЕЛОМ свечи (close), не тенью
+- bars_ago <= 5 для торговых сигналов
 - Impulse Override: has_breakout, is_void_run, is_impulse снимают запрет зон
-- FRESH_SIGNAL_BARS = 25
-- Чувствительность к пробоям повышена
 """
 
 import os
@@ -329,12 +330,14 @@ def format_debug_report(status_data):
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны:</b>\n"
+        msg += "<b>📊 SMC Паттерны v6.0:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
-        msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (Total) | Fresh: {smc.get('swing_bos', 0)}\n"
-        msg += f"├ Swing CHoCH: {smc.get('swing_choch_total', 0)} (Total) | Fresh: {smc.get('swing_choch', 0)}\n"
-        msg += f"└ Internal BOS: {smc.get('int_bos', 0)} | CHoCH: {smc.get('int_choch', 0)}\n\n"
+        msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
+        msg += f"├ Swing CHoCH: {smc.get('swing_choch_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_choch_confirmed', 0)}\n"
+        msg += f"├ Int BOS: {smc.get('int_bos_total', 0)} | ✅ Confirmed: {smc.get('int_bos_confirmed', 0)}\n"
+        msg += f"├ Int CHoCH: {smc.get('int_choch_total', 0)} | ✅ Confirmed: {smc.get('int_choch_confirmed', 0)}\n"
+        msg += f"└ <b>CONFIRMED TOTAL: {smc.get('confirmed_total', 0)}</b>\n\n"
     
     if 'swing_signals' in status_data and status_data['swing_signals']:
         msg += f"<b>🎯 Swing сигналы:</b> {', '.join(status_data['swing_signals'][:5])}\n"
@@ -472,13 +475,14 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Astra Watcher v5.2 Ultra Sensitive
+    Astra Watcher v6.0 Confirmed Signals
     
-    Ключевые изменения:
-    - Impulse Override: has_breakout, is_void_run, is_impulse снимают запрет зон
-    - FRESH_SIGNAL_BARS = 25
+    Ключевые изменения v6.0:
+    - Используем *_confirmed сигналы для торговых решений
+    - confirmed = пробой ТЕЛОМ (close), не тенью
+    - bars_ago <= 5 для уверенных сигналов
     """
-    logger.info("📡 [TRIGGER] Цикл анализа v5.2 запущен")
+    logger.info("📡 [TRIGGER] Цикл анализа v6.0 запущен")
     
     # ========================================================================
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
@@ -531,7 +535,7 @@ def run_analysis_cycle():
     # SMC АНАЛИЗ
     # ========================================================================
     
-    logger.info("🔬 Выполняем SMC анализ v5.2...")
+    logger.info("🔬 Выполняем SMC анализ v6.0...")
     analysis = smc_detector.analyze(candles)
     
     # Жёсткий фикс зон
@@ -556,18 +560,26 @@ def run_analysis_cycle():
     # Сбор сигналов
     swing_signals, internal_signals, all_signals = collect_signals_by_type(analysis)
     
-    # SMC Summary
+    # SMC Summary v6.0
     smc_summary = {
         'ob': len(analysis.get('order_blocks', [])),
         'fvg': len(analysis.get('fvg', [])),
+        # Свежие (для визуализации)
         'swing_bos': len(analysis.get('swing_bos', [])),
         'swing_choch': len(analysis.get('swing_choch', [])),
         'int_bos': len(analysis.get('internal_bos', [])),
         'int_choch': len(analysis.get('internal_choch', [])),
+        # Все (исторические)
         'swing_bos_total': len(analysis.get('all_swing_bos', [])),
         'swing_choch_total': len(analysis.get('all_swing_choch', [])),
         'int_bos_total': len(analysis.get('all_internal_bos', [])),
-        'int_choch_total': len(analysis.get('all_internal_choch', []))
+        'int_choch_total': len(analysis.get('all_internal_choch', [])),
+        # v6.0: CONFIRMED (для торговли)
+        'swing_bos_confirmed': len(analysis.get('swing_bos_confirmed', [])),
+        'swing_choch_confirmed': len(analysis.get('swing_choch_confirmed', [])),
+        'int_bos_confirmed': len(analysis.get('internal_bos_confirmed', [])),
+        'int_choch_confirmed': len(analysis.get('internal_choch_confirmed', [])),
+        'confirmed_total': analysis.get('confirmed_signals_count', 0)
     }
     
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
@@ -591,9 +603,20 @@ def run_analysis_cycle():
     }
     
     # ========================================================================
-    # ФАЗА 2: ФИЛЬТРЫ GATEKEEPER v5.2
+    # ФАЗА 2: ФИЛЬТРЫ GATEKEEPER v6.0 (CONFIRMED SIGNALS)
     # ========================================================================
     
+    # v6.0: Для торговых решений используем ТОЛЬКО confirmed сигналы
+    # confirmed = пробой ТЕЛОМ (close), не тенью + bars_ago <= 5
+    has_swing_bos_confirmed = len(analysis.get('swing_bos_confirmed', [])) > 0
+    has_swing_choch_confirmed = len(analysis.get('swing_choch_confirmed', [])) > 0
+    has_swing_break_confirmed = has_swing_bos_confirmed or has_swing_choch_confirmed
+    
+    has_int_bos_confirmed = len(analysis.get('internal_bos_confirmed', [])) > 0
+    has_int_choch_confirmed = len(analysis.get('internal_choch_confirmed', [])) > 0
+    has_internal_break_confirmed = has_int_bos_confirmed or has_int_choch_confirmed
+    
+    # Свежие сигналы (для визуализации и отладки, не для торговли)
     has_swing_bos = len(analysis.get('swing_bos', [])) > 0
     has_swing_choch = len(analysis.get('swing_choch', [])) > 0
     has_swing_break = has_swing_bos or has_swing_choch
@@ -606,6 +629,9 @@ def run_analysis_cycle():
     is_breakout_impulse = False
     is_reversal_setup = False
     impulse_reasons = []
+    
+    logger.info(f"v6.0 Signals: Swing BOS_confirmed={has_swing_bos_confirmed}, CHoCH_confirmed={has_swing_choch_confirmed} | "
+                f"Internal BOS_confirmed={has_int_bos_confirmed}, CHoCH_confirmed={has_int_choch_confirmed}")
     
     # ========================================================================
     # v5.2 IMPULSE OVERRIDE LOGIC
@@ -631,16 +657,17 @@ def run_analysis_cycle():
             is_breakout_impulse = True
             impulse_reasons.append("🔥 IMPULSE_TREND режим")
         
-        if has_swing_bos:
+        # v6.0: Используем confirmed сигналы для торговых решений
+        if has_swing_bos_confirmed:
             is_breakout_impulse = True
-            impulse_reasons.append("💥 Fresh Swing BOS")
+            impulse_reasons.append("💥 CONFIRMED Swing BOS (телом)")
         
         # Экстремальный дискаунт: ищем разворот
         if position_in_range_pct < EXTREME_DISCOUNT_THRESHOLD:
-            # Ищем бычий CHoCH для разворота
+            # v6.0: Ищем бычий CHoCH для разворота (confirmed)
             has_bullish_internal_choch = any(
                 'BULLISH' in ch.get('type', '') 
-                for ch in analysis.get('internal_choch', [])
+                for ch in analysis.get('internal_choch_confirmed', [])
             )
             
             if has_bullish_internal_choch:
@@ -677,15 +704,17 @@ def run_analysis_cycle():
             is_breakout_impulse = True
             impulse_reasons.append("🔥 IMPULSE_TREND режим")
         
-        if has_swing_bos:
+        # v6.0: Используем confirmed сигналы
+        if has_swing_bos_confirmed:
             is_breakout_impulse = True
-            impulse_reasons.append("💥 Fresh Swing BOS")
+            impulse_reasons.append("💥 CONFIRMED Swing BOS (телом)")
         
         # Экстремальный премиум: ищем разворот вниз
         if position_in_range_pct > EXTREME_PREMIUM_THRESHOLD:
+            # v6.0: Используем confirmed CHoCH
             has_bearish_internal_choch = any(
                 'BEARISH' in ch.get('type', '')
-                for ch in analysis.get('internal_choch', [])
+                for ch in analysis.get('internal_choch_confirmed', [])
             )
             
             if has_bearish_internal_choch:
@@ -705,10 +734,10 @@ def run_analysis_cycle():
     # ОСТАЛЬНЫЕ ФИЛЬТРЫ
     # ========================================================================
     
-    # Близость к структурам (пропускаем при импульсе)
-    if not is_near and not is_breakout_impulse and not has_swing_break:
+    # Близость к структурам (пропускаем при импульсе или confirmed break)
+    if not is_near and not is_breakout_impulse and not has_swing_break_confirmed:
         status_data['status'] = 'not_near_structure'
-        status_data['reason'] = f'Цена ${current_price:.2f} далеко от SMC структур'
+        status_data['reason'] = f'Цена ${current_price:.2f} далеко от SMC структур (нет confirmed break)'
         send_debug_notification(status_data)
         return
     
@@ -721,9 +750,10 @@ def run_analysis_cycle():
     
     # NEUTRAL требует Swing (пропускаем при импульсе)
     if swing_trend == "NEUTRAL" and not is_breakout_impulse:
-        if not has_swing_break:
+        # v6.0: Требуем confirmed swing break
+        if not has_swing_break_confirmed:
             status_data['status'] = 'neutral_no_swing'
-            status_data['reason'] = 'Нейтральный тренд без Swing пробоя'
+            status_data['reason'] = 'Нейтральный тренд без CONFIRMED Swing пробоя'
             send_debug_notification(status_data)
             return
     
@@ -845,9 +875,9 @@ def run_analysis_cycle():
 
 
 def start_watcher():
-    logger.info("🛰 Astra Watcher v5.2 Ultra Sensitive инициализирован")
+    logger.info("🛰 Astra Watcher v6.0 Confirmed Signals инициализирован")
 
 
 if __name__ == "__main__":
-    logger.info("🧪 Ручной запуск анализа v5.2...")
+    logger.info("🧪 Ручной запуск анализа v6.0...")
     run_analysis_cycle()
