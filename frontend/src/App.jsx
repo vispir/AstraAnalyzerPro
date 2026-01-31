@@ -158,6 +158,7 @@ function App() {
         <div className="chart-wrapper glass-panel">
           <TradingChart 
             history={marketData.candles} 
+            analysis={marketData.analysis}
             levels={levels} setLevels={setLevels} 
             activeMode={activeMode} setActiveMode={setActiveMode}
             serverConnected={serverConnected}
