@@ -277,7 +277,7 @@ class TradingCalculator:
                 transcript += f"- {liq_type} @ {liq['price']:.2f} (touches: {strength})\n"
         
         # Equal Highs/Lows
-        liq_legacy = analysis['liquidity']
+        liq_legacy = analysis['liquidity_legacy']
         if liq_legacy['EQH']:
             transcript += f"\nEqual Highs (Liquidity Above): {', '.join([f'{p:.2f}' for p in liq_legacy['EQH']])}\n"
         if liq_legacy['EQL']:
