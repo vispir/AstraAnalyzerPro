@@ -1,26 +1,28 @@
 """
-SMC Detector v7.3 - Professional Trading Analyzer with Trend Timeline (CORRECT!)
-================================================================================
-КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.3:
-- TREND TIMELINE: Тренд теперь ФУНКЦИЯ ВРЕМЕНИ, а не одно значение!
-  * v7.2 ОШИБКА: использовал финальный unified_trend для ВСЕЙ истории
-  * v7.3 ПРАВИЛЬНО: строим timeline (Dict[bar_index, trend])
-  * Для каждого пробоя используется ПРАВИЛЬНЫЙ тренд на момент ДО пробоя
-  * Алгоритм: Собираем все пробои → сортируем → идём bar-by-bar → обновляем тренд
+SMC Detector v7.4 - Swing-Only Timeline (FINAL!)
+================================================
+КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.4:
+- SWING-ONLY TIMELINE: Unified trend строится ТОЛЬКО по swing пробоям!
+  * v7.3 ПРОБЛЕМА: internal + swing в timeline → internal откаты загрязняют тренд
+  * v7.4 РЕШЕНИЕ: только swing → чистый глобальный тренд
   
-  Пример работы:
-  bar_0: NEUTRAL
-  bar_10: Internal пробой вверх → тренд = BULLISH
-  bar_15: Internal пробой вниз → тренд = BEARISH
-  bar_20: Swing пробой вверх → использует trend[19]=BEARISH → CHoCH ✅
-  bar_25: Swing пробой вверх → использует trend[24]=BULLISH → BOS ✅
+  Почему только swing:
+  - Internal (pivot 3/2) слишком чувствительный
+  - Internal откаты постоянно меняют timeline тренд
+  - Swing пробой после internal отката → видит BEARISH тренд → CHoCH вместо BOS ❌
+  - Swing (pivot 8/4) даёт стабильный глобальный тренд ✅
+  
+  Результат на графике:
+  - Восходящее движение: CHoCH (разворот вверх) → BOS → BOS → BOS ✅
+  - Нисходящее движение: CHoCH (разворот вниз) → BOS → BOS → BOS ✅
+  - Internal откаты НЕ влияют на swing классификацию ✅
 
-КРИТИЧЕСКИЕ УЛУЧШЕНИЯ v7.2 (СОХРАНЕНЫ):
-- DEDUPE PIVOT: Каждый pivot используется только один раз
-- ПРИОРИТЕТ SWING: При конфликте событий на одном баре, swing > internal
-  
-ИСПРАВЛЕНИЯ v7.1 (СОХРАНЕНЫ):
-- Сохранение тренда ДО пробоя (trend_before_break) внутри уровня
+УЛУЧШЕНИЯ v7.3 (СОХРАНЕНЫ):
+- Trend Timeline: тренд как функция времени (правильно!)
+- Dedupe Pivot: каждый pivot один раз
+
+УЛУЧШЕНИЯ v7.2 (СОХРАНЕНЫ):
+- Dedupe механизм
 
 УЛУЧШЕНИЯ v7.0 (СОХРАНЕНЫ):
 - Узкие зоны Premium/Discount на основе актуальных Swing High/Low (не 250 свечей!)
@@ -142,7 +144,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # ============================================================================
 
 class SMCDetector:
-    """SMC Detector v7.3 - Trend Timeline (CORRECT)"""
+    """SMC Detector v7.4 - Swing-Only Timeline (FINAL!)"""
     
     def __init__(self):
         self.analysis_count = 0
@@ -268,33 +270,39 @@ class SMCDetector:
         return pivot_highs, pivot_lows
     
     # ========================================================================
-    # UNIFIED TREND TIMELINE v7.3 - ПРАВИЛЬНАЯ РЕАЛИЗАЦИЯ
+    # UNIFIED TREND TIMELINE v7.4 - SWING ONLY (FINAL FIX)
     # ========================================================================
     
     def _build_unified_trend_timeline(self, df: pd.DataFrame, atr: float = 0.0) -> Dict[int, int]:
         """
-        v7.3: Строим unified trend как ФУНКЦИЮ времени (bar_index → trend)
+        v7.4: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
         
-        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.3:
-        - v7.2 использовал ОДИН unified_trend для ВСЕЙ истории (неправильно!)
-        - v7.3 строит тренд для КАЖДОГО бара (правильно!)
+        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.4:
+        - v7.3 использовал internal + swing → internal загрязнял timeline
+        - v7.4 использует ТОЛЬКО swing → чистый глобальный тренд
+        
+        Почему только swing:
+        - Internal слишком чувствительный (pivot 3/2)
+        - Internal откаты постоянно меняют тренд → swing CHoCH вместо BOS
+        - Swing (pivot 8/4) даёт стабильный глобальный тренд
         
         Алгоритм:
-        1. Собираем ВСЕ пробои (internal + swing) с bar_index
+        1. Собираем ТОЛЬКО swing пробои с bar_index
         2. Сортируем по времени
         3. Идём по истории bar-by-bar:
-           - Если есть пробой на этом баре → обновляем тренд
-           - Приоритет: Swing > Internal (если оба на одном баре)
+           - Если есть swing пробой → обновляем тренд
+           - Internal пробои НЕ влияют на тренд
         4. Возвращаем Dict[bar_index, trend_at_that_bar]
         
-        Теперь для каждого пробоя используется ПРАВИЛЬНЫЙ тренд
-        на момент ДО этого пробоя!
+        Результат:
+        - Swing CHoCH = разворот глобального тренда ✅
+        - Swing BOS = продолжение глобального тренда ✅
+        - Internal пробои не мешают swing классификации
         """
         if len(df) < 15:
             return {}
         
-        # Получаем все pivot точки
-        int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
+        # v7.4: Получаем ТОЛЬКО swing pivots (не internal!)
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         
         highs = df['high'].values
@@ -303,74 +311,51 @@ class SMCDetector:
         
         min_break_threshold = self._get_min_break_threshold(df, atr)
         
-        # Собираем все пробои с их bar_index и direction
-        all_breaks = []
+        # Собираем ТОЛЬКО swing пробои
+        swing_breaks = []
+        active_pivot_high = None
+        active_pivot_low = None
+        ph_idx = 0
+        pl_idx = 0
         
-        def collect_breaks(pivot_highs, pivot_lows, level_name):
-            """Собираем пробои с метаданными"""
-            breaks = []
-            active_pivot_high = None
-            active_pivot_low = None
-            ph_idx = 0
-            pl_idx = 0
+        for bar_i in range(total_bars):
+            # Обновляем активные swing pivots
+            while ph_idx < len(sw_pivot_highs) and sw_pivot_highs[ph_idx].bar_index < bar_i:
+                active_pivot_high = sw_pivot_highs[ph_idx]
+                ph_idx += 1
             
-            for bar_i in range(total_bars):
-                # Обновляем активные pivots
-                while ph_idx < len(pivot_highs) and pivot_highs[ph_idx].bar_index < bar_i:
-                    active_pivot_high = pivot_highs[ph_idx]
-                    ph_idx += 1
-                
-                while pl_idx < len(pivot_lows) and pivot_lows[pl_idx].bar_index < bar_i:
-                    active_pivot_low = pivot_lows[pl_idx]
-                    pl_idx += 1
-                
-                # Bullish break
-                if active_pivot_high and active_pivot_high.price > 0:
-                    if highs[bar_i] - active_pivot_high.price > min_break_threshold:
-                        breaks.append({
-                            'bar_index': bar_i,
-                            'direction': BULLISH,
-                            'level': level_name,
-                            'pivot_index': active_pivot_high.bar_index
-                        })
-                        active_pivot_high = None
-                
-                # Bearish break
-                if active_pivot_low and active_pivot_low.price > 0:
-                    if active_pivot_low.price - lows[bar_i] > min_break_threshold:
-                        breaks.append({
-                            'bar_index': bar_i,
-                            'direction': BEARISH,
-                            'level': level_name,
-                            'pivot_index': active_pivot_low.bar_index
-                        })
-                        active_pivot_low = None
+            while pl_idx < len(sw_pivot_lows) and sw_pivot_lows[pl_idx].bar_index < bar_i:
+                active_pivot_low = sw_pivot_lows[pl_idx]
+                pl_idx += 1
             
-            return breaks
+            # Bullish swing break
+            if active_pivot_high and active_pivot_high.price > 0:
+                if highs[bar_i] - active_pivot_high.price > min_break_threshold:
+                    swing_breaks.append({
+                        'bar_index': bar_i,
+                        'direction': BULLISH
+                    })
+                    active_pivot_high = None
+            
+            # Bearish swing break
+            if active_pivot_low and active_pivot_low.price > 0:
+                if active_pivot_low.price - lows[bar_i] > min_break_threshold:
+                    swing_breaks.append({
+                        'bar_index': bar_i,
+                        'direction': BEARISH
+                    })
+                    active_pivot_low = None
         
-        # Собираем с обоих уровней
-        internal_breaks = collect_breaks(int_pivot_highs, int_pivot_lows, 'internal')
-        swing_breaks = collect_breaks(sw_pivot_highs, sw_pivot_lows, 'swing')
-        
-        all_breaks = internal_breaks + swing_breaks
-        all_breaks.sort(key=lambda x: (x['bar_index'], 0 if x['level'] == 'swing' else 1))  # swing приоритет
-        
-        # Строим timeline: bar_index → trend
+        # Строим timeline: bar_index → trend (только по swing)
         trend_timeline = {}
         current_trend = NEUTRAL
         
         break_idx = 0
         for bar_i in range(total_bars):
-            # Проверяем есть ли пробои на этом баре
-            breaks_on_this_bar = []
-            while break_idx < len(all_breaks) and all_breaks[break_idx]['bar_index'] == bar_i:
-                breaks_on_this_bar.append(all_breaks[break_idx])
+            # Проверяем есть ли SWING пробой на этом баре
+            if break_idx < len(swing_breaks) and swing_breaks[break_idx]['bar_index'] == bar_i:
+                current_trend = swing_breaks[break_idx]['direction']
                 break_idx += 1
-            
-            # Если есть пробои - обновляем тренд
-            if breaks_on_this_bar:
-                # Приоритет swing (уже отсортировано)
-                current_trend = breaks_on_this_bar[0]['direction']
             
             # Сохраняем тренд для этого бара
             trend_timeline[bar_i] = current_trend
@@ -582,16 +567,15 @@ class SMCDetector:
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
         """
-        Определение структуры рынка v7.3
+        Определение структуры рынка v7.4
         
-        v7.3 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ:
-        - Unified Trend как ФУНКЦИЯ ВРЕМЕНИ (timeline), а не одно значение!
-        - Для каждого пробоя используется ПРАВИЛЬНЫЙ тренд на момент ДО пробоя
-        - Исправлена ошибка v7.2 (использовал финальный тренд для всей истории)
+        v7.4 SWING-ONLY TIMELINE:
+        - Unified Trend строится ТОЛЬКО по swing пробоям (не internal!)
+        - Internal откаты НЕ влияют на swing классификацию
+        - Результат: чистый глобальный тренд, правильные BOS/CHoCH
         
-        v7.2 (УСТАРЕЛО):
-        - Унифицированный тренд для Internal и Swing (НО ОДИН для всей истории!)
-        - Dedupe pivot (каждый pivot используется один раз)
+        v7.3: Trend Timeline (тренд на каждый бар) - СОХРАНЕНО
+        v7.2: Dedupe pivot - СОХРАНЕНО
         
         Возвращает:
         - all_*: ВСЕ события для визуализации на графике
@@ -618,14 +602,14 @@ class SMCDetector:
         atr = self._calculate_atr(df)
         
         # ================================================================
-        # v7.3: UNIFIED TREND TIMELINE - Тренд на КАЖДЫЙ бар
+        # v7.4: SWING-ONLY TREND TIMELINE - Тренд только по swing пробоям
         # ================================================================
         trend_timeline = self._build_unified_trend_timeline(df, atr)
         
         # Финальный тренд для логирования
         final_trend = trend_timeline.get(len(df) - 1, NEUTRAL) if trend_timeline else NEUTRAL
         trend_name = 'BULLISH' if final_trend == BULLISH else 'BEARISH' if final_trend == BEARISH else 'NEUTRAL'
-        logger.info(f"v7.3 Unified Trend Timeline: {len(trend_timeline)} bars | Final trend: {trend_name}")
+        logger.info(f"v7.4 Unified Trend Timeline (SWING ONLY): {len(trend_timeline)} bars | Final trend: {trend_name}")
         
         # ================================================================
         # INTERNAL STRUCTURE (чувствительная, для микро-движений)
@@ -692,16 +676,16 @@ class SMCDetector:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
         # ================================================================
-        # ЛОГИРОВАНИЕ v7.3
+        # ЛОГИРОВАНИЕ v7.4
         # ================================================================
         confirmed_count = (len(result['swing_bos_confirmed']) + len(result['swing_choch_confirmed']) +
                           len(result['internal_bos_confirmed']) + len(result['internal_choch_confirmed']))
         
         min_break = atr * MIN_BREAK_ATR_RATIO if atr > 0 else 0
-        logger.info(f"v7.3 Structure: ATR={atr:.2f}, min_break={min_break:.2f} | Timeline bars: {len(trend_timeline)}")
-        logger.info(f"v7.3 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
-        logger.info(f"v7.3 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
-        logger.info(f"v7.3 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
+        logger.info(f"v7.4 Structure: ATR={atr:.2f}, min_break={min_break:.2f} | Swing-Only Timeline bars: {len(trend_timeline)}")
+        logger.info(f"v7.4 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
+        logger.info(f"v7.4 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        logger.info(f"v7.4 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
         
         # Логируем последние события
         if sw_all_bos:
@@ -1575,7 +1559,7 @@ class SMCDetector:
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v7.3 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v7.4 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
             # 1. Market Structure (v6.0 с confirmed флагами)
             market_structure = self.detect_market_structure(df)
@@ -1682,9 +1666,9 @@ class SMCDetector:
             active_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'active')
             mitigated_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'mitigated')
             
-            logger.info(f"SMC v7.3 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
+            logger.info(f"SMC v7.4 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
                        f"FVG={len(fvg)} | Liq={len(liquidity)} | CONFIRMED={confirmed_total}")
-            logger.info(f"SMC v7.3 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
+            logger.info(f"SMC v7.4 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
                        f"Range: [{zones['range_low']:.2f} - {zones['range_high']:.2f}]")
             
             return sanitize_for_json(result)
