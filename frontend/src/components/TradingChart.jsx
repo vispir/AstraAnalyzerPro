@@ -165,9 +165,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     }
 
     // ============================================================
-    // 1. ORDER BLOCKS (Прямоугольники) - Ограничено последние 3
+    // 1. ORDER BLOCKS (Прямоугольники) - на всю ширину графика
     // ============================================================
-    const orderBlocks = (analysis.order_blocks || []).slice(-3); // Показываем только последние 3
+    const orderBlocks = analysis.order_blocks || [];
     orderBlocks.forEach(ob => {
       if (ob.bar_index === undefined) return;
       
@@ -181,47 +181,51 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       const bottomY = series.priceToCoordinate(ob.bottom);
       const leftX = timeScale.timeToCoordinate(time);
       
-      if (topY === null || bottomY === null || leftX === null) return;
+      if (topY === null || bottomY === null) return;
 
+      // Рисуем от левой границы свечи до правого края; если свеча слева за экраном — от 0
+      const startX = leftX !== null ? Math.max(0, leftX) : 0;
       const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
       const isBull = ob.type?.includes('BULL');
       
-      // Заливка с прозрачностью
+      // Заливка с прозрачностью (на всю видимую ширину)
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_OB : SMC_COLORS.BEAR_OB;
-      ctx.fillRect(leftX, y, rightX - leftX, height);
+      ctx.fillRect(startX, y, rightX - startX, height);
 
-      // Граница слева (как в LuxAlgo)
-      ctx.strokeStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(leftX, y);
-      ctx.lineTo(leftX, y + height);
-      ctx.stroke();
+      // Граница слева (как в LuxAlgo), только если свеча в видимой области
+      if (leftX !== null && leftX >= 0 && leftX <= chartRightEdge) {
+        ctx.strokeStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(leftX, y);
+        ctx.lineTo(leftX, y + height);
+        ctx.stroke();
+      }
       
-      // Горизонтальные пунктирные линии сверху и снизу
+      // Горизонтальные пунктирные линии сверху и снизу (на всю ширину)
       ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(leftX, y);
+      ctx.moveTo(startX, y);
       ctx.lineTo(rightX, y);
-      ctx.moveTo(leftX, y + height);
+      ctx.moveTo(startX, y + height);
       ctx.lineTo(rightX, y + height);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Метка
+      // Метка — у левого края зоны или у левого края графика
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_OB_BORDER : SMC_COLORS.BEAR_OB_BORDER;
       ctx.font = 'bold 9px Inter, Arial';
-      ctx.fillText(isBull ? 'BULL OB' : 'BEAR OB', leftX + 4, y + 11);
+      ctx.fillText(isBull ? 'BULL OB' : 'BEAR OB', startX + 4, y + 11);
     });
 
     // ============================================================
-    // 2. FAIR VALUE GAPS (Прямоугольники с пунктиром) - Последние 3
+    // 2. FAIR VALUE GAPS (Прямоугольники с пунктиром) — на всю ширину графика
     // ============================================================
-    const fvgList = (analysis.fvg || []).slice(-3); // Показываем только последние 3
+    const fvgList = analysis.fvg || [];
     fvgList.forEach(fvg => {
       if (fvg.bar_index === undefined) return;
       
@@ -235,29 +239,30 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       const bottomY = series.priceToCoordinate(fvg.bottom);
       const leftX = timeScale.timeToCoordinate(time);
       
-      if (topY === null || bottomY === null || leftX === null) return;
+      if (topY === null || bottomY === null) return;
 
+      const startX = leftX !== null ? Math.max(0, leftX) : 0;
       const rightX = chartRightEdge;
       const height = Math.abs(bottomY - topY);
       const y = Math.min(topY, bottomY);
 
       const isBull = fvg.type?.includes('BULL');
       
-      // Заливка с меньшей прозрачностью
+      // Заливка с меньшей прозрачностью (на всю видимую ширину)
       ctx.fillStyle = isBull ? SMC_COLORS.BULL_FVG : SMC_COLORS.BEAR_FVG;
-      ctx.fillRect(leftX, y, rightX - leftX, height);
+      ctx.fillRect(startX, y, rightX - startX, height);
 
       // Пунктирные границы
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = isBull ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
       ctx.lineWidth = 1;
-      ctx.strokeRect(leftX, y, rightX - leftX, height);
+      ctx.strokeRect(startX, y, rightX - startX, height);
       ctx.setLineDash([]);
 
       // Метка FVG
       ctx.fillStyle = isBull ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
       ctx.font = '8px Inter, Arial';
-      ctx.fillText('FVG', leftX + 3, y + 9);
+      ctx.fillText('FVG', startX + 3, y + 9);
     });
 
     // ============================================================
@@ -291,12 +296,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         }
 
         const priceY = series.priceToCoordinate(brk.price);
-        const pivotX = timeScale.timeToCoordinate(pivotCandle.time);
         const breakX = timeScale.timeToCoordinate(breakCandle.time);
         
-        if (priceY === null || pivotX === null || breakX === null) {
-          return;
-        }
+        if (priceY === null) return;
 
         const isBullish = brk.type?.includes('BULLISH');
         const isChoch = brk.is_choch === true || brk.type?.includes('CHOCH');
@@ -305,10 +307,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         // СТИЛЬ ЛИНИЙ (как на TradingView/LuxAlgo)
         // BOS: сплошная линия (—)
         // CHoCH: пунктирная линия (┄)
+        // Рисуем уровень на всю ширину графика (0..chartRightEdge)
         // ============================================================
         ctx.beginPath();
-        ctx.moveTo(pivotX, priceY);
-        ctx.lineTo(Math.min(breakX, chartRightEdge), priceY);
+        ctx.moveTo(0, priceY);
+        ctx.lineTo(chartRightEdge, priceY);
         
         if (isChoch) {
           // CHoCH: пунктирная линия ┄
@@ -325,52 +328,43 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.setLineDash([]);
 
         // ============================================================
-        // МЕТКА (как на TradingView - над линией)
+        // МЕТКА (справа у края графика)
         // ============================================================
         const labelText = isChoch ? 'CHoCH' : 'BOS';
         ctx.fillStyle = ctx.strokeStyle;
         ctx.font = isInternal ? '9px Inter, Arial' : 'bold 10px Inter, Arial';
         
-        // Позиционируем метку ближе к точке пробоя, выше линии
-        const labelX = Math.max(5, Math.min(breakX - 25, chartRightEdge - 35));
+        const labelX = breakX !== null && breakX >= 0 && breakX <= chartRightEdge
+          ? Math.max(5, Math.min(breakX - 25, chartRightEdge - 35))
+          : chartRightEdge - 35;
         const labelY = isBullish ? priceY + 12 : priceY - 5;
         ctx.fillText(labelText, labelX, labelY);
       });
     };
 
     // ============================================================
-    // ОТРИСОВКА СТРУКТУРЫ (только свежие, последние N баров)
-    // Для визуализации используем all_* массивы
+    // ОТРИСОВКА СТРУКТУРЫ — все BOS/CHoCH на всю ширину графика (все 300 свечей)
     // ============================================================
     const allInternalBos = analysis.all_internal_bos || [];
     const allInternalChoch = analysis.all_internal_choch || [];
     const allSwingBos = analysis.all_swing_bos || [];
     const allSwingChoch = analysis.all_swing_choch || [];
     
-    // Фильтруем - показываем только последние 30 баров для Internal, 50 для Swing
-    const maxInternalBarsAgo = 30;
-    const maxSwingBarsAgo = 50;
+    // Рисуем Internal структуру (тонкие линии)
+    drawBreakLine(allInternalBos, true);
+    drawBreakLine(allInternalChoch, true);
     
-    const filteredInternalBos = allInternalBos.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
-    const filteredInternalChoch = allInternalChoch.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
-    const filteredSwingBos = allSwingBos.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
-    const filteredSwingChoch = allSwingChoch.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
-    
-    // Рисуем Internal структуру (более частые, тонкие линии)
-    drawBreakLine(filteredInternalBos, true);
-    drawBreakLine(filteredInternalChoch, true);
-    
-    // Рисуем Swing структуру (реже, толще линии)
-    drawBreakLine(filteredSwingBos, false);
-    drawBreakLine(filteredSwingChoch, false);
+    // Рисуем Swing структуру (толще линии)
+    drawBreakLine(allSwingBos, false);
+    drawBreakLine(allSwingChoch, false);
     
     // Debug: логируем количество элементов
-    const totalBosChoch = filteredInternalBos.length + filteredInternalChoch.length + 
-                          filteredSwingBos.length + filteredSwingChoch.length;
+    const totalBosChoch = allInternalBos.length + allInternalChoch.length + 
+                          allSwingBos.length + allSwingChoch.length;
     if (totalBosChoch > 0) {
-      console.log(`SMC Structure v6: Internal BOS=${filteredInternalBos.length}, CHoCH=${filteredInternalChoch.length}, ` +
-                  `Swing BOS=${filteredSwingBos.length}, CHoCH=${filteredSwingChoch.length}, ` +
-                  `Total drawn=${totalBosChoch}, History=${history.length}`);
+      console.log(`SMC Structure: Internal BOS=${allInternalBos.length}, CHoCH=${allInternalChoch.length}, ` +
+                  `Swing BOS=${allSwingBos.length}, CHoCH=${allSwingChoch.length}, ` +
+                  `Total=${totalBosChoch}, History=${history.length}`);
     }
 
     // ============================================================
