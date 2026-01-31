@@ -261,19 +261,21 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     });
 
     // ============================================================
-    // 3. BOS/CHoCH LINES (Internal + Swing)
+    // 3. BOS/CHoCH LINES (Internal + Swing) - LuxAlgo Style
     // ============================================================
     const drawBreakLine = (breaks, isInternal = false) => {
-      if (!breaks || !Array.isArray(breaks)) return;
+      if (!breaks || !Array.isArray(breaks) || breaks.length === 0) return;
       
       breaks.forEach(brk => {
         // Проверяем наличие необходимых полей
         if (brk.bar_index === undefined || brk.pivot_bar_index === undefined) {
+          console.warn('BOS/CHoCH missing bar_index or pivot_bar_index:', brk);
           return;
         }
         
-        // Проверяем границы индексов
+        // Проверяем границы индексов (с учетом что индексы могут быть 0-based)
         if (brk.bar_index >= history.length || brk.pivot_bar_index >= history.length) {
+          console.warn(`BOS/CHoCH index out of bounds: bar=${brk.bar_index}, pivot=${brk.pivot_bar_index}, history=${history.length}`);
           return;
         }
         if (brk.bar_index < 0 || brk.pivot_bar_index < 0) {
@@ -284,6 +286,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         const breakCandle = history[brk.bar_index];
         
         if (!pivotCandle?.time || !breakCandle?.time) {
+          console.warn('BOS/CHoCH missing candle time:', { pivotCandle, breakCandle });
           return;
         }
 
@@ -291,57 +294,83 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         const pivotX = timeScale.timeToCoordinate(pivotCandle.time);
         const breakX = timeScale.timeToCoordinate(breakCandle.time);
         
-        if (priceY === null || pivotX === null || breakX === null) return;
+        if (priceY === null || pivotX === null || breakX === null) {
+          return;
+        }
 
         const isBullish = brk.type?.includes('BULLISH');
-        const isChoch = brk.is_choch;
+        const isChoch = brk.is_choch === true || brk.type?.includes('CHOCH');
         
-        // Рисуем линию от pivot до точки пробоя
+        // ============================================================
+        // СТИЛЬ ЛИНИЙ (как на TradingView/LuxAlgo)
+        // BOS: сплошная линия (—)
+        // CHoCH: пунктирная линия (┄)
+        // ============================================================
         ctx.beginPath();
         ctx.moveTo(pivotX, priceY);
         ctx.lineTo(Math.min(breakX, chartRightEdge), priceY);
         
         if (isChoch) {
-          ctx.setLineDash([6, 3]);
+          // CHoCH: пунктирная линия ┄
+          ctx.setLineDash([6, 4]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_CHOCH : SMC_COLORS.BEARISH_CHOCH;
-          ctx.lineWidth = isInternal ? 1.5 : 2.5;
+          ctx.lineWidth = isInternal ? 1.5 : 2;
         } else {
+          // BOS: сплошная линия —
           ctx.setLineDash([]);
           ctx.strokeStyle = isBullish ? SMC_COLORS.BULLISH_BOS : SMC_COLORS.BEARISH_BOS;
-          ctx.lineWidth = isInternal ? 1 : 2;
+          ctx.lineWidth = isInternal ? 1 : 1.5;
         }
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Рисуем метку
+        // ============================================================
+        // МЕТКА (как на TradingView - над линией)
+        // ============================================================
         const labelText = isChoch ? 'CHoCH' : 'BOS';
         ctx.fillStyle = ctx.strokeStyle;
         ctx.font = isInternal ? '9px Inter, Arial' : 'bold 10px Inter, Arial';
         
-        // Позиционируем метку посередине линии, выше неё
-        const midX = (pivotX + Math.min(breakX, chartRightEdge)) / 2;
-        const labelWidth = ctx.measureText(labelText).width;
-        const labelX = Math.max(5, Math.min(midX - labelWidth / 2, chartRightEdge - labelWidth - 5));
-        ctx.fillText(labelText, labelX, priceY - 5);
+        // Позиционируем метку ближе к точке пробоя, выше линии
+        const labelX = Math.max(5, Math.min(breakX - 25, chartRightEdge - 35));
+        const labelY = isBullish ? priceY + 12 : priceY - 5;
+        ctx.fillText(labelText, labelX, labelY);
       });
     };
 
-    // Рисуем Internal структуру (более частые, тонкие линии)
+    // ============================================================
+    // ОТРИСОВКА СТРУКТУРЫ (только свежие, последние N баров)
+    // Для визуализации используем all_* массивы
+    // ============================================================
     const allInternalBos = analysis.all_internal_bos || [];
     const allInternalChoch = analysis.all_internal_choch || [];
-    drawBreakLine(allInternalBos, true);
-    drawBreakLine(allInternalChoch, true);
-    
-    // Рисуем Swing структуру (реже, толще линии)
     const allSwingBos = analysis.all_swing_bos || [];
     const allSwingChoch = analysis.all_swing_choch || [];
-    drawBreakLine(allSwingBos, false);
-    drawBreakLine(allSwingChoch, false);
+    
+    // Фильтруем - показываем только последние 30 баров для Internal, 50 для Swing
+    const maxInternalBarsAgo = 30;
+    const maxSwingBarsAgo = 50;
+    
+    const filteredInternalBos = allInternalBos.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
+    const filteredInternalChoch = allInternalChoch.filter(b => (b.bars_ago || 0) <= maxInternalBarsAgo);
+    const filteredSwingBos = allSwingBos.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
+    const filteredSwingChoch = allSwingChoch.filter(b => (b.bars_ago || 0) <= maxSwingBarsAgo);
+    
+    // Рисуем Internal структуру (более частые, тонкие линии)
+    drawBreakLine(filteredInternalBos, true);
+    drawBreakLine(filteredInternalChoch, true);
+    
+    // Рисуем Swing структуру (реже, толще линии)
+    drawBreakLine(filteredSwingBos, false);
+    drawBreakLine(filteredSwingChoch, false);
     
     // Debug: логируем количество элементов
-    if (allInternalBos.length || allSwingBos.length || allInternalChoch.length || allSwingChoch.length) {
-      console.log(`SMC Structure: Internal BOS=${allInternalBos.length}, CHoCH=${allInternalChoch.length}, ` +
-                  `Swing BOS=${allSwingBos.length}, CHoCH=${allSwingChoch.length}, History length=${history.length}`);
+    const totalBosChoch = filteredInternalBos.length + filteredInternalChoch.length + 
+                          filteredSwingBos.length + filteredSwingChoch.length;
+    if (totalBosChoch > 0) {
+      console.log(`SMC Structure v6: Internal BOS=${filteredInternalBos.length}, CHoCH=${filteredInternalChoch.length}, ` +
+                  `Swing BOS=${filteredSwingBos.length}, CHoCH=${filteredSwingChoch.length}, ` +
+                  `Total drawn=${totalBosChoch}, History=${history.length}`);
     }
 
     // ============================================================

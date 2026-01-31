@@ -259,7 +259,8 @@ def format_debug_report(status_data):
         'weak_patterns': '📉', 'neutral_no_swing': '⚖️', 'cooldown': '⏳',
         'signal_sent': '✅', 'wait_decision': '⚖️',
         'impulse_override': '⚡', 'reversal_mode': '🔄',
-        'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑'
+        'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑',
+        'no_confirmed_signal': '⏳'  # v6.0: Нет уверенного пробоя
     }
     
     status_texts = {
@@ -277,7 +278,8 @@ def format_debug_report(status_data):
         'impulse_override': '⚡ IMPULSE MODE: Запрет снят!',
         'reversal_mode': '🔄 REVERSAL MODE: Поиск разворота',
         'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT',
-        'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM'
+        'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM',
+        'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)'  # v6.0
     }
     
     status = status_data.get('status', 'unknown')
@@ -773,6 +775,36 @@ def run_analysis_cycle():
         status_data['reason'] = 'Кулдаун активен'
         send_debug_notification(status_data)
         return
+    
+    # ========================================================================
+    # v6.0 КРИТИЧЕСКИЙ ФИЛЬТР: ТРЕБУЕМ CONFIRMED СИГНАЛ ДЛЯ ВЫЗОВА LLM
+    # ========================================================================
+    # LLM вызывается ТОЛЬКО если:
+    # 1. Есть хотя бы один CONFIRMED BOS/CHoCH (пробой телом свечи)
+    # 2. ИЛИ активен impulse override (breakout/void_run/impulse)
+    # 3. ИЛИ есть reversal setup
+    
+    has_any_confirmed = (
+        has_swing_bos_confirmed or 
+        has_swing_choch_confirmed or 
+        has_int_bos_confirmed or 
+        has_int_choch_confirmed
+    )
+    
+    confirmed_count = smc_summary.get('confirmed_total', 0)
+    
+    if not has_any_confirmed and not is_breakout_impulse and not is_reversal_setup:
+        status_data['status'] = 'no_confirmed_signal'
+        status_data['reason'] = (
+            f'⏳ Нет CONFIRMED сигналов (confirmed_total={confirmed_count}).\n'
+            f'LLM не вызывается без уверенного пробоя (телом свечи).\n'
+            f'Swing BOS_conf={has_swing_bos_confirmed}, CHoCH_conf={has_swing_choch_confirmed}\n'
+            f'Internal BOS_conf={has_int_bos_confirmed}, CHoCH_conf={has_int_choch_confirmed}'
+        )
+        send_debug_notification(status_data)
+        return
+    
+    logger.info(f"✅ CONFIRMED SIGNALS: {confirmed_count} | Calling LLM...")
     
     # ========================================================================
     # ФАЗА 3: ВЫЗОВ LLM

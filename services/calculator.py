@@ -112,7 +112,31 @@ class TradingCalculator:
                 "choch": smc_data.get('choch', []),
                 "bos": smc_data.get('bos', []),
                 "eqh": smc_data.get('eqh', []),
-                "eql": smc_data.get('eql', [])
+                "eql": smc_data.get('eql', []),
+                
+                # ============================================================
+                # BOS/CHoCH для ВИЗУАЛИЗАЦИИ на графике (все уровни)
+                # ============================================================
+                "all_internal_bos": smc_data.get('all_internal_bos', []),
+                "all_internal_choch": smc_data.get('all_internal_choch', []),
+                "all_swing_bos": smc_data.get('all_swing_bos', []),
+                "all_swing_choch": smc_data.get('all_swing_choch', []),
+                
+                # Свежие сигналы (bars_ago <= FRESH_SIGNAL_BARS)
+                "internal_bos": smc_data.get('internal_bos', []),
+                "internal_choch": smc_data.get('internal_choch', []),
+                "swing_bos": smc_data.get('swing_bos', []),
+                "swing_choch": smc_data.get('swing_choch', []),
+                
+                # Тренды
+                "internal_trend": smc_data.get('internal_trend', 'NEUTRAL'),
+                "swing_trend": smc_data.get('swing_trend', 'NEUTRAL'),
+                
+                # Pivot уровни
+                "internal_pivot_high": smc_data.get('internal_pivot_high', 0.0),
+                "internal_pivot_low": smc_data.get('internal_pivot_low', 0.0),
+                "swing_pivot_high": smc_data.get('swing_pivot_high', 0.0),
+                "swing_pivot_low": smc_data.get('swing_pivot_low', 0.0)
             }
             
             # 4. Формат для AI
