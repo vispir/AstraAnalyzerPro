@@ -356,15 +356,15 @@ class DBService:
         # Соответствие РЕАЛЬНОЙ схеме таблицы signals в Supabase:
         # - signal_label НЕТ (вычисляется в VIEW latest_signals)
         # - internal_trend НЕТ  
-        # - patterns = text (не jsonb!)
+        # - patterns = text[] (массив строк!)
         # ============================================================
         
-        # Преобразуем patterns из list в строку (колонка text в БД)
+        # patterns — колонка _text (text[]) в БД: передаём массив строк, не одну строку
         patterns_raw = signal_data.get('patterns', [])
         if isinstance(patterns_raw, list):
-            patterns_str = ', '.join(str(p) for p in patterns_raw) if patterns_raw else ''
+            patterns_list = [str(p) for p in patterns_raw] if patterns_raw else []
         else:
-            patterns_str = str(patterns_raw) if patterns_raw else ''
+            patterns_list = [str(patterns_raw)] if patterns_raw else []
         
         sanitized_data = {
             'symbol': str(signal_data.get('symbol', 'XAU_USD')),
@@ -382,8 +382,8 @@ class DBService:
             'trend': str(signal_data.get('trend', 'NEUTRAL')),
             'zone': str(signal_data.get('zone', 'UNKNOWN')),
             
-            # Паттерны — TEXT строка (не list!)
-            'patterns': patterns_str,
+            # Паттерны — массив строк (text[] в БД)
+            'patterns': patterns_list,
             
             # SMC Summary — jsonb
             'smc_summary': dict(signal_data.get('smc_summary', {})) if isinstance(signal_data.get('smc_summary'), dict) else {},
