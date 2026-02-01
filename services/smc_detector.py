@@ -1423,6 +1423,7 @@ class SMCDetector:
                         'gap_size': fvg['gap_size'],
                         'bar_index': fvg['bar_index'],
                         'bars_ago': fvg['bars_ago'],
+                        'formation_bar': fvg['formation_bar'],
                         'status': status,
                         'fill_percent': round(fill_percent, 1)
                     }
