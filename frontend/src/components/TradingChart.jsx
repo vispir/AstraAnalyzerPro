@@ -444,7 +444,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       layout: { background: { color: '#0b0e14' }, textColor: '#d1d4dc' },
       grid: { vertLines: { color: 'rgba(42, 46, 57, 0.05)' }, horzLines: { color: 'rgba(42, 46, 57, 0.05)' } },
       crosshair: { mode: CrosshairMode.Normal },
-      timeScale: { timeVisible: true, borderColor: 'rgba(255, 255, 255, 0.1)' },
+      timeScale: {
+        timeVisible: true,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        shiftVisibleRangeOnNewBar: false,
+      },
     });
 
     const series = chart.addSeries(CandlestickSeries, {
@@ -633,11 +637,14 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     seriesRef.current.setData(history);
 
     if (visibleRange && timeScale.setVisibleLogicalRange) {
-      try {
-        timeScale.setVisibleLogicalRange(visibleRange);
-      } catch {
-        // восстановление диапазона после setData может не сработать при смене длины данных
-      }
+      const range = { ...visibleRange };
+      setTimeout(() => {
+        try {
+          if (chartRef.current) chartRef.current.timeScale().setVisibleLogicalRange(range);
+        } catch {
+          // восстановление диапазона после setData может не сработать при смене длины данных
+        }
+      }, 0);
     }
     setTimeout(drawSMCOverlay, 100);
 
