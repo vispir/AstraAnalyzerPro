@@ -676,16 +676,19 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         </div>
       )}
       
-      {/* SMC Toggle Button + Legend */}
+      {/* SMC Toggle Button + Legend | OHLC Tooltip справа */}
       <div style={{
         position: 'absolute',
         top: '10px',
         left: '10px',
         zIndex: 20,
         display: 'flex',
-        flexDirection: 'column',
-        gap: '8px'
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: '10px'
       }}>
+        {/* Левая колонка: SMC переключатель + легенда */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {/* Toggle Button */}
         <button
           onClick={() => setSmcVisible(prev => !prev)}
@@ -784,8 +787,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
             </div>
           </div>
         )}
+        </div>
         
-        {/* Candle Data Tooltip */}
+        {/* Candle Data Tooltip — справа от SMC */}
         {candleData && (
           <div style={{
             background: 'rgba(11, 14, 20, 0.95)',
