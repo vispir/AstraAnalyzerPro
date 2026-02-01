@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Clock, LogOut, ChevronDown } from 'lucide-react';
+import { User, LogOut, ChevronDown } from 'lucide-react';
 
 // Теперь Header - "тупой" компонент, получающий все как пропсы
 const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) => {
@@ -42,22 +42,28 @@ const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) 
           <span className="brand-text">ASTRA ANALYZER</span>
         </div>
 
-        {/* ЦЕНТР: ЧАСЫ */}
+        {/* ЦЕНТР: ЧАСЫ (премиум стиль) */}
         <div className="header-section clock-area">
           <div className="clock-display">
-            <Clock size={16} />
-            <span>{time.toLocaleTimeString('ru-RU')}</span>
+            <span className="clock-time">{time.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
             <span className="utc-badge">UTC+4</span>
           </div>
         </div>
 
-        {/* ПРАВО: СЕЛЕКТОРЫ И ЛОГИН */}
+        {/* ПРАВО: ТАЙМФРЕЙМ КНОПКИ + СЕЛЕКТ ИСТОЧНИКА + ЛОГИН */}
         <div className="header-section controls-area">
-          <select value={tf} onChange={(e) => setTf(e.target.value)} className="select-modern tf-select">
-            <option value="M15">M15</option>
-            <option value="H1">H1</option>
-            <option value="H4">H4</option>
-          </select>
+          <div className="tf-buttons">
+            {['M15', 'H1', 'H4'].map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`tf-btn ${tf === t ? 'active' : ''}`}
+                onClick={() => setTf(t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
           
           <select value={source} onChange={(e) => setSource(e.target.value)} className="select-modern src-select">
             <option value="oanda">OANDA</option>

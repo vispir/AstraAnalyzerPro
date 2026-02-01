@@ -40,11 +40,34 @@
     transform: translateX(-50%);
   }
 
+  /* ЧАСЫ: премиум, современный стиль */
+  .clock-display {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 18px;
+    background: linear-gradient(135deg, rgba(17, 22, 30, 0.95), rgba(30, 34, 45, 0.9));
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+  .clock-time {
+    font-family: 'JetBrains Mono', 'SF Mono', monospace;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #e8eaed;
+    text-shadow: 0 0 20px rgba(41, 98, 255, 0.15);
+  }
   .utc-badge {
     font-size: 10px;
-    color: var(--accent-blue);
-    margin-left: 5px;
-    font-weight: 800;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--accent-cyan);
+    opacity: 0.9;
+    padding: 2px 6px;
+    background: rgba(0, 210, 255, 0.08);
+    border-radius: 4px;
   }
   
   /* Логотип (фикс битой картинки) */
@@ -63,21 +86,38 @@
     -webkit-text-fill-color: transparent;
   }
   
-  /* ТАЙМЕР (Красивая рамка) */
-  .clock-display {
+  /* КНОПКИ ТАЙМФРЕЙМА (отдельная кнопка на каждый) */
+  .tf-buttons {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 18px;
-    padding: 4px 12px;
-    background: rgba(41, 98, 255, 0.15);
-    border: 1px solid rgba(41, 98, 255, 0.4);
-    border-radius: 6px;
-    color: #7ba3ff;
+    gap: 4px;
   }
-  
-  /* СЕЛЕКТЫ И ЛОГИН (Убираем белое уродство) */
+  .tf-btn {
+    min-width: 44px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    color: var(--text-dim);
+    background: rgba(17, 22, 30, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .tf-btn:hover {
+    color: #e8eaed;
+    border-color: rgba(41, 98, 255, 0.4);
+    background: rgba(41, 98, 255, 0.08);
+  }
+  .tf-btn.active {
+    color: var(--accent-cyan);
+    background: linear-gradient(135deg, rgba(41, 98, 255, 0.2), rgba(0, 210, 255, 0.1));
+    border-color: rgba(0, 210, 255, 0.4);
+    box-shadow: 0 0 12px rgba(0, 210, 255, 0.15);
+  }
+
+  /* СЕЛЕКТ ИСТОЧНИКА ГРАФИКА: тёмный, не сливается с фоном */
   .select-modern {
     background: #1e222d;
     border: 1px solid #363c4e;
@@ -88,20 +128,47 @@
     cursor: pointer;
   }
   .select-modern:hover { border-color: var(--accent-blue); }
-  
+  .src-select {
+    background: #161a25 !important;
+    border: 1px solid #2a2e39;
+    color: #e8eaed;
+    min-width: 120px;
+    font-weight: 500;
+  }
+  .src-select:hover,
+  .src-select:focus {
+    border-color: rgba(41, 98, 255, 0.5);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.1);
+  }
+  .src-select option {
+    background: #161a25;
+    color: #e8eaed;
+  }
+
+  /* КНОПКА LOG IN: современный премиум вид */
   .login-badge {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #fff;
-    padding: 6px 12px;
-    border-radius: 6px;
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    color: #e8eaed;
+    background: linear-gradient(135deg, rgba(17, 22, 30, 0.95), rgba(30, 34, 45, 0.9));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
     cursor: pointer;
+    transition: all 0.25s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   }
-  .login-badge:hover { background: var(--accent-blue); border-color: var(--accent-blue); }
+  .login-badge:hover {
+    color: #fff;
+    border-color: rgba(0, 210, 255, 0.4);
+    background: linear-gradient(135deg, rgba(41, 98, 255, 0.15), rgba(0, 210, 255, 0.08));
+    box-shadow: 0 0 20px rgba(0, 210, 255, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
   
   /* ГРАФИК НА ВЕСЬ ЭКРАН */
   .chart-wrapper {
