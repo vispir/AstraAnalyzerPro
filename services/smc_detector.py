@@ -1,29 +1,25 @@
 """
-SMC Detector v7.5 - Independent Internal/Swing Trends (PERFECT!)
-=================================================================
-ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ v7.5:
-- НЕЗАВИСИМЫЕ ТРЕНДЫ: Internal и Swing полностью независимы!
-  * Internal: использует ЛОКАЛЬНЫЙ тренд (без timeline)
-  * Swing: использует SWING-ONLY timeline (глобальный тренд)
-  * Никакого взаимного влияния!
-  
-  Почему это правильно:
-  - Internal (pivot 3/2) - микро-структура для точных входов
-  - Swing (pivot 8/4) - макро-структура для глобального тренда
-  - Internal откаты НЕ должны влиять на Swing классификацию
-  - Swing развороты НЕ должны влиять на Internal классификацию
-  
-  Результат на графике:
-  - Internal: свои BOS/CHoCH (микро-движения) ✅
-  - Swing: свои BOS/CHoCH (глобальный тренд) ✅
-  - Нет "загрязнения" между уровнями ✅
-  - Правильное чередование на каждом уровне ✅
+SMC Detector v7.7 - Internal Confluence Filter (Complete!)
+===========================================================
+НОВОЕ v7.7 - INTERNAL CONFLUENCE (LuxAlgo-style):
+- Опциональный фильтр для internal BOS/CHoCH по "характеру свечи"
+  * Флаг: USE_INTERNAL_CONFLUENCE = False (по умолчанию выключен)
+  * Логика:
+    - BULLISH пробой: только на бычьей свече + маленькая верхняя тень
+    - BEARISH пробой: только на медвежьей свече + маленькая нижняя тень
+    - "Маленькая тень" = < 30% от тела свечи (CONFLUENCE_WICK_RATIO)
+  * Применяется ТОЛЬКО к internal (не swing!)
+  * При включении: меньше internal сигналов, но выше качество
 
-СОХРАНЕНО из v7.5:
-- Swing-Only Timeline для swing уровня
-- Dedupe Pivot (каждый pivot один раз)
+v7.6 УЛУЧШЕНИЯ (СОХРАНЕНЫ):
+- АКТУАЛЬНЫЕ ЗОНЫ Premium/Discount по последним 100 барам
+- ОТЛАДОЧНОЕ ЛОГИРОВАНИЕ: OB, FVG, Zones с bar_index для сверки
 
-СОХРАНЕНО из v7.0-7.3:
+v7.5 СОХРАНЕНО:
+- Independent Trends: Internal=LOCAL, Swing=TIMELINE
+- Dedupe Pivot
+
+УЛУЧШЕНИЯ v7.0-v7.4 (СОХРАНЕНЫ):
 - Order Blocks lifecycle, FVG fill, зоны по swing
 - Trend before break logic
 - ATR фильтр шума
@@ -90,6 +86,10 @@ DISCOUNT_THRESHOLD = 33.3           # < 33.3% = Discount
 MIN_BREAK_ATR_RATIO = 0.15          # Пробой должен быть минимум 0.15 ATR (убирает микро-шум)
 MIN_BREAK_PERCENT = 0.03            # Или минимум 0.03% от цены (для страховки)
 
+# v7.7 Internal Confluence (опциональный фильтр как в LuxAlgo)
+USE_INTERNAL_CONFLUENCE = True     # True = internal BOS/CHoCH только на свечах с "confluence"
+CONFLUENCE_WICK_RATIO = 0.3         # Максимальный размер "неправильной" тени = 30% от тела
+
 
 # ============================================================================
 # СТРУКТУРЫ ДАННЫХ
@@ -148,7 +148,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # ============================================================================
 
 class SMCDetector:
-    """SMC Detector v7.5 - Independent Trends (PERFECT!)"""
+    """SMC Detector v7.7 - Internal Confluence + Accurate Zones"""
     
     def __init__(self):
         self.analysis_count = 0
@@ -160,6 +160,76 @@ class SMCDetector:
     def reset(self):
         self.analysis_count = 0
         logger.debug("SMC Detector reset")
+    
+    # ========================================================================
+    # INTERNAL CONFLUENCE v7.7 (LuxAlgo-style filter)
+    # ========================================================================
+    
+    def _check_candle_confluence(self, candle_row, direction: int) -> bool:
+        """
+        v7.7: Проверка "confluence" - соответствие характера свечи направлению пробоя
+        
+        Логика как в LuxAlgo:
+        - BULLISH пробой: свеча должна быть бычьей (close > open) 
+          + маленькая верхняя тень (показывает силу покупателей)
+        - BEARISH пробой: свеча должна быть медвежьей (close < open)
+          + маленькая нижняя тень (показывает силу продавцов)
+        
+        "Маленькая тень" = тень < 30% от тела (CONFLUENCE_WICK_RATIO)
+        
+        Возвращает:
+        - True: свеча соответствует направлению (confluence OK)
+        - False: свеча НЕ соответствует (отклонить internal пробой)
+        """
+        if not USE_INTERNAL_CONFLUENCE:
+            return True  # Фильтр отключён - пропускаем все
+        
+        try:
+            open_price = float(candle_row['open'])
+            high_price = float(candle_row['high'])
+            low_price = float(candle_row['low'])
+            close_price = float(candle_row['close'])
+        except:
+            return True  # Нет данных - пропускаем
+        
+        # Размеры
+        body = abs(close_price - open_price)
+        
+        # Защита от doji (нулевое тело)
+        if body < 0.0001:
+            return False  # Doji - нет confluence
+        
+        upper_wick = high_price - max(open_price, close_price)
+        lower_wick = min(open_price, close_price) - low_price
+        is_bullish_candle = close_price > open_price
+        
+        # ================================================================
+        # BULLISH BREAK - требуем бычью свечу + маленькую верхнюю тень
+        # ================================================================
+        if direction == BULLISH:
+            if not is_bullish_candle:
+                return False  # Свеча медвежья - нет confluence
+            
+            # Проверяем верхнюю тень (большая тень = слабость покупателей)
+            if upper_wick > (body * CONFLUENCE_WICK_RATIO):
+                return False  # Большая верхняя тень - отклоняем
+            
+            return True  # Confluence OK!
+        
+        # ================================================================
+        # BEARISH BREAK - требуем медвежью свечу + маленькую нижнюю тень
+        # ================================================================
+        elif direction == BEARISH:
+            if is_bullish_candle:
+                return False  # Свеча бычья - нет confluence
+            
+            # Проверяем нижнюю тень (большая тень = слабость продавцов)
+            if lower_wick > (body * CONFLUENCE_WICK_RATIO):
+                return False  # Большая нижняя тень - отклоняем
+            
+            return True  # Confluence OK!
+        
+        return True  # Неизвестное направление - пропускаем
     
     # ========================================================================
     # PIVOT DETECTION
@@ -274,16 +344,16 @@ class SMCDetector:
         return pivot_highs, pivot_lows
     
     # ========================================================================
-    # UNIFIED TREND TIMELINE v7.5 - SWING ONLY (FINAL FIX)
+    # UNIFIED TREND TIMELINE v7.7 - SWING ONLY (FINAL FIX)
     # ========================================================================
     
     def _build_unified_trend_timeline(self, df: pd.DataFrame, atr: float = 0.0) -> Dict[int, int]:
         """
-        v7.5: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
+        v7.7: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
         
-        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.5:
+        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.7:
         - v7.3 использовал internal + swing → internal загрязнял timeline
-        - v7.5 использует ТОЛЬКО swing → чистый глобальный тренд
+        - v7.7 использует ТОЛЬКО swing → чистый глобальный тренд
         
         Почему только swing:
         - Internal слишком чувствительный (pivot 3/2)
@@ -306,7 +376,7 @@ class SMCDetector:
         if len(df) < 15:
             return {}
         
-        # v7.5: Получаем ТОЛЬКО swing pivots (не internal!)
+        # v7.7: Получаем ТОЛЬКО swing pivots (не internal!)
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         
         highs = df['high'].values
@@ -456,6 +526,12 @@ class SMCDetector:
                     
                     # v6.1: Пробой должен быть значимым (больше порога)
                     if break_distance > min_break_threshold:
+                        # v7.7: Internal Confluence фильтр (ТОЛЬКО для internal!)
+                        if structure_name == "internal":
+                            candle_row = df.iloc[bar_i]
+                            if not self._check_candle_confluence(candle_row, BULLISH):
+                                continue  # Свеча не соответствует - пропускаем пробой
+                        
                         # v7.3: Используем тренд НА МОМЕНТ ЭТОГО БАРА из timeline
                         if use_timeline:
                             # Берём тренд ДО текущего бара (bar_i - 1)
@@ -508,6 +584,12 @@ class SMCDetector:
                     
                     # v6.1: Пробой должен быть значимым (больше порога)
                     if break_distance > min_break_threshold:
+                        # v7.7: Internal Confluence фильтр (ТОЛЬКО для internal!)
+                        if structure_name == "internal":
+                            candle_row = df.iloc[bar_i]
+                            if not self._check_candle_confluence(candle_row, BEARISH):
+                                continue  # Свеча не соответствует - пропускаем пробой
+                        
                         # v7.3: Используем тренд НА МОМЕНТ ЭТОГО БАРА из timeline
                         if use_timeline:
                             # Берём тренд ДО текущего бара (bar_i - 1)
@@ -571,9 +653,9 @@ class SMCDetector:
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
         """
-        Определение структуры рынка v7.5
+        Определение структуры рынка v7.7
         
-        v7.5 НЕЗАВИСИМЫЕ ТРЕНДЫ (ФИНАЛЬНОЕ РЕШЕНИЕ):
+        v7.7 НЕЗАВИСИМЫЕ ТРЕНДЫ (ФИНАЛЬНОЕ РЕШЕНИЕ):
         - Internal: локальный тренд (БЕЗ timeline) - микро-структура
         - Swing: unified timeline (ТОЛЬКО swing) - макро-структура
         - Полная независимость уровней!
@@ -583,7 +665,7 @@ class SMCDetector:
         - Swing BOS/CHoCH правильные (глобальный swing тренд)
         - Нет взаимного "загрязнения"
         
-        v7.5: Swing-Only Timeline - СОХРАНЕНО для swing
+        v7.7: Swing-Only Timeline - СОХРАНЕНО для swing
         v7.3: Trend Timeline - СОХРАНЕНО
         v7.2: Dedupe pivot - СОХРАНЕНО
         
@@ -612,14 +694,14 @@ class SMCDetector:
         atr = self._calculate_atr(df)
         
         # ================================================================
-        # v7.5: SWING-ONLY TIMELINE - ТОЛЬКО для swing уровня!
+        # v7.7: SWING-ONLY TIMELINE - ТОЛЬКО для swing уровня!
         # ================================================================
         swing_timeline = self._build_unified_trend_timeline(df, atr)
         
         # Финальный тренд для логирования
         final_swing_trend = swing_timeline.get(len(df) - 1, NEUTRAL) if swing_timeline else NEUTRAL
         swing_trend_name = 'BULLISH' if final_swing_trend == BULLISH else 'BEARISH' if final_swing_trend == BEARISH else 'NEUTRAL'
-        logger.info(f"v7.5 Independent Trends: Swing Timeline={len(swing_timeline)} bars (trend: {swing_trend_name}) | Internal=LOCAL")
+        logger.info(f"v7.7 Independent Trends: Swing Timeline={len(swing_timeline)} bars (trend: {swing_trend_name}) | Internal=LOCAL")
         
         # ================================================================
         # INTERNAL STRUCTURE - ЛОКАЛЬНЫЙ ТРЕНД (без timeline!)
@@ -680,23 +762,27 @@ class SMCDetector:
         
         result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
-        if sw_pivot_highs:
-            result['swing_pivot_high'] = sw_pivot_highs[-1].price
-        if sw_pivot_lows:
-            result['swing_pivot_low'] = sw_pivot_lows[-1].price
+        # v7.7: Для зон используем актуальный диапазон за последние 100 баров
+        # (не последний старый pivot из списка!)
+        zone_lookback = min(100, len(df))
+        recent_df = df.tail(zone_lookback)
+        result['swing_pivot_high'] = float(recent_df['high'].max())
+        result['swing_pivot_low'] = float(recent_df['low'].min())
+        
+        logger.debug(f"v7.7 Zone Range: High={result['swing_pivot_high']:.2f}, Low={result['swing_pivot_low']:.2f} (last {zone_lookback} bars)")
         
         # ================================================================
-        # ЛОГИРОВАНИЕ v7.5
+        # ЛОГИРОВАНИЕ v7.7
         # ================================================================
         confirmed_count = (len(result['swing_bos_confirmed']) + len(result['swing_choch_confirmed']) +
                           len(result['internal_bos_confirmed']) + len(result['internal_choch_confirmed']))
         
         min_break = atr * MIN_BREAK_ATR_RATIO if atr > 0 else 0
-        logger.info(f"v7.5 Structure: ATR={atr:.2f}, min_break={min_break:.2f}")
-        logger.info(f"v7.5 Independent Trends: Internal=LOCAL (own trend) | Swing=TIMELINE ({len(swing_timeline)} bars)")
-        logger.info(f"v7.5 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
-        logger.info(f"v7.5 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
-        logger.info(f"v7.5 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
+        logger.info(f"v7.7 Structure: ATR={atr:.2f}, min_break={min_break:.2f}")
+        logger.info(f"v7.7 Independent Trends: Internal=LOCAL (own trend) | Swing=TIMELINE ({len(swing_timeline)} bars)")
+        logger.info(f"v7.7 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
+        logger.info(f"v7.7 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        logger.info(f"v7.7 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
         
         # Логируем последние события
         if sw_all_bos:
@@ -1210,8 +1296,15 @@ class SMCDetector:
             order_blocks['internal'] = order_blocks['internal'][-5:]
             order_blocks['breakers'] = order_blocks['breakers'][-3:]
             
-            logger.debug(f"v7.0 Order Blocks: {len(order_blocks['internal'])} active/mitigated, "
+            logger.debug(f"v7.7 Order Blocks: {len(order_blocks['internal'])} active/mitigated, "
                         f"{len(order_blocks['breakers'])} breakers")
+            
+            # v7.7: Детальное логирование последних 2 OB для отладки
+            if order_blocks['internal']:
+                logger.debug("v7.7 Last 2 Order Blocks (for manual verification):")
+                for i, ob in enumerate(order_blocks['internal'][-2:], 1):
+                    logger.debug(f"  OB #{i}: {ob['type']} | bar_index={ob['bar_index']} | "
+                               f"top={ob['top']:.2f} bottom={ob['bottom']:.2f} | status={ob['status']}")
             
         except Exception as e:
             logger.error(f"Error detecting order blocks: {e}")
@@ -1338,7 +1431,14 @@ class SMCDetector:
             # Ограничиваем количество
             fvg_list = fvg_list[-5:]
             
-            logger.debug(f"v7.0 FVG: {len(fvg_list)} active gaps")
+            logger.debug(f"v7.7 FVG: {len(fvg_list)} active gaps")
+            
+            # v7.7: Детальное логирование последних 2 FVG для отладки
+            if fvg_list:
+                logger.debug("v7.7 Last 2 FVG (for manual verification):")
+                for i, fvg in enumerate(fvg_list[-2:], 1):
+                    logger.debug(f"  FVG #{i}: {fvg['type']} | formation_bar={fvg['formation_bar']} | "
+                               f"top={fvg['top']:.2f} bottom={fvg['bottom']:.2f} | status={fvg['status']} fill={fvg['fill_percent']}%")
             
         except Exception as e:
             logger.error(f"Error detecting FVG: {e}")
@@ -1570,7 +1670,7 @@ class SMCDetector:
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v7.5 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v7.7 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
             # 1. Market Structure (v6.0 с confirmed флагами)
             market_structure = self.detect_market_structure(df)
@@ -1677,9 +1777,9 @@ class SMCDetector:
             active_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'active')
             mitigated_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'mitigated')
             
-            logger.info(f"SMC v7.5 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
+            logger.info(f"SMC v7.7 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
                        f"FVG={len(fvg)} | Liq={len(liquidity)} | CONFIRMED={confirmed_total}")
-            logger.info(f"SMC v7.5 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
+            logger.info(f"SMC v7.7 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
                        f"Range: [{zones['range_low']:.2f} - {zones['range_high']:.2f}]")
             
             return sanitize_for_json(result)
