@@ -789,11 +789,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         )}
         </div>
         
-        {/* Candle Data Tooltip — справа от SMC */}
+        {/* Candle Data Tooltip — справа от SMC, одна строка */}
         {candleData && (
           <div style={{
             background: 'rgba(11, 14, 20, 0.95)',
-            padding: '10px 14px',
+            padding: '8px 14px',
             borderRadius: '8px',
             fontSize: '11px',
             fontWeight: '500',
@@ -802,38 +802,30 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
             backdropFilter: 'blur(10px)',
             border: `1px solid ${candleData.isBullish ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)'}`,
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
-            minWidth: '200px'
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: '14px',
+            whiteSpace: 'nowrap'
           }}>
-            <div style={{ marginBottom: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>ОТКР</span>
-              <span>{candleData.open.toFixed(3)}</span>
-            </div>
-            <div style={{ marginBottom: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>МАКС</span>
-              <span>{candleData.high.toFixed(3)}</span>
-            </div>
-            <div style={{ marginBottom: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>МИН</span>
-              <span>{candleData.low.toFixed(3)}</span>
-            </div>
-            <div style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>ЗАКР</span>
-              <span>{candleData.close.toFixed(3)}</span>
-            </div>
-            <div style={{ 
-              display: 'flex', 
-              gap: '6px', 
-              alignItems: 'center',
-              paddingTop: '8px',
-              borderTop: '1px solid rgba(255, 255, 255, 0.1)'
-            }}>
-              <span style={{ fontWeight: '700', fontSize: '12px' }}>
-                {candleData.change >= 0 ? '+' : ''}{candleData.change.toFixed(3)}
-              </span>
-              <span style={{ fontSize: '10px', opacity: 0.8 }}>
-                ({candleData.changePercent >= 0 ? '+' : ''}{candleData.changePercent.toFixed(2)}%)
-              </span>
-            </div>
+            <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>ОТКР</span>
+            <span>{candleData.open.toFixed(3)}</span>
+            <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 2px' }}>|</span>
+            <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>МАКС</span>
+            <span>{candleData.high.toFixed(3)}</span>
+            <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 2px' }}>|</span>
+            <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>МИН</span>
+            <span>{candleData.low.toFixed(3)}</span>
+            <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 2px' }}>|</span>
+            <span style={{ color: '#848e9c', fontSize: '9px', fontWeight: '600' }}>ЗАКР</span>
+            <span>{candleData.close.toFixed(3)}</span>
+            <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 2px' }}>|</span>
+            <span style={{ fontWeight: '700', fontSize: '11px' }}>
+              {candleData.change >= 0 ? '+' : ''}{candleData.change.toFixed(3)}
+            </span>
+            <span style={{ fontSize: '10px', opacity: 0.8 }}>
+              ({candleData.changePercent >= 0 ? '+' : ''}{candleData.changePercent.toFixed(2)}%)
+            </span>
           </div>
         )}
       </div>
