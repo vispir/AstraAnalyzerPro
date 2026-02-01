@@ -33,6 +33,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   const linesRef = useRef({ entry: null, sl: null, tp: null });
   const draggingRef = useRef(null);
   const levelsRef = useRef(levels);
+  const userInteractedRef = useRef(false); // Флаг взаимодействия пользователя
   
   // Состояние видимости SMC (сохраняем в localStorage)
   const [smcVisible, setSmcVisible] = useState(() => {
@@ -480,6 +481,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(drawSMCOverlay);
     chart.subscribeCrosshairMove(drawSMCOverlay);
+    
+    // Отслеживаем взаимодействие пользователя (zoom/scroll)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      userInteractedRef.current = true;
+    });
 
     // Непрерывная перерисовка оверлея: уровни остаются привязаны к ценам при растяжении графика (вертикальный зум)
     let rafId = null;
@@ -632,20 +638,31 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     if (!chart) return;
 
     const timeScale = chart.timeScale();
-    const visibleRange = timeScale.getVisibleLogicalRange && timeScale.getVisibleLogicalRange();
+    
+    // Сохраняем текущий видимый диапазон ТОЛЬКО если пользователь взаимодействовал
+    let savedRange = null;
+    if (userInteractedRef.current) {
+      const currentRange = timeScale.getVisibleLogicalRange && timeScale.getVisibleLogicalRange();
+      if (currentRange && currentRange.from !== undefined && currentRange.to !== undefined) {
+        savedRange = { from: currentRange.from, to: currentRange.to };
+      }
+    }
 
     seriesRef.current.setData(history);
 
-    if (visibleRange && timeScale.setVisibleLogicalRange) {
-      const range = { ...visibleRange };
+    // Восстанавливаем диапазон после небольшой задержки
+    if (savedRange && timeScale.setVisibleLogicalRange) {
       setTimeout(() => {
         try {
-          if (chartRef.current) chartRef.current.timeScale().setVisibleLogicalRange(range);
-        } catch {
-          // восстановление диапазона после setData может не сработать при смене длины данных
+          if (chartRef.current) {
+            chartRef.current.timeScale().setVisibleLogicalRange(savedRange);
+          }
+        } catch (e) {
+          console.warn('Could not restore visible range:', e.message);
         }
-      }, 0);
+      }, 50); // Увеличил задержку для надёжности
     }
+    
     setTimeout(drawSMCOverlay, 100);
 
     if (analysis) {
@@ -724,7 +741,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         display: 'flex',
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: '10px'
+        gap: '10px',
+        pointerEvents: 'none' // НЕ блокируем crosshair
       }}>
         {/* Левая колонка: SMC переключатель + легенда */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -748,6 +766,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
             fontWeight: '600',
             fontFamily: 'Inter, sans-serif',
             cursor: 'pointer',
+            pointerEvents: 'auto', // Кнопка кликабельна
             transition: 'all 0.2s ease',
             backdropFilter: 'blur(10px)',
             boxShadow: smcVisible 
