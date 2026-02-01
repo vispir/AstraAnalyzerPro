@@ -623,25 +623,37 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   }, [activeMode, setLevels, setActiveMode]);
 
   useEffect(() => {
-    if (seriesRef.current && history && history.length > 0) {
-      seriesRef.current.setData(history);
-      setTimeout(drawSMCOverlay, 100);
-      
-      // Debug: логируем данные анализа
-      if (analysis) {
-        console.log('SMC Analysis received:', {
-          history_length: history.length,
-          order_blocks: analysis.order_blocks?.length || 0,
-          fvg: analysis.fvg?.length || 0,
-          all_internal_bos: analysis.all_internal_bos?.length || 0,
-          all_internal_choch: analysis.all_internal_choch?.length || 0,
-          all_swing_bos: analysis.all_swing_bos?.length || 0,
-          all_swing_choch: analysis.all_swing_choch?.length || 0,
-          eqh: analysis.eqh?.length || 0,
-          eql: analysis.eql?.length || 0,
-          sample_bos: analysis.all_internal_bos?.[0] || 'none'
-        });
+    if (!seriesRef.current || !history?.length) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const timeScale = chart.timeScale();
+    const visibleRange = timeScale.getVisibleLogicalRange && timeScale.getVisibleLogicalRange();
+
+    seriesRef.current.setData(history);
+
+    if (visibleRange && timeScale.setVisibleLogicalRange) {
+      try {
+        timeScale.setVisibleLogicalRange(visibleRange);
+      } catch {
+        // восстановление диапазона после setData может не сработать при смене длины данных
       }
+    }
+    setTimeout(drawSMCOverlay, 100);
+
+    if (analysis) {
+      console.log('SMC Analysis received:', {
+        history_length: history.length,
+        order_blocks: analysis.order_blocks?.length || 0,
+        fvg: analysis.fvg?.length || 0,
+        all_internal_bos: analysis.all_internal_bos?.length || 0,
+        all_internal_choch: analysis.all_internal_choch?.length || 0,
+        all_swing_bos: analysis.all_swing_bos?.length || 0,
+        all_swing_choch: analysis.all_swing_choch?.length || 0,
+        eqh: analysis.eqh?.length || 0,
+        eql: analysis.eql?.length || 0,
+        sample_bos: analysis.all_internal_bos?.[0] || 'none'
+      });
     }
   }, [history, drawSMCOverlay, analysis]);
 
