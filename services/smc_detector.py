@@ -1,28 +1,32 @@
 """
-SMC Detector v7.4 - Swing-Only Timeline (FINAL!)
-================================================
-КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.4:
-- SWING-ONLY TIMELINE: Unified trend строится ТОЛЬКО по swing пробоям!
-  * v7.3 ПРОБЛЕМА: internal + swing в timeline → internal откаты загрязняют тренд
-  * v7.4 РЕШЕНИЕ: только swing → чистый глобальный тренд
+SMC Detector v7.5 - Independent Internal/Swing Trends (PERFECT!)
+=================================================================
+ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ v7.5:
+- НЕЗАВИСИМЫЕ ТРЕНДЫ: Internal и Swing полностью независимы!
+  * Internal: использует ЛОКАЛЬНЫЙ тренд (без timeline)
+  * Swing: использует SWING-ONLY timeline (глобальный тренд)
+  * Никакого взаимного влияния!
   
-  Почему только swing:
-  - Internal (pivot 3/2) слишком чувствительный
-  - Internal откаты постоянно меняют timeline тренд
-  - Swing пробой после internal отката → видит BEARISH тренд → CHoCH вместо BOS ❌
-  - Swing (pivot 8/4) даёт стабильный глобальный тренд ✅
+  Почему это правильно:
+  - Internal (pivot 3/2) - микро-структура для точных входов
+  - Swing (pivot 8/4) - макро-структура для глобального тренда
+  - Internal откаты НЕ должны влиять на Swing классификацию
+  - Swing развороты НЕ должны влиять на Internal классификацию
   
   Результат на графике:
-  - Восходящее движение: CHoCH (разворот вверх) → BOS → BOS → BOS ✅
-  - Нисходящее движение: CHoCH (разворот вниз) → BOS → BOS → BOS ✅
-  - Internal откаты НЕ влияют на swing классификацию ✅
+  - Internal: свои BOS/CHoCH (микро-движения) ✅
+  - Swing: свои BOS/CHoCH (глобальный тренд) ✅
+  - Нет "загрязнения" между уровнями ✅
+  - Правильное чередование на каждом уровне ✅
 
-УЛУЧШЕНИЯ v7.3 (СОХРАНЕНЫ):
-- Trend Timeline: тренд как функция времени (правильно!)
-- Dedupe Pivot: каждый pivot один раз
+СОХРАНЕНО из v7.5:
+- Swing-Only Timeline для swing уровня
+- Dedupe Pivot (каждый pivot один раз)
 
-УЛУЧШЕНИЯ v7.2 (СОХРАНЕНЫ):
-- Dedupe механизм
+СОХРАНЕНО из v7.0-7.3:
+- Order Blocks lifecycle, FVG fill, зоны по swing
+- Trend before break logic
+- ATR фильтр шума
 
 УЛУЧШЕНИЯ v7.0 (СОХРАНЕНЫ):
 - Узкие зоны Premium/Discount на основе актуальных Swing High/Low (не 250 свечей!)
@@ -144,7 +148,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # ============================================================================
 
 class SMCDetector:
-    """SMC Detector v7.4 - Swing-Only Timeline (FINAL!)"""
+    """SMC Detector v7.5 - Independent Trends (PERFECT!)"""
     
     def __init__(self):
         self.analysis_count = 0
@@ -270,16 +274,16 @@ class SMCDetector:
         return pivot_highs, pivot_lows
     
     # ========================================================================
-    # UNIFIED TREND TIMELINE v7.4 - SWING ONLY (FINAL FIX)
+    # UNIFIED TREND TIMELINE v7.5 - SWING ONLY (FINAL FIX)
     # ========================================================================
     
     def _build_unified_trend_timeline(self, df: pd.DataFrame, atr: float = 0.0) -> Dict[int, int]:
         """
-        v7.4: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
+        v7.5: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
         
-        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.4:
+        КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.5:
         - v7.3 использовал internal + swing → internal загрязнял timeline
-        - v7.4 использует ТОЛЬКО swing → чистый глобальный тренд
+        - v7.5 использует ТОЛЬКО swing → чистый глобальный тренд
         
         Почему только swing:
         - Internal слишком чувствительный (pivot 3/2)
@@ -302,7 +306,7 @@ class SMCDetector:
         if len(df) < 15:
             return {}
         
-        # v7.4: Получаем ТОЛЬКО swing pivots (не internal!)
+        # v7.5: Получаем ТОЛЬКО swing pivots (не internal!)
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         
         highs = df['high'].values
@@ -567,14 +571,20 @@ class SMCDetector:
     
     def detect_market_structure(self, df: pd.DataFrame) -> Dict:
         """
-        Определение структуры рынка v7.4
+        Определение структуры рынка v7.5
         
-        v7.4 SWING-ONLY TIMELINE:
-        - Unified Trend строится ТОЛЬКО по swing пробоям (не internal!)
-        - Internal откаты НЕ влияют на swing классификацию
-        - Результат: чистый глобальный тренд, правильные BOS/CHoCH
+        v7.5 НЕЗАВИСИМЫЕ ТРЕНДЫ (ФИНАЛЬНОЕ РЕШЕНИЕ):
+        - Internal: локальный тренд (БЕЗ timeline) - микро-структура
+        - Swing: unified timeline (ТОЛЬКО swing) - макро-структура
+        - Полная независимость уровней!
         
-        v7.3: Trend Timeline (тренд на каждый бар) - СОХРАНЕНО
+        Результат:
+        - Internal BOS/CHoCH правильные (свой локальный тренд)
+        - Swing BOS/CHoCH правильные (глобальный swing тренд)
+        - Нет взаимного "загрязнения"
+        
+        v7.5: Swing-Only Timeline - СОХРАНЕНО для swing
+        v7.3: Trend Timeline - СОХРАНЕНО
         v7.2: Dedupe pivot - СОХРАНЕНО
         
         Возвращает:
@@ -602,21 +612,21 @@ class SMCDetector:
         atr = self._calculate_atr(df)
         
         # ================================================================
-        # v7.4: SWING-ONLY TREND TIMELINE - Тренд только по swing пробоям
+        # v7.5: SWING-ONLY TIMELINE - ТОЛЬКО для swing уровня!
         # ================================================================
-        trend_timeline = self._build_unified_trend_timeline(df, atr)
+        swing_timeline = self._build_unified_trend_timeline(df, atr)
         
         # Финальный тренд для логирования
-        final_trend = trend_timeline.get(len(df) - 1, NEUTRAL) if trend_timeline else NEUTRAL
-        trend_name = 'BULLISH' if final_trend == BULLISH else 'BEARISH' if final_trend == BEARISH else 'NEUTRAL'
-        logger.info(f"v7.4 Unified Trend Timeline (SWING ONLY): {len(trend_timeline)} bars | Final trend: {trend_name}")
+        final_swing_trend = swing_timeline.get(len(df) - 1, NEUTRAL) if swing_timeline else NEUTRAL
+        swing_trend_name = 'BULLISH' if final_swing_trend == BULLISH else 'BEARISH' if final_swing_trend == BEARISH else 'NEUTRAL'
+        logger.info(f"v7.5 Independent Trends: Swing Timeline={len(swing_timeline)} bars (trend: {swing_trend_name}) | Internal=LOCAL")
         
         # ================================================================
-        # INTERNAL STRUCTURE (чувствительная, для микро-движений)
+        # INTERNAL STRUCTURE - ЛОКАЛЬНЫЙ ТРЕНД (без timeline!)
         # ================================================================
         int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
         int_all_choch, int_all_bos, int_trend = self._detect_structure_history(
-            df, int_pivot_highs, int_pivot_lows, "internal", atr, trend_timeline
+            df, int_pivot_highs, int_pivot_lows, "internal", atr, None  # ← None = локальный тренд!
         )
         
         result['all_internal_choch'] = [self._structure_break_to_dict(sb) for sb in int_all_choch]
@@ -644,11 +654,11 @@ class SMCDetector:
             result['internal_pivot_low'] = int_pivot_lows[-1].price
         
         # ================================================================
-        # SWING STRUCTURE (основная структура)
+        # SWING STRUCTURE - UNIFIED TIMELINE (только swing пробои!)
         # ================================================================
         sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
         sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(
-            df, sw_pivot_highs, sw_pivot_lows, "swing", atr, trend_timeline
+            df, sw_pivot_highs, sw_pivot_lows, "swing", atr, swing_timeline  # ← swing_timeline
         )
         
         result['all_swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch]
@@ -676,16 +686,17 @@ class SMCDetector:
             result['swing_pivot_low'] = sw_pivot_lows[-1].price
         
         # ================================================================
-        # ЛОГИРОВАНИЕ v7.4
+        # ЛОГИРОВАНИЕ v7.5
         # ================================================================
         confirmed_count = (len(result['swing_bos_confirmed']) + len(result['swing_choch_confirmed']) +
                           len(result['internal_bos_confirmed']) + len(result['internal_choch_confirmed']))
         
         min_break = atr * MIN_BREAK_ATR_RATIO if atr > 0 else 0
-        logger.info(f"v7.4 Structure: ATR={atr:.2f}, min_break={min_break:.2f} | Swing-Only Timeline bars: {len(trend_timeline)}")
-        logger.info(f"v7.4 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
-        logger.info(f"v7.4 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
-        logger.info(f"v7.4 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
+        logger.info(f"v7.5 Structure: ATR={atr:.2f}, min_break={min_break:.2f}")
+        logger.info(f"v7.5 Independent Trends: Internal=LOCAL (own trend) | Swing=TIMELINE ({len(swing_timeline)} bars)")
+        logger.info(f"v7.5 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
+        logger.info(f"v7.5 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        logger.info(f"v7.5 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
         
         # Логируем последние события
         if sw_all_bos:
@@ -1559,7 +1570,7 @@ class SMCDetector:
             self.analysis_count += 1
             current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v7.4 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            logger.info(f"=== SMC Analysis v7.5 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
             
             # 1. Market Structure (v6.0 с confirmed флагами)
             market_structure = self.detect_market_structure(df)
@@ -1666,9 +1677,9 @@ class SMCDetector:
             active_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'active')
             mitigated_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'mitigated')
             
-            logger.info(f"SMC v7.4 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
+            logger.info(f"SMC v7.5 Result: OB={len(all_order_blocks)} (active={active_obs}, mitigated={mitigated_obs}, breakers={len(breaker_blocks)}) | "
                        f"FVG={len(fvg)} | Liq={len(liquidity)} | CONFIRMED={confirmed_total}")
-            logger.info(f"SMC v7.4 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
+            logger.info(f"SMC v7.5 Zone ({zones['range_source']}): {zones['current_zone']} ({zones['position_in_range_pct']:.1f}%) | "
                        f"Range: [{zones['range_low']:.2f} - {zones['range_high']:.2f}]")
             
             return sanitize_for_json(result)
