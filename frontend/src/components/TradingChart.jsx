@@ -132,9 +132,18 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillText('Equilibrium', chartRightEdge - 60, equilibriumY - 3);
       }
       
-      // Swing High/Low маркеры
+      // Swing High/Low маркеры (линии всегда; подпись — только если не заезжает на Premium/Discount)
       const swingHighY = series.priceToCoordinate(advancedZones.range_high);
       const swingLowY = series.priceToCoordinate(advancedZones.range_low);
+      const LABEL_OVERLAP_PX = 20; // порог по Y: не рисовать подпись Swing, если совпадает с зоной
+      const premMinY = premiumTopY != null && premiumBottomY != null ? Math.min(premiumTopY, premiumBottomY) : null;
+      const premMaxY = premiumTopY != null && premiumBottomY != null ? Math.max(premiumTopY, premiumBottomY) : null;
+      const discMinY = discountTopY != null && discountBottomY != null ? Math.min(discountTopY, discountBottomY) : null;
+      const discMaxY = discountTopY != null && discountBottomY != null ? Math.max(discountTopY, discountBottomY) : null;
+      const swingHighInPremium = swingHighY != null && premMinY != null && premMaxY != null &&
+        (swingHighY >= premMinY - LABEL_OVERLAP_PX && swingHighY <= premMaxY + LABEL_OVERLAP_PX);
+      const swingLowInDiscount = swingLowY != null && discMinY != null && discMaxY != null &&
+        (swingLowY >= discMinY - LABEL_OVERLAP_PX && swingLowY <= discMaxY + LABEL_OVERLAP_PX);
       
       if (swingHighY !== null) {
         ctx.setLineDash([2, 2]);
@@ -145,10 +154,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.lineTo(chartRightEdge, swingHighY);
         ctx.stroke();
         ctx.setLineDash([]);
-        
-        ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
-        ctx.font = '8px Inter, Arial';
-        ctx.fillText('Swing High', chartRightEdge - 55, swingHighY + 10);
+        if (!swingHighInPremium) {
+          ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
+          ctx.font = '8px Inter, Arial';
+          ctx.fillText('Swing High', chartRightEdge - 55, swingHighY + 10);
+        }
       }
       
       if (swingLowY !== null) {
@@ -160,10 +170,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.lineTo(chartRightEdge, swingLowY);
         ctx.stroke();
         ctx.setLineDash([]);
-        
-        ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
-        ctx.font = '8px Inter, Arial';
-        ctx.fillText('Swing Low', chartRightEdge - 55, swingLowY - 4);
+        if (!swingLowInDiscount) {
+          ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
+          ctx.font = '8px Inter, Arial';
+          ctx.fillText('Swing Low', chartRightEdge - 55, swingLowY - 4);
+        }
       }
     }
 
