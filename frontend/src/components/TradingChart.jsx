@@ -476,6 +476,14 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(drawSMCOverlay);
     chart.subscribeCrosshairMove(drawSMCOverlay);
+
+    // Непрерывная перерисовка оверлея: уровни остаются привязаны к ценам при растяжении графика (вертикальный зум)
+    let rafId = null;
+    const tick = () => {
+      drawSMCOverlay();
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
     
     // Обработчик для tooltip с данными свечи
     chart.subscribeCrosshairMove((param) => {
@@ -587,6 +595,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     window.addEventListener('resize', handleResize);
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       container.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
