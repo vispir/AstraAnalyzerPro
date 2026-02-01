@@ -1,7 +1,12 @@
 """
-Astra Watcher v6.0 - Confirmed Signals
-=======================================
-Критические изменения v6.0:
+Astra Watcher v7.4 - Enhanced Confirmed Signals
+================================================
+Критические улучшения v7.4:
+- Проверка confirmed=True в каждом сигнале (не просто len > 0)
+- Impulse/Reversal режимы требуют хотя бы internal confirmed
+- Защита от ложных пробоев (только wick, не body)
+
+Сохранено из v6.0:
 - Используем CONFIRMED сигналы (*_confirmed) для торговых решений
 - confirmed = пробой ТЕЛОМ свечи (close), не тенью
 - bars_ago <= 5 для торговых сигналов
@@ -260,7 +265,8 @@ def format_debug_report(status_data):
         'signal_sent': '✅', 'wait_decision': '⚖️',
         'impulse_override': '⚡', 'reversal_mode': '🔄',
         'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑',
-        'no_confirmed_signal': '⏳'  # v6.0: Нет уверенного пробоя
+        'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
+        'impulse_no_confirmation': '⚠️'  # v7.4: Impulse/Reversal без internal confirmed
     }
     
     status_texts = {
@@ -279,14 +285,15 @@ def format_debug_report(status_data):
         'reversal_mode': '🔄 REVERSAL MODE: Поиск разворота',
         'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT',
         'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM',
-        'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)'  # v6.0
+        'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
+        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed'  # v7.4
     }
     
     status = status_data.get('status', 'unknown')
     emoji = status_emoji.get(status, '❓')
     
     now_utc = datetime.now(timezone.utc)
-    msg = f"<b>{emoji} ASTRA WATCHER v5.2</b>\n"
+    msg = f"<b>{emoji} ASTRA WATCHER v7.4</b>\n"
     msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
     msg += "━" * 32 + "\n\n"
     
@@ -332,7 +339,7 @@ def format_debug_report(status_data):
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны v6.0:</b>\n"
+        msg += "<b>📊 SMC Паттерны v7.4:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
@@ -477,14 +484,19 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Astra Watcher v6.0 Confirmed Signals
+    Astra Watcher v7.4 Enhanced Confirmed Signals
     
-    Ключевые изменения v6.0:
+    Ключевые улучшения v7.4:
+    - Проверяем confirmed=True в каждом сигнале (защита от wick breaks)
+    - Impulse/Reversal требуют internal confirmed (не просто breakout)
+    - Двойная проверка: len(*_confirmed) > 0 AND confirmed=True
+    
+    Сохранено из v6.0:
     - Используем *_confirmed сигналы для торговых решений
     - confirmed = пробой ТЕЛОМ (close), не тенью
     - bars_ago <= 5 для уверенных сигналов
     """
-    logger.info("📡 [TRIGGER] Цикл анализа v6.0 запущен")
+    logger.info("📡 [TRIGGER] Цикл анализа v7.4 запущен")
     
     # ========================================================================
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
@@ -537,7 +549,7 @@ def run_analysis_cycle():
     # SMC АНАЛИЗ
     # ========================================================================
     
-    logger.info("🔬 Выполняем SMC анализ v6.0...")
+    logger.info("🔬 Выполняем SMC анализ v7.4...")
     analysis = smc_detector.analyze(candles)
     
     # Жёсткий фикс зон
@@ -610,12 +622,20 @@ def run_analysis_cycle():
     
     # v6.0: Для торговых решений используем ТОЛЬКО confirmed сигналы
     # confirmed = пробой ТЕЛОМ (close), не тенью + bars_ago <= 5
-    has_swing_bos_confirmed = len(analysis.get('swing_bos_confirmed', [])) > 0
-    has_swing_choch_confirmed = len(analysis.get('swing_choch_confirmed', [])) > 0
+    
+    # v7.4 FIX: Проверяем что сигналы действительно confirmed=True (не wick break!)
+    swing_bos_confirmed_list = analysis.get('swing_bos_confirmed', [])
+    swing_choch_confirmed_list = analysis.get('swing_choch_confirmed', [])
+    int_bos_confirmed_list = analysis.get('internal_bos_confirmed', [])
+    int_choch_confirmed_list = analysis.get('internal_choch_confirmed', [])
+    
+    # Фильтруем только РЕАЛЬНО confirmed (пробой телом)
+    has_swing_bos_confirmed = any(s.get('confirmed', False) for s in swing_bos_confirmed_list)
+    has_swing_choch_confirmed = any(s.get('confirmed', False) for s in swing_choch_confirmed_list)
     has_swing_break_confirmed = has_swing_bos_confirmed or has_swing_choch_confirmed
     
-    has_int_bos_confirmed = len(analysis.get('internal_bos_confirmed', [])) > 0
-    has_int_choch_confirmed = len(analysis.get('internal_choch_confirmed', [])) > 0
+    has_int_bos_confirmed = any(s.get('confirmed', False) for s in int_bos_confirmed_list)
+    has_int_choch_confirmed = any(s.get('confirmed', False) for s in int_choch_confirmed_list)
     has_internal_break_confirmed = has_int_bos_confirmed or has_int_choch_confirmed
     
     # Свежие сигналы (для визуализации и отладки, не для торговли)
@@ -632,8 +652,8 @@ def run_analysis_cycle():
     is_reversal_setup = False
     impulse_reasons = []
     
-    logger.info(f"v6.0 Signals: Swing BOS_confirmed={has_swing_bos_confirmed}, CHoCH_confirmed={has_swing_choch_confirmed} | "
-                f"Internal BOS_confirmed={has_int_bos_confirmed}, CHoCH_confirmed={has_int_choch_confirmed}")
+    logger.info(f"v7.4 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
+                f"Internal BOS={has_int_bos_confirmed}, CHoCH={has_int_choch_confirmed}")
     
     # ========================================================================
     # v5.2 IMPULSE OVERRIDE LOGIC
@@ -781,8 +801,8 @@ def run_analysis_cycle():
     # ========================================================================
     # LLM вызывается ТОЛЬКО если:
     # 1. Есть хотя бы один CONFIRMED BOS/CHoCH (пробой телом свечи)
-    # 2. ИЛИ активен impulse override (breakout/void_run/impulse)
-    # 3. ИЛИ есть reversal setup
+    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.4 fix!)
+    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.4 fix!)
     
     has_any_confirmed = (
         has_swing_bos_confirmed or 
@@ -793,13 +813,29 @@ def run_analysis_cycle():
     
     confirmed_count = smc_summary.get('confirmed_total', 0)
     
-    if not has_any_confirmed and not is_breakout_impulse and not is_reversal_setup:
+    # v7.4 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
+    # Это защищает от ложных пробоев (только wick, не body)
+    impulse_needs_confirmation = (is_breakout_impulse or is_reversal_setup) and not has_internal_break_confirmed
+    
+    if not has_any_confirmed and not (is_breakout_impulse or is_reversal_setup):
         status_data['status'] = 'no_confirmed_signal'
         status_data['reason'] = (
             f'⏳ Нет CONFIRMED сигналов (confirmed_total={confirmed_count}).\n'
             f'LLM не вызывается без уверенного пробоя (телом свечи).\n'
             f'Swing BOS_conf={has_swing_bos_confirmed}, CHoCH_conf={has_swing_choch_confirmed}\n'
             f'Internal BOS_conf={has_int_bos_confirmed}, CHoCH_conf={has_int_choch_confirmed}'
+        )
+        send_debug_notification(status_data)
+        return
+    
+    # v7.4 FIX: Если impulse/reversal но нет даже internal confirmed → SKIP
+    if impulse_needs_confirmation:
+        status_data['status'] = 'impulse_no_confirmation'
+        status_data['reason'] = (
+            f'⚠️ Impulse/Reversal режим, но нет CONFIRMED internal сигнала.\n'
+            f'Это может быть ложный пробой (только wick).\n'
+            f'Internal BOS_conf={has_int_bos_confirmed}, CHoCH_conf={has_int_choch_confirmed}\n'
+            f'Требуем хотя бы internal confirmed для безопасности.'
         )
         send_debug_notification(status_data)
         return
@@ -907,9 +943,9 @@ def run_analysis_cycle():
 
 
 def start_watcher():
-    logger.info("🛰 Astra Watcher v6.0 Confirmed Signals инициализирован")
+    logger.info("🛰 Astra Watcher v7.4 Enhanced Confirmed Signals инициализирован")
 
 
 if __name__ == "__main__":
-    logger.info("🧪 Ручной запуск анализа v6.0...")
+    logger.info("🧪 Ручной запуск анализа v7.4...")
     run_analysis_cycle()
