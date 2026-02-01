@@ -34,7 +34,6 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   const draggingRef = useRef(null);
   const levelsRef = useRef(levels);
   const userInteractedRef = useRef(false); // Флаг взаимодействия пользователя
-  const lastHistoryLengthRef = useRef(null); // Длина history при прошлом обновлении (для инкрементального update)
   
   // Состояние видимости SMC (сохраняем в localStorage)
   const [smcVisible, setSmcVisible] = useState(() => {
@@ -638,47 +637,32 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     const chart = chartRef.current;
     if (!chart) return;
 
-    const prevLen = lastHistoryLengthRef.current;
-    const currLen = history.length;
-    const lastBar = history[currLen - 1];
-
-    // Полная замена: первый показ, смена ТФ/объёма данных, или изменение длины не на 0/1
-    const needFullSet =
-      prevLen === null ||
-      currLen !== prevLen && currLen !== prevLen + 1;
-
-    if (needFullSet) {
-      seriesRef.current.setData(history);
-      lastHistoryLengthRef.current = currLen;
-
-      const timeScale = chart.timeScale();
-      let savedRange = null;
-      if (userInteractedRef.current && timeScale.getVisibleLogicalRange) {
-        const currentRange = timeScale.getVisibleLogicalRange();
-        if (currentRange && currentRange.from !== undefined && currentRange.to !== undefined) {
-          savedRange = { from: currentRange.from, to: currentRange.to };
-        }
+    const timeScale = chart.timeScale();
+    
+    // Сохраняем текущий видимый диапазон ТОЛЬКО если пользователь взаимодействовал
+    let savedRange = null;
+    if (userInteractedRef.current) {
+      const currentRange = timeScale.getVisibleLogicalRange && timeScale.getVisibleLogicalRange();
+      if (currentRange && currentRange.from !== undefined && currentRange.to !== undefined) {
+        savedRange = { from: currentRange.from, to: currentRange.to };
       }
-      if (savedRange && timeScale.setVisibleLogicalRange) {
-        setTimeout(() => {
-          try {
-            if (chartRef.current) chartRef.current.timeScale().setVisibleLogicalRange(savedRange);
-          } catch (e) {
-            console.warn('Could not restore visible range:', e.message);
-          }
-        }, 50);
-      }
-    } else {
-      // Тик 30 сек: обновилась только последняя свеча или добавилась одна — не дергаем экран
-      try {
-        seriesRef.current.update(lastBar);
-      } catch (err) {
-        console.warn('Chart update failed, falling back to setData:', err?.message);
-        seriesRef.current.setData(history);
-      }
-      lastHistoryLengthRef.current = currLen;
     }
 
+    seriesRef.current.setData(history);
+
+    // Восстанавливаем диапазон после небольшой задержки
+    if (savedRange && timeScale.setVisibleLogicalRange) {
+      setTimeout(() => {
+        try {
+          if (chartRef.current) {
+            chartRef.current.timeScale().setVisibleLogicalRange(savedRange);
+          }
+        } catch (e) {
+          console.warn('Could not restore visible range:', e.message);
+        }
+      }, 50); // Увеличил задержку для надёжности
+    }
+    
     setTimeout(drawSMCOverlay, 100);
 
     if (analysis) {
