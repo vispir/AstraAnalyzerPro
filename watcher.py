@@ -623,6 +623,7 @@ def run_analysis_cycle():
         'int_choch_confirmed': len(analysis.get('internal_choch_confirmed', [])),
         'confirmed_total': analysis.get('confirmed_signals_count', 0)
     }
+    confirmed_count = smc_summary.get('confirmed_total', 0)
     
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
     
@@ -877,8 +878,6 @@ def run_analysis_cycle():
         has_int_bos_confirmed or 
         has_int_choch_confirmed
     )
-    
-    confirmed_count = smc_summary.get('confirmed_total', 0)
     
     # v7.5 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
     # Это защищает от ложных пробоев (только wick, не body)
