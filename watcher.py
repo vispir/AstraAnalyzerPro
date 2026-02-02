@@ -290,7 +290,7 @@ def format_signal_message_with_verdict(ai_response, verdict):
     Форматирует сигнал с уже готовым verdict (для передачи low_confidence_override)
     """
     parsed_data = parse_llm_response(ai_response)
-    return _format_signal_internal(parsed_data, verdict)
+    return _format_signal_internal(parsed_data, verdict, ai_response)
 
 
 def format_signal_message(ai_response):
@@ -300,12 +300,13 @@ def format_signal_message(ai_response):
     """
     parsed_data = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_data)
-    return _format_signal_internal(parsed_data, verdict)
+    return _format_signal_internal(parsed_data, verdict, ai_response)
 
 
-def _format_signal_internal(parsed_data, verdict):
+def _format_signal_internal(parsed_data, verdict, ai_response=''):
     """
     Внутренняя функция форматирования сигнала.
+    ai_response — сырой ответ LLM для fallback при неудачном парсинге.
     """
     
     if verdict and verdict['action'] in ['BUY', 'SELL']:
@@ -433,7 +434,8 @@ def _format_signal_internal(parsed_data, verdict):
         return msg
     
     # Если не удалось распарсить — выводим как есть
-    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{escape_html(ai_response)}"
+    raw = ai_response if ai_response else (str(parsed_data) if parsed_data else 'Raw response unavailable')
+    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{escape_html(raw)}"
 
 
 def format_debug_report(status_data):
