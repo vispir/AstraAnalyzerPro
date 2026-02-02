@@ -1,7 +1,14 @@
 """
-SMC Detector v7.7 - Internal Confluence Filter (Complete!)
+SMC Detector v7.8 - Improved BOS/CHoCH Logic
 ===========================================================
-НОВОЕ v7.7 - INTERNAL CONFLUENCE (LuxAlgo-style):
+НОВОЕ v7.8 - УЛУЧШЕННАЯ ЛОГИКА BOS vs CHoCH:
+- Добавлен флаг is_initial для первого пробоя при NEUTRAL тренде
+- Чёткие комментарии для логики определения:
+  * CHoCH = пробой ПРОТИВ текущего тренда (смена направления)
+  * BOS = пробой В НАПРАВЛЕНИИ текущего тренда (продолжение)
+  * При NEUTRAL: первый пробой устанавливает тренд (BOS + is_initial=True)
+
+v7.7 - INTERNAL CONFLUENCE (LuxAlgo-style):
 - Опциональный фильтр для internal BOS/CHoCH по "характеру свечи"
   * Флаг: USE_INTERNAL_CONFLUENCE = False (по умолчанию выключен)
   * Логика:
@@ -114,6 +121,7 @@ class StructureBreak:
     bars_ago: int = 0
     break_by_wick: bool = False
     confirmed: bool = False  # v6.0: пробой телом (для TG бота)
+    is_initial: bool = False  # v7.8: первый пробой при NEUTRAL тренде
 
 
 # ============================================================================
@@ -148,7 +156,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # ============================================================================
 
 class SMCDetector:
-    """SMC Detector v7.7 - Internal Confluence + Accurate Zones"""
+    """SMC Detector v7.8 - Improved BOS/CHoCH Logic + Internal Confluence"""
     
     def __init__(self):
         self.analysis_count = 0
@@ -540,7 +548,12 @@ class SMCDetector:
                             # Fallback на локальный тренд
                             trend_before_break = current_trend
                         
+                        # v7.8: Улучшенная логика BOS vs CHoCH
+                        # CHoCH = пробой ПРОТИВ текущего тренда (смена направления)
+                        # BOS = пробой В НАПРАВЛЕНИИ текущего тренда (продолжение)
+                        # При NEUTRAL: первый пробой устанавливает тренд (BOS)
                         is_choch = (trend_before_break == BEARISH)
+                        is_initial = (trend_before_break == NEUTRAL)  # Первый пробой при неопределённом тренде
                         break_type = 'BULLISH_CHOCH' if is_choch else 'BULLISH_BOS'
                         
                         # v6.0: confirmed = пробой ТЕЛОМ свечи (close > pivot)
@@ -557,7 +570,8 @@ class SMCDetector:
                             is_choch=is_choch,
                             bars_ago=total_bars - 1 - bar_i,
                             break_by_wick=break_by_wick,
-                            confirmed=confirmed
+                            confirmed=confirmed,
+                            is_initial=is_initial
                         )
                         
                         if is_choch:
@@ -598,7 +612,12 @@ class SMCDetector:
                             # Fallback на локальный тренд
                             trend_before_break = current_trend
                         
+                        # v7.8: Улучшенная логика BOS vs CHoCH
+                        # CHoCH = пробой ПРОТИВ текущего тренда (смена направления)
+                        # BOS = пробой В НАПРАВЛЕНИИ текущего тренда (продолжение)
+                        # При NEUTRAL: первый пробой устанавливает тренд (BOS)
                         is_choch = (trend_before_break == BULLISH)
+                        is_initial = (trend_before_break == NEUTRAL)  # Первый пробой при неопределённом тренде
                         break_type = 'BEARISH_CHOCH' if is_choch else 'BEARISH_BOS'
                         
                         # v6.0: confirmed = пробой ТЕЛОМ свечи (close < pivot)
@@ -614,7 +633,8 @@ class SMCDetector:
                             is_choch=is_choch,
                             bars_ago=total_bars - 1 - bar_i,
                             break_by_wick=break_by_wick,
-                            confirmed=confirmed
+                            confirmed=confirmed,
+                            is_initial=is_initial
                         )
                         
                         if is_choch:
@@ -644,7 +664,8 @@ class SMCDetector:
             'is_choch': bool(sb.is_choch),
             'bars_ago': int(sb.bars_ago),
             'break_by_wick': bool(sb.break_by_wick),
-            'confirmed': bool(sb.confirmed)  # v6.0: для TG бота
+            'confirmed': bool(sb.confirmed),  # v6.0: для TG бота
+            'is_initial': bool(sb.is_initial)  # v7.8: первый пробой при NEUTRAL тренде
         }
     
     # ========================================================================

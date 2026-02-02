@@ -5,6 +5,7 @@ Telegram Bot Service
 import os
 import logging
 import telebot
+import html
 from telebot import types
 from datetime import datetime, timedelta, timezone
 
@@ -146,7 +147,7 @@ class TelegramService:
                 db_service.complete_auth_session(token, user_id)
                 
                 # Отправляем подтверждение
-                user_name = f"{first_name} {last_name}".strip()
+                user_name = html.escape(f"{first_name} {last_name}".strip())
                 self.bot.send_message(
                     message.chat.id,
                     f"<b>✅ Авторизация успешна!</b>\n\n"
@@ -492,9 +493,10 @@ class TelegramService:
             logger.error("❌ Бот не инициализирован")
             return False
         
+        safe_name = html.escape(str(user_name))
         message = (
             f"<b>🔔 Новый вход на сайт</b>\n\n"
-            f"Привет, <b>{user_name}</b>! 👋\n\n"
+            f"Привет, <b>{safe_name}</b>! 👋\n\n"
             f"Ты только что авторизовался на сайте <b>Astra Analyzer Pro</b>.\n\n"
             f"Подтверди, что это был ты:"
         )

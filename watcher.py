@@ -1,33 +1,34 @@
 """
-Astra Watcher v7.5.2 - Fixed LLM Response Parsing
-==================================================
-КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.5.2:
-- Исправлен парсинг ответа LLM через extract_llm_verdict
-- Поддержка ОБОИХ форматов:
-  * Новый: signal.action + trade_plan.final_entry/sl/tp
-  * Старый: ACTION + ENTRY/SL/TP
-- LLM больше НЕ говорит WAIT когда имеет в виду SELL/BUY
-- ENTRY/SL/TP теперь корректно отображаются в Telegram
+Astra Watcher v8.0 - SMC-Correct Zone Logic
+============================================
+КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v8.0:
+- ИСПРАВЛЕНА логика зон Premium/Discount!
+- Старая (НЕПРАВИЛЬНАЯ) логика:
+  * DOWNTREND + DISCOUNT = запрет SELL ❌
+  * UPTREND + PREMIUM = запрет BUY ❌
+- Новая (ПРАВИЛЬНАЯ SMC) логика:
+  * DOWNTREND + DISCOUNT = идеально для SELL (продолжение тренда) ✅
+  * UPTREND + PREMIUM = идеально для BUY (продолжение тренда) ✅
+  * DOWNTREND + PREMIUM = идеально для SELL (откат) ✅
+  * UPTREND + DISCOUNT = идеально для BUY (откат) ✅
 
-СОХРАНЕНО v7.5.2 - УМНЫЙ КУЛДАУН:
-- Адаптивный кулдаун: 30 минут после WAIT, 2 часа после BUY/SELL
-- OVERRIDE кулдауна при критических событиях:
-  * Swing BOS/CHoCH confirmed
-  * Множественное подтверждение (2+)
-  * Сильный импульс (>=80%) + internal confirmed
-  * Breakout + internal confirmed
+SMC SWEET SPOTS (идеальные сетапы):
+- UPTREND + DISCOUNT = BUY на откате 🎯
+- DOWNTREND + PREMIUM = SELL на откате 🎯
 
-v7.4 СОХРАНЕНО:
-- Проверка confirmed=True
-- Impulse/Reversal требуют internal confirmed
+COUNTER-TREND ЗАЩИТА:
+- Для торговли против тренда ТРЕБУЕТСЯ CHoCH (смена характера)
+- Без CHoCH → только торговля по тренду
 
-v6.0 СОХРАНЕНО:
-- CONFIRMED сигналы для торговых решений
-- confirmed = пробой ТЕЛОМ
+v7.5.2 СОХРАНЕНО:
+- Парсинг LLM через extract_llm_verdict
+- Умный кулдаун с override
+- Confirmed сигналы для торговли
 """
 
 import os
 import math
+import html
 from datetime import datetime, timedelta, timezone
 import logging
 import json
@@ -71,6 +72,13 @@ logger = logging.getLogger("AstraWatcher")
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================================
+
+def escape_html(text):
+    """Экранирует HTML спецсимволы для Telegram"""
+    if text is None:
+        return ""
+    return html.escape(str(text))
+
 
 def safe_float(value, default=0.0):
     try:
@@ -213,25 +221,59 @@ def extract_llm_verdict(parsed):
     """
     Извлекает action и trade данные из ответа LLM.
     Поддерживает оба формата: signal.action + trade_plan и старый ACTION/ENTRY/SL/TP.
+    
+    ВАЖНО: Если confidence < 50, сигнал автоматически преобразуется в WAIT!
     """
     if not parsed or not isinstance(parsed, dict):
-        return {'action': 'WAIT', 'entry': None, 'sl': None, 'tp': None, 'confidence': 0, 'reason': ''}
+        return {'action': 'WAIT', 'entry': None, 'sl': None, 'tp': None, 'confidence': 0, 
+                'reason': '', 'low_confidence_override': False, 'setup_grade': None, 'setup_type': None}
+    
     signal = parsed.get('signal') or {}
     trade_plan = parsed.get('trade_plan') or {}
     math_log = parsed.get('math_debug_log') or {}
+    
     action = (signal.get('action') or parsed.get('ACTION', 'WAIT')).upper()
     if action not in ('BUY', 'SELL', 'WAIT'):
         action = 'WAIT'
+    
     entry = trade_plan.get('final_entry') or math_log.get('entry_price') or parsed.get('ENTRY')
     sl = trade_plan.get('final_sl') or math_log.get('buffered_stop_loss') or parsed.get('SL')
     tp = trade_plan.get('final_tp') or math_log.get('target_price') or parsed.get('TP')
+    
     confidence = signal.get('confidence') or parsed.get('CONFIDENCE') or 0
     try:
         confidence = int(confidence) if confidence is not None else 0
     except (TypeError, ValueError):
         confidence = 0
+    
+    # Грейд и тип сетапа
+    setup_grade = signal.get('setup_grade', None)
+    setup_type = signal.get('setup_type', None)
+    
     reason = parsed.get('executive_summary') or parsed.get('REASON', '')
-    return {'action': action, 'entry': entry, 'sl': sl, 'tp': tp, 'confidence': confidence, 'reason': str(reason)[:500]}
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: если confidence < 50, преобразуем в WAIT
+    low_confidence_override = False
+    original_action = action
+    
+    if action in ('BUY', 'SELL') and confidence < 50:
+        logger.warning(f"⚠️ LOW CONFIDENCE OVERRIDE: {action} → WAIT (confidence={confidence}%)")
+        low_confidence_override = True
+        action = 'WAIT'
+        reason = f"[LOW CONFIDENCE: {confidence}%] Оригинальный сигнал: {original_action}. {reason}"
+    
+    return {
+        'action': action, 
+        'entry': entry, 
+        'sl': sl, 
+        'tp': tp, 
+        'confidence': confidence, 
+        'reason': str(reason)[:500],
+        'low_confidence_override': low_confidence_override,
+        'original_action': original_action if low_confidence_override else None,
+        'setup_grade': setup_grade,
+        'setup_type': setup_type
+    }
 
 
 def extract_executive_summary(ai_response):
@@ -243,26 +285,57 @@ def extract_executive_summary(ai_response):
     return cleaned[:197] + '...' if len(cleaned) > 200 else cleaned
 
 
+def format_signal_message_with_verdict(ai_response, verdict):
+    """
+    Форматирует сигнал с уже готовым verdict (для передачи low_confidence_override)
+    """
+    parsed_data = parse_llm_response(ai_response)
+    return _format_signal_internal(parsed_data, verdict)
+
+
 def format_signal_message(ai_response):
     """
     Форматирует сигнал от LLM в красивое сообщение для Telegram.
-    Поддерживает ОБА формата: signal.action + trade_plan И ACTION/ENTRY/SL/TP
+    Включает ВСЕ данные: signal, trade_plan, math_debug_log, wait_metadata
     """
     parsed_data = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_data)
+    return _format_signal_internal(parsed_data, verdict)
+
+
+def _format_signal_internal(parsed_data, verdict):
+    """
+    Внутренняя функция форматирования сигнала.
+    """
     
     if verdict and verdict['action'] in ['BUY', 'SELL']:
         action = verdict['action']
-        emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
+        emoji = "🟢 BUY (ПОКУПКА)" if action == "BUY" else "🔴 SELL (ПРОДАЖА)"
         
-        entry = verdict['entry'] or 'N/A'
-        sl = verdict['sl'] or 'N/A'
-        tp = verdict['tp'] or 'N/A'
+        entry = escape_html(verdict['entry'] or 'N/A')
+        sl = escape_html(verdict['sl'] or 'N/A')
+        tp = escape_html(verdict['tp'] or 'N/A')
         confidence = verdict['confidence'] or 0
-        reason = verdict['reason'] or 'SMC Confirmation'
+        reason = escape_html(verdict['reason'] or 'SMC Confirmation')
         
-        # Расчёт R:R если данные есть
+        # Получаем дополнительные данные
+        signal_data = parsed_data.get('signal', {}) if parsed_data else {}
+        trade_plan = parsed_data.get('trade_plan', {}) if parsed_data else {}
+        math_log = parsed_data.get('math_debug_log', {}) if parsed_data else {}
+        
+        setup_type = escape_html(signal_data.get('setup_type', 'N/A'))
+        setup_grade = escape_html(signal_data.get('setup_grade', 'N/A'))
+        tp_logic = escape_html(trade_plan.get('tp_logic', 'N/A'))
+        invalidation = escape_html(trade_plan.get('invalidation_condition', 'N/A'))
+        
+        # Эмодзи для грейда сетапа
+        grade_emoji = {
+            'A+': '🏆', 'A': '⭐', 'B+': '✅', 'B': '👍'
+        }.get(setup_grade, '📊')
+        
+        # Расчёт R:R
         rr_text = ""
+        risk_reward = 0
         try:
             entry_f = float(entry)
             sl_f = float(sl)
@@ -270,34 +343,97 @@ def format_signal_message(ai_response):
             risk = abs(entry_f - sl_f)
             reward = abs(tp_f - entry_f)
             if risk > 0:
-                rr = reward / risk
-                rr_text = f"\n📊 R:R = <b>1:{rr:.1f}</b>"
+                risk_reward = reward / risk
+                rr_text = f"<b>1:{risk_reward:.2f}</b>"
         except:
-            pass
+            rr_text = "N/A"
         
-        # Уверенность
-        conf_text = ""
-        if confidence:
-            conf_emoji = "🟢" if int(confidence) >= 70 else "🟡" if int(confidence) >= 50 else "🔴"
-            conf_text = f"\n{conf_emoji} Уверенность: <b>{confidence}%</b>"
+        # Уверенность с эмодзи
+        conf_emoji = "🟢" if int(confidence) >= 70 else "🟡" if int(confidence) >= 50 else "🔴"
+        
+        # Math Debug Log
+        math_section = ""
+        if math_log:
+            math_section = (
+                f"\n<b>📐 Math Debug:</b>\n"
+                f"├ Risk: <code>${math_log.get('risk_amount', 0):.2f}</code>\n"
+                f"├ Reward: <code>${math_log.get('reward_amount', 0):.2f}</code>\n"
+                f"└ Calculated R:R: <code>{math_log.get('calculated_rr', 0):.2f}</code>\n"
+            )
         
         msg = (
             f"<b>🚀 ASTRA SIGNAL: GOLD (XAU/USD)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Направление: <b>{emoji}</b>\n"
-            f"Вход: <code>{entry}</code>\n"
-            f"Стоп-лосс: <code>{sl}</code>\n"
-            f"Тейк-профит: <code>{tp}</code>"
-            f"{rr_text}"
-            f"{conf_text}\n\n"
-            f"<b>📝 Анализ:</b>\n{reason}\n\n"
+            f"<b>📊 СИГНАЛ:</b>\n"
+            f"├ Направление: <b>{emoji}</b>\n"
+            f"├ {grade_emoji} Грейд: <b>{setup_grade}</b>\n"
+            f"├ Сетап: <code>{setup_type}</code>\n"
+            f"└ {conf_emoji} Уверенность: <b>{confidence}%</b>\n\n"
+            f"<b>🎯 ТОРГОВЫЙ ПЛАН:</b>\n"
+            f"├ Вход: <code>${entry}</code>\n"
+            f"├ Стоп-лосс: <code>${sl}</code>\n"
+            f"├ Тейк-профит: <code>${tp}</code>\n"
+            f"├ R:R: {rr_text}\n"
+            f"├ TP логика: <code>{tp_logic}</code>\n"
+            f"└ Инвалидация: <i>{invalidation}</i>\n"
+            f"{math_section}\n"
+            f"<b>📝 SMC АНАЛИЗ:</b>\n{reason}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>⚠️ Не является финансовым советом</i>"
         )
         return msg
     
+    elif verdict and verdict['action'] == 'WAIT':
+        # Форматируем WAIT сигнал с полными данными
+        reason = escape_html(verdict['reason'] or 'Ожидание лучшей возможности')
+        confidence = verdict.get('confidence', 0)
+        low_conf_override = verdict.get('low_confidence_override', False)
+        original_action = escape_html(verdict.get('original_action'))
+        
+        wait_metadata = parsed_data.get('wait_metadata', {}) if parsed_data else {}
+        
+        trigger = escape_html(wait_metadata.get('trigger_condition', 'N/A'))
+        wait_time = escape_html(wait_metadata.get('estimated_wait_time', 'N/A'))
+        wait_code = escape_html(wait_metadata.get('wait_reason_code', 'N/A'))
+        potential_dir = escape_html(wait_metadata.get('potential_direction', 'UNCLEAR'))
+        
+        # Если был low confidence override, показываем оригинальный сигнал
+        if low_conf_override and original_action:
+            potential_dir = original_action
+            wait_code = "LOW_CONFIDENCE"
+            trigger = f"Уверенность должна быть >= 50% (сейчас {confidence}%)"
+        
+        # Эмодзи для направления
+        dir_emoji = "🟢" if potential_dir == "BUY" else "🔴" if potential_dir == "SELL" else "⚪"
+        
+        # Заголовок зависит от причины
+        header = "⚠️ ASTRA: LOW CONFIDENCE" if low_conf_override else "⏳ ASTRA SIGNAL: WAIT"
+        
+        # Confidence bar
+        conf_bar = ""
+        if confidence > 0:
+            filled = int(confidence / 10)
+            empty = 10 - filled
+            conf_bar = f"\n<b>📊 Уверенность:</b> {'█' * filled}{'░' * empty} <b>{confidence}%</b>\n"
+        
+        msg = (
+            f"<b>{header}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>📋 СТАТУС:</b> Ожидание\n"
+            f"<b>🏷 Код:</b> <code>{wait_code}</code>\n"
+            f"{conf_bar}\n"
+            f"<b>📝 ПРИЧИНА:</b>\n{reason}\n\n"
+            f"<b>🎯 УСЛОВИЯ ДЛЯ ВХОДА:</b>\n"
+            f"├ Триггер: <i>{trigger}</i>\n"
+            f"├ Ожидание: <code>{wait_time}</code>\n"
+            f"└ {dir_emoji} Потенциал: <b>{potential_dir}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⏱ Следующая проверка через 15 мин</i>"
+        )
+        return msg
+    
     # Если не удалось распарсить — выводим как есть
-    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{ai_response}"
+    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{escape_html(ai_response)}"
 
 
 def format_debug_report(status_data):
@@ -307,9 +443,10 @@ def format_debug_report(status_data):
         'weak_patterns': '📉', 'neutral_no_swing': '⚖️', 'cooldown': '⏳',
         'signal_sent': '✅', 'wait_decision': '⚖️',
         'impulse_override': '⚡', 'reversal_mode': '🔄',
-        'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑',
+        'smc_sweet_spot': '🎯',  # v8.0: Идеальный SMC сетап
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
-        'impulse_no_confirmation': '⚠️'  # v7.5.2: Impulse/Reversal без internal confirmed
+        'impulse_no_confirmation': '⚠️',  # v7.5.2: Impulse/Reversal без internal confirmed
+        'low_confidence_wait': '📉'  # v7.6: Низкая уверенность (< 50%)
     }
     
     status_texts = {
@@ -324,19 +461,19 @@ def format_debug_report(status_data):
         'cooldown': 'SKIP - Активен кулдаун',
         'signal_sent': '🎯 ТОРГОВЫЙ СИГНАЛ!',
         'wait_decision': 'LLM рекомендует WAIT',
-        'impulse_override': '⚡ IMPULSE MODE: Запрет снят!',
+        'impulse_override': '⚡ IMPULSE MODE: Сильный импульс',
         'reversal_mode': '🔄 REVERSAL MODE: Поиск разворота',
-        'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT',
-        'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM',
+        'smc_sweet_spot': '🎯 SMC SWEET SPOT: Идеальный сетап',  # v8.0
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
-        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed'  # v7.5.2
+        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.2
+        'low_confidence_wait': '📉 LOW CONFIDENCE: Сигнал отклонён (< 50%)'  # v7.6
     }
     
     status = status_data.get('status', 'unknown')
     emoji = status_emoji.get(status, '❓')
     
     now_utc = datetime.now(timezone.utc)
-    msg = f"<b>{emoji} ASTRA WATCHER v7.5.2</b>\n"
+    msg = f"<b>{emoji} ASTRA WATCHER v8.0</b>\n"
     msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
     msg += "━" * 32 + "\n\n"
     
@@ -344,7 +481,7 @@ def format_debug_report(status_data):
     if status_data.get('cooldown_override'):
         msg += "<b>🔓 COOLDOWN OVERRIDE:</b>\n"
         for reason in status_data.get('override_reasons', []):
-            msg += f"└ {reason}\n"
+            msg += f"└ {escape_html(reason)}\n"
         msg += "\n"
     
     msg += f"<b>📋 Решение:</b> {status_texts.get(status, 'Неизвестно')}\n\n"
@@ -355,17 +492,17 @@ def format_debug_report(status_data):
         
         if 'trend' in status_data:
             trend_emoji = "📈" if "UP" in status_data['trend'] else "📉" if "DOWN" in status_data['trend'] else "↔️"
-            msg += f"├ Swing Тренд: {trend_emoji} {status_data['trend']}\n"
+            msg += f"├ Swing Тренд: {trend_emoji} {escape_html(status_data['trend'])}\n"
         
         if 'internal_trend' in status_data:
             int_trend = status_data['internal_trend']
             int_emoji = "📈" if "UP" in int_trend else "📉" if "DOWN" in int_trend else "↔️"
-            msg += f"├ Internal Тренд: {int_emoji} {int_trend}\n"
+            msg += f"├ Internal Тренд: {int_emoji} {escape_html(int_trend)}\n"
         
         if 'zone' in status_data:
             zone = status_data['zone']
             zone_emoji = "🔴" if zone == "PREMIUM" else "🟢" if zone == "DISCOUNT" else "⚪"
-            msg += f"├ Зона: {zone_emoji} {zone}\n"
+            msg += f"├ Зона: {zone_emoji} {escape_html(zone)}\n"
         
         if 'position_in_range_pct' in status_data:
             msg += f"└ Позиция: {status_data['position_in_range_pct']:.1f}% диапазона\n\n"
@@ -379,17 +516,17 @@ def format_debug_report(status_data):
     if 'impulse_context' in status_data:
         ic = status_data['impulse_context']
         msg += "<b>⚡ Impulse Context v5.2:</b>\n"
-        msg += f"├ Режим: {ic.get('market_condition', 'N/A')}\n"
+        msg += f"├ Режим: {escape_html(ic.get('market_condition', 'N/A'))}\n"
         msg += f"├ Breakout: {'✅' if ic.get('has_breakout') else '❌'}\n"
         msg += f"├ Void Run: {'✅' if ic.get('is_void_run') else '❌'}\n"
         msg += f"├ Impulse: {'✅' if ic.get('is_impulse') else '❌'} ({ic.get('impulse_strength', 0)}%)\n"
         if ic.get('override_reason'):
-            msg += f"└ 🔓 {ic['override_reason']}\n"
+            msg += f"└ 🔓 {escape_html(ic['override_reason'])}\n"
         msg += "\n"
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны v7.5.2:</b>\n"
+        msg += "<b>📊 SMC Паттерны v8.0:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
@@ -399,20 +536,31 @@ def format_debug_report(status_data):
         msg += f"└ <b>CONFIRMED TOTAL: {smc.get('confirmed_total', 0)}</b>\n\n"
     
     if 'swing_signals' in status_data and status_data['swing_signals']:
-        msg += f"<b>🎯 Swing сигналы:</b> {', '.join(status_data['swing_signals'][:5])}\n"
+        msg += f"<b>🎯 Swing сигналы:</b> {escape_html(', '.join(status_data['swing_signals'][:5]))}\n"
     
     if 'internal_signals' in status_data and status_data['internal_signals']:
-        msg += f"<b>📍 Internal сигналы:</b> {', '.join(status_data['internal_signals'][:5])}\n\n"
+        msg += f"<b>📍 Internal сигналы:</b> {escape_html(', '.join(status_data['internal_signals'][:5]))}\n\n"
     
     if 'near_structures' in status_data:
-        msg += f"<b>🎯 Уровни рядом:</b>\n{status_data['near_structures']}\n\n"
+        msg += f"<b>🎯 Уровни рядом:</b>\n{escape_html(status_data['near_structures'])}\n\n"
     
     if 'reason' in status_data:
-        msg += f"<b>💡 Детали:</b>\n<i>{status_data['reason']}</i>\n\n"
+        msg += f"<b>💡 Детали:</b>\n<i>{escape_html(status_data['reason'])}</i>\n\n"
+    
+    # Confidence информация (если есть)
+    if 'confidence' in status_data:
+        conf = status_data['confidence']
+        conf_bar = '█' * int(conf / 10) + '░' * (10 - int(conf / 10))
+        conf_emoji = "🟢" if conf >= 70 else "🟡" if conf >= 50 else "🔴"
+        msg += f"<b>{conf_emoji} Confidence:</b> {conf_bar} <b>{conf}%</b>\n"
+        
+        if status_data.get('original_action'):
+            msg += f"<b>⚠️ Оригинальный сигнал:</b> {escape_html(status_data['original_action'])} → WAIT\n"
+        msg += "\n"
     
     if 'llm_verdict' in status_data:
         summary = extract_executive_summary(status_data['llm_verdict'])
-        msg += f"<b>🤖 Gemini резюме:</b>\n<i>{summary}</i>\n\n"
+        msg += f"<b>🤖 Gemini резюме:</b>\n<i>{escape_html(summary)}</i>\n\n"
     
     msg += "━" * 32 + "\n"
     msg += "<i>⏱ Следующая проверка через 15 минут</i>"
@@ -527,24 +675,19 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Astra Watcher v7.5.2 Smart Cooldown Override
+    Astra Watcher v8.0 SMC-Correct Zone Logic
     
-    НОВОЕ v7.5.2:
-    - Умный кулдаун с override при критических событиях
-    - Адаптивный кулдаун: 30 мин (WAIT), 2 часа (BUY/SELL)
-    - Override критерии: Swing confirmed, множественное подтверждение, сильный импульс
+    НОВОЕ v8.0:
+    - Исправлена логика зон Premium/Discount под SMC
+    - SMC Sweet Spots: UPTREND+DISCOUNT=BUY, DOWNTREND+PREMIUM=SELL
+    - Counter-trend защита: требуется CHoCH для торговли против тренда
     
     v7.5.2 СОХРАНЕНО:
+    - Умный кулдаун с override при критических событиях
     - Проверка confirmed=True в каждом сигнале
-    - Impulse/Reversal требуют internal confirmed
     - Защита от wick breaks
-    
-    v6.0 СОХРАНЕНО:
-    - CONFIRMED сигналы для торговли
-    - confirmed = пробой ТЕЛОМ (close)
-    - bars_ago <= 5 для свежести
     """
-    logger.info("📡 [TRIGGER] Цикл анализа v7.5.2 запущен")
+    logger.info("📡 [TRIGGER] Цикл анализа v8.0 запущен")
     
     # ========================================================================
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
@@ -597,7 +740,7 @@ def run_analysis_cycle():
     # SMC АНАЛИЗ
     # ========================================================================
     
-    logger.info("🔬 Выполняем SMC анализ v7.5.2...")
+    logger.info("🔬 Выполняем SMC анализ v8.0...")
     analysis = smc_detector.analyze(candles)
     
     # Жёсткий фикс зон
@@ -701,105 +844,121 @@ def run_analysis_cycle():
     is_reversal_setup = False
     impulse_reasons = []
     
-    logger.info(f"v7.5.2 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
+    logger.info(f"v8.0 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
                 f"Internal BOS={has_int_bos_confirmed}, CHoCH={has_int_choch_confirmed}")
     
     # ========================================================================
-    # v5.2 IMPULSE OVERRIDE LOGIC
+    # v8.0 SMC-CORRECT ZONE LOGIC (ИСПРАВЛЕНО!)
+    # ========================================================================
+    # 
+    # SMC правила:
+    # ✅ UPTREND + DISCOUNT = Идеально для BUY (покупка на откате)
+    # ✅ DOWNTREND + PREMIUM = Идеально для SELL (продажа на откате)  
+    # ✅ UPTREND + PREMIUM = BUY продолжение (при наличии BOS)
+    # ✅ DOWNTREND + DISCOUNT = SELL продолжение (при наличии BOS)
+    #
+    # ❌ COUNTER-TREND запреты:
+    # ❌ DOWNTREND + PREMIUM + нет CHoCH = запрет BUY (покупка против тренда)
+    # ❌ UPTREND + DISCOUNT + нет CHoCH = запрет SELL (продажа против тренда)
     # ========================================================================
     
-    # DOWNTREND + DISCOUNT
+    # DOWNTREND + DISCOUNT = ОТЛИЧНОЕ место для SELL (продолжение тренда)
     if swing_trend == "DOWNTREND" and current_zone == "DISCOUNT":
+        # Это SMC-идеальное условие для продажи!
+        impulse_reasons.append("✅ SMC: DOWNTREND + DISCOUNT = идеально для SELL")
         
-        # Проверяем условия для снятия запрета
+        # Дополнительные подтверждения
         if has_breakout:
             is_breakout_impulse = True
             impulse_reasons.append("📉 Пробой минимума 20 свечей")
         
-        if is_void_run:
-            is_breakout_impulse = True
-            impulse_reasons.append("🕳️ Void Run (у края бездны)")
-        
-        if is_impulse:
-            is_breakout_impulse = True
-            impulse_reasons.append(f"⚡ Импульс {impulse_strength}%")
-        
-        if market_condition == 'IMPULSE_TREND':
-            is_breakout_impulse = True
-            impulse_reasons.append("🔥 IMPULSE_TREND режим")
-        
-        # v6.0: Используем confirmed сигналы для торговых решений
         if has_swing_bos_confirmed:
             is_breakout_impulse = True
             impulse_reasons.append("💥 CONFIRMED Swing BOS (телом)")
         
-        # Экстремальный дискаунт: ищем разворот
+        if is_impulse:
+            impulse_reasons.append(f"⚡ Импульс {impulse_strength}%")
+        
+        # Экстремальный дискаунт: ищем разворот вверх
         if position_in_range_pct < EXTREME_DISCOUNT_THRESHOLD:
-            # v6.0: Ищем бычий CHoCH для разворота (confirmed)
             has_bullish_internal_choch = any(
                 'BULLISH' in ch.get('type', '') 
                 for ch in analysis.get('internal_choch_confirmed', [])
             )
-            
             if has_bullish_internal_choch:
                 is_reversal_setup = True
                 impulse_reasons.append("🔄 Бычий Internal CHoCH — потенциальный разворот")
-        
-        # Если нет оснований для снятия запрета — блокируем
-        if not is_breakout_impulse and not is_reversal_setup:
-            status_data['status'] = 'hard_filter_discount_downtrend'
-            status_data['reason'] = (
-                f'🛑 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ: Продажа в DISCOUNT ({position_in_range_pct:.1f}%) при DownTrend.\n'
-                f'Нет импульса/пробоя для снятия запрета.\n'
-                f'Breakout: {has_breakout}, VoidRun: {is_void_run}, Impulse: {is_impulse}'
-            )
-            send_debug_notification(status_data)
-            return
     
-    # UPTREND + PREMIUM
+    # UPTREND + PREMIUM = ОТЛИЧНОЕ место для BUY (продолжение тренда)
     if swing_trend == "UPTREND" and current_zone == "PREMIUM":
+        # Это SMC-идеальное условие для покупки при сильном тренде!
+        impulse_reasons.append("✅ SMC: UPTREND + PREMIUM = продолжение тренда вверх")
         
         if has_breakout:
             is_breakout_impulse = True
             impulse_reasons.append("📈 Пробой максимума 20 свечей")
         
-        if is_void_run:
-            is_breakout_impulse = True
-            impulse_reasons.append("🕳️ Void Run (у вершины)")
-        
-        if is_impulse:
-            is_breakout_impulse = True
-            impulse_reasons.append(f"⚡ Импульс {impulse_strength}%")
-        
-        if market_condition == 'IMPULSE_TREND':
-            is_breakout_impulse = True
-            impulse_reasons.append("🔥 IMPULSE_TREND режим")
-        
-        # v6.0: Используем confirmed сигналы
         if has_swing_bos_confirmed:
             is_breakout_impulse = True
             impulse_reasons.append("💥 CONFIRMED Swing BOS (телом)")
         
+        if is_impulse:
+            impulse_reasons.append(f"⚡ Импульс {impulse_strength}%")
+        
         # Экстремальный премиум: ищем разворот вниз
         if position_in_range_pct > EXTREME_PREMIUM_THRESHOLD:
-            # v6.0: Используем confirmed CHoCH
             has_bearish_internal_choch = any(
                 'BEARISH' in ch.get('type', '')
                 for ch in analysis.get('internal_choch_confirmed', [])
             )
-            
             if has_bearish_internal_choch:
                 is_reversal_setup = True
                 impulse_reasons.append("🔄 Медвежий Internal CHoCH — потенциальный разворот")
+    
+    # UPTREND + DISCOUNT = ИДЕАЛЬНОЕ место для BUY (откат в тренде)
+    if swing_trend == "UPTREND" and current_zone == "DISCOUNT":
+        impulse_reasons.append("🎯 SMC SWEET SPOT: UPTREND + DISCOUNT = BUY на откате!")
+        # Это классический SMC сетап - покупка на откате в восходящем тренде
+    
+    # DOWNTREND + PREMIUM = ИДЕАЛЬНОЕ место для SELL (откат в тренде)
+    if swing_trend == "DOWNTREND" and current_zone == "PREMIUM":
+        impulse_reasons.append("🎯 SMC SWEET SPOT: DOWNTREND + PREMIUM = SELL на откате!")
+        # Это классический SMC сетап - продажа на откате в нисходящем тренде
+    
+    # ========================================================================
+    # COUNTER-TREND FILTERS (запреты торговли против тренда без CHoCH)
+    # ========================================================================
+    
+    # DOWNTREND + PREMIUM без CHoCH = запрет BUY (покупка против тренда)
+    if swing_trend == "DOWNTREND" and current_zone == "PREMIUM":
+        # Проверяем есть ли бычий CHoCH (смена тренда)
+        has_bullish_choch = any(
+            'BULLISH' in ch.get('type', '')
+            for ch in analysis.get('swing_choch_confirmed', []) + analysis.get('internal_choch_confirmed', [])
+        )
         
-        if not is_breakout_impulse and not is_reversal_setup:
-            status_data['status'] = 'hard_filter_premium_uptrend'
-            status_data['reason'] = (
-                f'🛑 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ: Покупка в PREMIUM ({position_in_range_pct:.1f}%) при UpTrend.\n'
-                f'Нет импульса/пробоя для снятия запрета.'
-            )
-            send_debug_notification(status_data)
-            return
+        if has_bullish_choch:
+            is_reversal_setup = True
+            impulse_reasons.append("🔄 Бычий CHoCH найден — разворот возможен")
+        else:
+            # Нет CHoCH — это зона для SELL, не для BUY
+            # LLM сам определит что делать, но мы даём контекст
+            impulse_reasons.append("⚠️ DOWNTREND + PREMIUM: зона для SELL на откате (без CHoCH)")
+    
+    # UPTREND + DISCOUNT без CHoCH = запрет SELL (продажа против тренда)
+    if swing_trend == "UPTREND" and current_zone == "DISCOUNT":
+        # Проверяем есть ли медвежий CHoCH (смена тренда)
+        has_bearish_choch = any(
+            'BEARISH' in ch.get('type', '')
+            for ch in analysis.get('swing_choch_confirmed', []) + analysis.get('internal_choch_confirmed', [])
+        )
+        
+        if has_bearish_choch:
+            is_reversal_setup = True
+            impulse_reasons.append("🔄 Медвежий CHoCH найден — разворот возможен")
+        else:
+            # Нет CHoCH — это зона для BUY, не для SELL
+            impulse_reasons.append("⚠️ UPTREND + DISCOUNT: зона для BUY на откате (без CHoCH)")
     
     # ========================================================================
     # ОСТАЛЬНЫЕ ФИЛЬТРЫ
@@ -972,8 +1131,15 @@ def run_analysis_cycle():
     
     llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
+    low_conf_override = verdict.get('low_confidence_override', False)
+    original_action = verdict.get('original_action')
     
-    logger.info(f"📊 LLM Verdict: action={llm_action}, entry={verdict['entry']}, sl={verdict['sl']}, tp={verdict['tp']}, confidence={verdict['confidence']}%")
+    # Логируем с информацией о confidence override
+    if low_conf_override:
+        logger.warning(f"⚠️ LLM Verdict: {original_action} → WAIT (LOW CONFIDENCE: {verdict['confidence']}%)")
+        logger.warning(f"   Entry={verdict['entry']}, SL={verdict['sl']}, TP={verdict['tp']}")
+    else:
+        logger.info(f"📊 LLM Verdict: action={llm_action}, confidence={verdict['confidence']}%, entry={verdict['entry']}, sl={verdict['sl']}, tp={verdict['tp']}")
     
     # Подготовка данных для БД
     signal_data_db = prepare_signal_data_for_db(
@@ -1016,7 +1182,13 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
     
     else:
-        logger.info("⚖️ Gemini рекомендует WAIT")
+        # Определяем причину WAIT
+        if low_conf_override:
+            logger.warning(f"⚠️ LOW CONFIDENCE WAIT: оригинальный сигнал {original_action} отклонён (confidence={verdict['confidence']}%)")
+            wait_reason = f'⚠️ LOW CONFIDENCE ({verdict["confidence"]}%): {original_action} → WAIT'
+        else:
+            logger.info("⚖️ Gemini рекомендует WAIT")
+            wait_reason = f'{mode_text} Gemini рекомендует ожидание.'
         
         db_service.update_last_wait_time()
         
@@ -1026,16 +1198,28 @@ def run_analysis_cycle():
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения: {e}")
         
-        status_data['status'] = 'wait_decision'
-        status_data['reason'] = f'{mode_text} Gemini рекомендует ожидание.\n' + '\n'.join(impulse_reasons)
+        # Отправляем WAIT сигнал пользователям (с полными данными wait_metadata)
+        # Передаём verdict чтобы format_signal_message знал о low_confidence_override
+        user_ids = db_service.get_all_active_users()
+        if user_ids:
+            # Создаём модифицированный ответ с информацией о verdict
+            formatted_wait_msg = format_signal_message_with_verdict(ai_response, verdict)
+            telegram_service.broadcast_signal(user_ids, formatted_wait_msg)
+            logger.info(f"📤 WAIT сигнал отправлен {len(user_ids)} пользователям")
+        
+        status_data['status'] = 'wait_decision' if not low_conf_override else 'low_confidence_wait'
+        status_data['reason'] = wait_reason + '\n' + '\n'.join(impulse_reasons)
         status_data['llm_verdict'] = ai_response
+        status_data['confidence'] = verdict['confidence']
+        if low_conf_override:
+            status_data['original_action'] = original_action
         send_debug_notification(status_data)
 
 
 def start_watcher():
-    logger.info("🛰 Astra Watcher v7.5.2 Enhanced Confirmed Signals инициализирован")
+    logger.info("🛰 Astra Watcher v8.0 SMC-Correct Zone Logic инициализирован")
 
 
 if __name__ == "__main__":
-    logger.info("🧪 Ручной запуск анализа v7.5.2...")
+    logger.info("🧪 Ручной запуск анализа v8.0...")
     run_analysis_cycle()

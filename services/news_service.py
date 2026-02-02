@@ -2,6 +2,7 @@
 Сервис для работы с экономическими новостями через investpy и gnews
 """
 import logging
+import concurrent.futures
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
@@ -371,6 +372,24 @@ class NewsService:
             logger.error(f"Error fetching past news: {str(e)}")
             return []
     
+    def _fetch_keyword_news(self, keyword: str, days: int) -> List[Dict]:
+        """Helper to fetch news for a single keyword (thread-safe)"""
+        if not GNEWS_AVAILABLE:
+            return []
+            
+        try:
+            # Создаем локальный экземпляр для потокобезопасности
+            local_gnews = GNews(
+                language='en',
+                country='US',
+                period=f'{days}d',
+                max_results=5
+            )
+            return local_gnews.get_news(keyword)
+        except Exception as e:
+            logger.warning(f"Error fetching news for keyword '{keyword}': {str(e)}")
+            return []
+
     def get_geopolitical_news(self, days: int = 7) -> List[Dict]:
         """
         Получение геополитических новостей, влияющих на золото
@@ -393,7 +412,7 @@ class NewsService:
             return cached_data
         
         try:
-            logger.info(f"Fetching geopolitical news for last {days} days")
+            logger.info(f"Fetching geopolitical news for last {days} days (Timeout: 120s)")
             
             # Ключевые слова для золота
             keywords = [
@@ -409,49 +428,65 @@ class NewsService:
             all_news = []
             seen_descriptions = set()  # Для дедупликации по description
             
-            for keyword in keywords:
-                try:
-                    # Настраиваем период
-                    self.gnews.period = f'{days}d'
-                    self.gnews.max_results = 5  # По 5 новостей на ключевое слово
-                    
-                    articles = self.gnews.get_news(keyword)
-                    
-                    for article in articles:
-                        description = article.get('description', '').strip()
-                        
-                        # Пропускаем дубликаты и пустые
-                        if not description or description in seen_descriptions:
+            # Параллельный запуск с таймаутом
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(keywords), 10)) as executor:
+                future_to_keyword = {
+                    executor.submit(self._fetch_keyword_news, keyword, days): keyword 
+                    for keyword in keywords
+                }
+                
+                # Ждем выполнения с таймаутом 120 секунд
+                done, not_done = concurrent.futures.wait(
+                    future_to_keyword.keys(), 
+                    timeout=120, 
+                    return_when=concurrent.futures.ALL_COMPLETED
+                )
+                
+                if not_done:
+                    logger.warning(f"⚠️ Geopolitical news fetch timed out! {len(not_done)} keywords incomplete.")
+                
+                # Собираем результаты
+                for future in done:
+                    keyword = future_to_keyword[future]
+                    try:
+                        articles = future.result()
+                        if not articles:
                             continue
-                        
-                        seen_descriptions.add(description)
-                        
-                        # Парсим дату публикации
-                        published_date = article.get('published date', '')
-                        timestamp = None
-                        try:
-                            if published_date:
-                                # GNews возвращает формат "Mon, 20 Jan 2026 12:00:00 GMT"
-                                dt = datetime.strptime(published_date, "%a, %d %b %Y %H:%M:%S %Z")
-                                timestamp = int(dt.timestamp())
-                        except:
-                            pass
-                        
-                        # Оставляем только 4 основных поля
-                        all_news.append({
-                            'description': description,
-                            'keyword': keyword,
-                            'published_date': published_date,
-                            'publisher': article.get('publisher', {}).get('title', ''),
-                            'timestamp': timestamp
-                        })
-                    
-                except Exception as e:
-                    logger.warning(f"Error fetching news for keyword '{keyword}': {str(e)}")
-                    continue
+                            
+                        for article in articles:
+                            description = article.get('description', '').strip()
+                            
+                            # Пропускаем дубликаты и пустые
+                            if not description or description in seen_descriptions:
+                                continue
+                            
+                            seen_descriptions.add(description)
+                            
+                            # Парсим дату публикации
+                            published_date = article.get('published date', '')
+                            timestamp = None
+                            try:
+                                if published_date:
+                                    # GNews возвращает формат "Mon, 20 Jan 2026 12:00:00 GMT"
+                                    dt = datetime.strptime(published_date, "%a, %d %b %Y %H:%M:%S %Z")
+                                    timestamp = int(dt.timestamp())
+                            except:
+                                pass
+                            
+                            # Оставляем только 4 основных поля
+                            all_news.append({
+                                'description': description,
+                                'keyword': keyword,
+                                'published_date': published_date,
+                                'publisher': article.get('publisher', {}).get('title', ''),
+                                'timestamp': timestamp
+                            })
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing results for '{keyword}': {e}")
             
             # Сортируем по времени (свежие первыми)
-            all_news.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            all_news.sort(key=lambda x: x.get('timestamp', 0) or 0, reverse=True)
             
             # Ограничиваем до 20 новостей
             all_news = all_news[:20]
