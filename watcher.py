@@ -1,28 +1,29 @@
 """
-Astra Watcher v7.5 - Smart Cooldown Override
-=============================================
-НОВОЕ v7.5 - УМНЫЙ КУЛДАУН:
-- Адаптивный кулдаун: 30 минут после WAIT (было 60), 2 часа после BUY/SELL
+Astra Watcher v7.5.2 - Fixed LLM Response Parsing
+==================================================
+КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ v7.5.2:
+- Исправлен парсинг ответа LLM через extract_llm_verdict
+- Поддержка ОБОИХ форматов:
+  * Новый: signal.action + trade_plan.final_entry/sl/tp
+  * Старый: ACTION + ENTRY/SL/TP
+- LLM больше НЕ говорит WAIT когда имеет в виду SELL/BUY
+- ENTRY/SL/TP теперь корректно отображаются в Telegram
+
+СОХРАНЕНО v7.5.2 - УМНЫЙ КУЛДАУН:
+- Адаптивный кулдаун: 30 минут после WAIT, 2 часа после BUY/SELL
 - OVERRIDE кулдауна при критических событиях:
-  * Swing BOS/CHoCH confirmed (наивысший приоритет!)
-  * Множественное подтверждение (2+ confirmed)
+  * Swing BOS/CHoCH confirmed
+  * Множественное подтверждение (2+)
   * Сильный импульс (>=80%) + internal confirmed
   * Breakout + internal confirmed
-  
-Защита от упущенных входов:
-- Если кулдаун активен НО произошло критическое событие → LLM вызывается!
-- Логирование: "🔓 COOLDOWN OVERRIDE: Swing BOS confirmed"
-- Баланс: защита от спама + ловим важные сигналы
 
-v7.5 СОХРАНЕНО:
-- Проверка confirmed=True в каждом сигнале
+v7.4 СОХРАНЕНО:
+- Проверка confirmed=True
 - Impulse/Reversal требуют internal confirmed
-- Защита от ложных пробоев (только wick)
 
 v6.0 СОХРАНЕНО:
 - CONFIRMED сигналы для торговых решений
-- confirmed = пробой ТЕЛОМ, не тенью
-- bars_ago <= 5 для торговых сигналов
+- confirmed = пробой ТЕЛОМ
 """
 
 import os
@@ -34,17 +35,17 @@ from services.db_service import db_service
 from services.telegram_service import telegram_service
 
 # ============================================================================
-# КОНСТАНТЫ v7.5 SMART COOLDOWN
+# КОНСТАНТЫ v7.5.2 SMART COOLDOWN
 # ============================================================================
 
 SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
-WAIT_COOLDOWN_HOURS = 0.5       # v7.5: 30 минут после WAIT (было 1 час)
+WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
 FRESH_SIGNAL_BARS = 25
 LOOKBACK_BARS = 250
 EXTREME_DISCOUNT_THRESHOLD = 15.0
 EXTREME_PREMIUM_THRESHOLD = 85.0
 
-# v7.5: Smart Cooldown Override - критерии для игнорирования кулдауна
+# v7.5.2: Smart Cooldown Override - критерии для игнорирования кулдауна
 OVERRIDE_MIN_CONFIRMED = 2      # Минимум confirmed для override
 OVERRIDE_MIN_IMPULSE = 80       # Минимальная сила импульса для override (%)
 
@@ -208,6 +209,31 @@ def parse_llm_response(ai_response):
     return None
 
 
+def extract_llm_verdict(parsed):
+    """
+    Извлекает action и trade данные из ответа LLM.
+    Поддерживает оба формата: signal.action + trade_plan и старый ACTION/ENTRY/SL/TP.
+    """
+    if not parsed or not isinstance(parsed, dict):
+        return {'action': 'WAIT', 'entry': None, 'sl': None, 'tp': None, 'confidence': 0, 'reason': ''}
+    signal = parsed.get('signal') or {}
+    trade_plan = parsed.get('trade_plan') or {}
+    math_log = parsed.get('math_debug_log') or {}
+    action = (signal.get('action') or parsed.get('ACTION', 'WAIT')).upper()
+    if action not in ('BUY', 'SELL', 'WAIT'):
+        action = 'WAIT'
+    entry = trade_plan.get('final_entry') or math_log.get('entry_price') or parsed.get('ENTRY')
+    sl = trade_plan.get('final_sl') or math_log.get('buffered_stop_loss') or parsed.get('SL')
+    tp = trade_plan.get('final_tp') or math_log.get('target_price') or parsed.get('TP')
+    confidence = signal.get('confidence') or parsed.get('CONFIDENCE') or 0
+    try:
+        confidence = int(confidence) if confidence is not None else 0
+    except (TypeError, ValueError):
+        confidence = 0
+    reason = parsed.get('executive_summary') or parsed.get('REASON', '')
+    return {'action': action, 'entry': entry, 'sl': sl, 'tp': tp, 'confidence': confidence, 'reason': str(reason)[:500]}
+
+
 def extract_executive_summary(ai_response):
     parsed = parse_llm_response(ai_response)
     if parsed and 'executive_summary' in parsed:
@@ -219,20 +245,21 @@ def extract_executive_summary(ai_response):
 
 def format_signal_message(ai_response):
     """
-    Форматирует сигнал от LLM в красивое сообщение для Telegram
-    REASON выводится полностью без обрезки
+    Форматирует сигнал от LLM в красивое сообщение для Telegram.
+    Поддерживает ОБА формата: signal.action + trade_plan И ACTION/ENTRY/SL/TP
     """
     parsed_data = parse_llm_response(ai_response)
+    verdict = extract_llm_verdict(parsed_data)
     
-    if parsed_data:
-        action = parsed_data.get("ACTION", "N/A")
+    if verdict and verdict['action'] in ['BUY', 'SELL']:
+        action = verdict['action']
         emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
         
-        entry = parsed_data.get('ENTRY', 'N/A')
-        sl = parsed_data.get('SL', 'N/A')
-        tp = parsed_data.get('TP', 'N/A')
-        confidence = parsed_data.get('CONFIDENCE', 0)
-        reason = parsed_data.get('REASON', 'SMC Confirmation')
+        entry = verdict['entry'] or 'N/A'
+        sl = verdict['sl'] or 'N/A'
+        tp = verdict['tp'] or 'N/A'
+        confidence = verdict['confidence'] or 0
+        reason = verdict['reason'] or 'SMC Confirmation'
         
         # Расчёт R:R если данные есть
         rr_text = ""
@@ -282,7 +309,7 @@ def format_debug_report(status_data):
         'impulse_override': '⚡', 'reversal_mode': '🔄',
         'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑',
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
-        'impulse_no_confirmation': '⚠️'  # v7.5: Impulse/Reversal без internal confirmed
+        'impulse_no_confirmation': '⚠️'  # v7.5.2: Impulse/Reversal без internal confirmed
     }
     
     status_texts = {
@@ -302,18 +329,18 @@ def format_debug_report(status_data):
         'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT',
         'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM',
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
-        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed'  # v7.5
+        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed'  # v7.5.2
     }
     
     status = status_data.get('status', 'unknown')
     emoji = status_emoji.get(status, '❓')
     
     now_utc = datetime.now(timezone.utc)
-    msg = f"<b>{emoji} ASTRA WATCHER v7.5</b>\n"
+    msg = f"<b>{emoji} ASTRA WATCHER v7.5.2</b>\n"
     msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
     msg += "━" * 32 + "\n\n"
     
-    # v7.5: Показываем если был cooldown override
+    # v7.5.2: Показываем если был cooldown override
     if status_data.get('cooldown_override'):
         msg += "<b>🔓 COOLDOWN OVERRIDE:</b>\n"
         for reason in status_data.get('override_reasons', []):
@@ -362,7 +389,7 @@ def format_debug_report(status_data):
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны v7.5:</b>\n"
+        msg += "<b>📊 SMC Паттерны v7.5.2:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
@@ -465,21 +492,14 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
     patterns_list = list(all_patterns) if all_patterns else []
     signal_label = get_signal_label(llm_action)
     
-    entry_price = safe_float(current_price, 0.0)
-    stop_loss = 0.0
-    take_profit = 0.0
-    confidence = 0
-    reason = ""
+    # Извлекаем данные через универсальный парсер (поддержка ОБОИХ форматов)
+    verdict = extract_llm_verdict(parsed_llm)
     
-    if parsed_llm and isinstance(parsed_llm, dict):
-        entry_price = safe_float(parsed_llm.get('ENTRY', current_price), safe_float(current_price, 0.0))
-        stop_loss = safe_float(parsed_llm.get('SL', 0), 0.0)
-        take_profit = safe_float(parsed_llm.get('TP', 0), 0.0)
-        try:
-            confidence = int(parsed_llm.get('CONFIDENCE', 0) or 0)
-        except:
-            confidence = 0
-        reason = str(parsed_llm.get('REASON', ''))[:500]
+    entry_price = safe_float(verdict['entry'] or current_price, safe_float(current_price, 0.0))
+    stop_loss = safe_float(verdict['sl'], 0.0)
+    take_profit = safe_float(verdict['tp'], 0.0)
+    confidence = verdict['confidence'] or 0
+    reason = verdict['reason'] or ""
     
     return {
         'symbol': 'XAU_USD',
@@ -507,14 +527,14 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Astra Watcher v7.5 Smart Cooldown Override
+    Astra Watcher v7.5.2 Smart Cooldown Override
     
-    НОВОЕ v7.5:
+    НОВОЕ v7.5.2:
     - Умный кулдаун с override при критических событиях
     - Адаптивный кулдаун: 30 мин (WAIT), 2 часа (BUY/SELL)
     - Override критерии: Swing confirmed, множественное подтверждение, сильный импульс
     
-    v7.5 СОХРАНЕНО:
+    v7.5.2 СОХРАНЕНО:
     - Проверка confirmed=True в каждом сигнале
     - Impulse/Reversal требуют internal confirmed
     - Защита от wick breaks
@@ -524,7 +544,7 @@ def run_analysis_cycle():
     - confirmed = пробой ТЕЛОМ (close)
     - bars_ago <= 5 для свежести
     """
-    logger.info("📡 [TRIGGER] Цикл анализа v7.5 запущен")
+    logger.info("📡 [TRIGGER] Цикл анализа v7.5.2 запущен")
     
     # ========================================================================
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
@@ -577,7 +597,7 @@ def run_analysis_cycle():
     # SMC АНАЛИЗ
     # ========================================================================
     
-    logger.info("🔬 Выполняем SMC анализ v7.5...")
+    logger.info("🔬 Выполняем SMC анализ v7.5.2...")
     analysis = smc_detector.analyze(candles)
     
     # Жёсткий фикс зон
@@ -652,7 +672,7 @@ def run_analysis_cycle():
     # v6.0: Для торговых решений используем ТОЛЬКО confirmed сигналы
     # confirmed = пробой ТЕЛОМ (close), не тенью + bars_ago <= 5
     
-    # v7.5 FIX: Проверяем что сигналы действительно confirmed=True (не wick break!)
+    # v7.5.2 FIX: Проверяем что сигналы действительно confirmed=True (не wick break!)
     swing_bos_confirmed_list = analysis.get('swing_bos_confirmed', [])
     swing_choch_confirmed_list = analysis.get('swing_choch_confirmed', [])
     int_bos_confirmed_list = analysis.get('internal_bos_confirmed', [])
@@ -681,7 +701,7 @@ def run_analysis_cycle():
     is_reversal_setup = False
     impulse_reasons = []
     
-    logger.info(f"v7.5 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
+    logger.info(f"v7.5.2 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
                 f"Internal BOS={has_int_bos_confirmed}, CHoCH={has_int_choch_confirmed}")
     
     # ========================================================================
@@ -819,7 +839,7 @@ def run_analysis_cycle():
         return
     
     # ========================================================================
-    # v7.5: SMART COOLDOWN с OVERRIDE для критических событий
+    # v7.5.2: SMART COOLDOWN с OVERRIDE для критических событий
     # ========================================================================
     if not check_smart_cooldown():
         # Кулдаун активен, НО проверяем критические события для override
@@ -869,8 +889,8 @@ def run_analysis_cycle():
     # ========================================================================
     # LLM вызывается ТОЛЬКО если:
     # 1. Есть хотя бы один CONFIRMED BOS/CHoCH (пробой телом свечи)
-    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5 fix!)
-    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5 fix!)
+    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5.2 fix!)
+    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5.2 fix!)
     
     has_any_confirmed = (
         has_swing_bos_confirmed or 
@@ -879,7 +899,7 @@ def run_analysis_cycle():
         has_int_choch_confirmed
     )
     
-    # v7.5 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
+    # v7.5.2 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
     # Это защищает от ложных пробоев (только wick, не body)
     impulse_needs_confirmation = (is_breakout_impulse or is_reversal_setup) and not has_internal_break_confirmed
     
@@ -894,7 +914,7 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # v7.5 FIX: Если impulse/reversal но нет даже internal confirmed → SKIP
+    # v7.5.2 FIX: Если impulse/reversal но нет даже internal confirmed → SKIP
     if impulse_needs_confirmation:
         status_data['status'] = 'impulse_no_confirmation'
         status_data['reason'] = (
@@ -946,10 +966,14 @@ def run_analysis_cycle():
     # Вызов Gemini
     ai_response = llm_service.get_signal_verdict(analysis)
     
-    # Парсим ответ
+    # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
-    llm_action = parsed_llm.get('ACTION', 'WAIT') if parsed_llm else 'WAIT'
+    verdict = extract_llm_verdict(parsed_llm)
+    
+    llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
+    
+    logger.info(f"📊 LLM Verdict: action={llm_action}, entry={verdict['entry']}, sl={verdict['sl']}, tp={verdict['tp']}, confidence={verdict['confidence']}%")
     
     # Подготовка данных для БД
     signal_data_db = prepare_signal_data_for_db(
@@ -1009,9 +1033,9 @@ def run_analysis_cycle():
 
 
 def start_watcher():
-    logger.info("🛰 Astra Watcher v7.5 Enhanced Confirmed Signals инициализирован")
+    logger.info("🛰 Astra Watcher v7.5.2 Enhanced Confirmed Signals инициализирован")
 
 
 if __name__ == "__main__":
-    logger.info("🧪 Ручной запуск анализа v7.5...")
+    logger.info("🧪 Ручной запуск анализа v7.5.2...")
     run_analysis_cycle()
