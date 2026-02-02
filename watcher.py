@@ -1,25 +1,23 @@
 """
-Astra Watcher v7.5.1.1 - Smart Cooldown + API Rate Limiter
-=========================================================
-НОВОЕ v7.5.1.1 - ЗАЩИТА ОТ ПРЕВЫШЕНИЯ ЛИМИТОВ:
-- Счётчик вызовов LLM (100 requests/day безопасный лимит)
-- Автоматическая блокировка при достижении лимита
-- Предупреждение при 80% лимита
-- Статистика в Telegram при превышении
-- Автоматический сброс счётчика в 00:00 UTC
-
-v7.5.1 СОХРАНЕНО - УМНЫЙ КУЛДАУН:
-- Адаптивный кулдаун: 30 минут после WAIT, 2 часа после BUY/SELL
+Astra Watcher v7.5 - Smart Cooldown Override
+=============================================
+НОВОЕ v7.5 - УМНЫЙ КУЛДАУН:
+- Адаптивный кулдаун: 30 минут после WAIT (было 60), 2 часа после BUY/SELL
 - OVERRIDE кулдауна при критических событиях:
   * Swing BOS/CHoCH confirmed (наивысший приоритет!)
   * Множественное подтверждение (2+ confirmed)
   * Сильный импульс (>=80%) + internal confirmed
   * Breakout + internal confirmed
+  
+Защита от упущенных входов:
+- Если кулдаун активен НО произошло критическое событие → LLM вызывается!
+- Логирование: "🔓 COOLDOWN OVERRIDE: Swing BOS confirmed"
+- Баланс: защита от спама + ловим важные сигналы
 
-v7.4 СОХРАНЕНО:
+v7.5 СОХРАНЕНО:
 - Проверка confirmed=True в каждом сигнале
 - Impulse/Reversal требуют internal confirmed
-- Защита от ложных пробоев
+- Защита от ложных пробоев (только wick)
 
 v6.0 СОХРАНЕНО:
 - CONFIRMED сигналы для торговых решений
@@ -34,20 +32,19 @@ import logging
 import json
 from services.db_service import db_service
 from services.telegram_service import telegram_service
-from services import llm_rate_limiter  # v7.5.1.1: Защита от превышения лимитов
 
 # ============================================================================
-# КОНСТАНТЫ v7.5.1 SMART COOLDOWN
+# КОНСТАНТЫ v7.5 SMART COOLDOWN
 # ============================================================================
 
 SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
-WAIT_COOLDOWN_HOURS = 0.5       # v7.5.1: 30 минут после WAIT (было 1 час)
+WAIT_COOLDOWN_HOURS = 0.5       # v7.5: 30 минут после WAIT (было 1 час)
 FRESH_SIGNAL_BARS = 25
 LOOKBACK_BARS = 250
 EXTREME_DISCOUNT_THRESHOLD = 15.0
 EXTREME_PREMIUM_THRESHOLD = 85.0
 
-# v7.5.1: Smart Cooldown Override - критерии для игнорирования кулдауна
+# v7.5: Smart Cooldown Override - критерии для игнорирования кулдауна
 OVERRIDE_MIN_CONFIRMED = 2      # Минимум confirmed для override
 OVERRIDE_MIN_IMPULSE = 80       # Минимальная сила импульса для override (%)
 
@@ -285,8 +282,7 @@ def format_debug_report(status_data):
         'impulse_override': '⚡', 'reversal_mode': '🔄',
         'hard_filter_discount_downtrend': '🛑', 'hard_filter_premium_uptrend': '🛑',
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
-        'impulse_no_confirmation': '⚠️',  # v7.5.1: Impulse/Reversal без internal confirmed
-        'api_limit_reached': '🚨'  # v7.5.1.1: Превышен лимит API
+        'impulse_no_confirmation': '⚠️'  # v7.5: Impulse/Reversal без internal confirmed
     }
     
     status_texts = {
@@ -306,21 +302,18 @@ def format_debug_report(status_data):
         'hard_filter_discount_downtrend': '🛑 ЗАПРЕТ: Продажа в DISCOUNT',
         'hard_filter_premium_uptrend': '🛑 ЗАПРЕТ: Покупка в PREMIUM',
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
-        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.1
-        'api_limit_reached': '⛔ ЛИМИТ API - Watcher остановлен до завтра'  # v7.5.1
+        'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed'  # v7.5
     }
-    
-    status = status_data.get('status', 'unknown')
     
     status = status_data.get('status', 'unknown')
     emoji = status_emoji.get(status, '❓')
     
     now_utc = datetime.now(timezone.utc)
-    msg = f"<b>{emoji} ASTRA WATCHER v7.5.1</b>\n"
+    msg = f"<b>{emoji} ASTRA WATCHER v7.5</b>\n"
     msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
     msg += "━" * 32 + "\n\n"
     
-    # v7.5.1: Показываем если был cooldown override
+    # v7.5: Показываем если был cooldown override
     if status_data.get('cooldown_override'):
         msg += "<b>🔓 COOLDOWN OVERRIDE:</b>\n"
         for reason in status_data.get('override_reasons', []):
@@ -328,18 +321,6 @@ def format_debug_report(status_data):
         msg += "\n"
     
     msg += f"<b>📋 Решение:</b> {status_texts.get(status, 'Неизвестно')}\n\n"
-    
-    # v7.5.1.1: Показываем информацию о лимите API
-    if status == 'api_limit_reached':
-        llm_count = status_data.get('llm_count', 0)
-        llm_limit = status_data.get('llm_limit', 100)
-        msg += f"<b>🚨 ПРЕВЫШЕН ЛИМИТ API:</b>\n"
-        msg += f"├ Вызовов сегодня: <code>{llm_count}/{llm_limit}</code>\n"
-        msg += f"├ Использовано: <code>{(llm_count/llm_limit)*100:.1f}%</code>\n"
-        msg += f"└ Сброс: <code>00:00 UTC</code>\n\n"
-        msg += f"<i>⏰ Watcher автоматически возобновится завтра</i>\n"
-        msg += "━" * 32 + "\n"
-        return msg  # Возвращаем только информацию о лимите
     
     if status_data.get('price', 0) > 0:
         msg += "<b>💹 Рыночные данные:</b>\n"
@@ -381,7 +362,7 @@ def format_debug_report(status_data):
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны v7.5.1:</b>\n"
+        msg += "<b>📊 SMC Паттерны v7.5:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
@@ -526,14 +507,14 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
 
 def run_analysis_cycle():
     """
-    Astra Watcher v7.5.1 Smart Cooldown Override
+    Astra Watcher v7.5 Smart Cooldown Override
     
-    НОВОЕ v7.5.1:
+    НОВОЕ v7.5:
     - Умный кулдаун с override при критических событиях
     - Адаптивный кулдаун: 30 мин (WAIT), 2 часа (BUY/SELL)
     - Override критерии: Swing confirmed, множественное подтверждение, сильный импульс
     
-    v7.5.1 СОХРАНЕНО:
+    v7.5 СОХРАНЕНО:
     - Проверка confirmed=True в каждом сигнале
     - Impulse/Reversal требуют internal confirmed
     - Защита от wick breaks
@@ -543,7 +524,7 @@ def run_analysis_cycle():
     - confirmed = пробой ТЕЛОМ (close)
     - bars_ago <= 5 для свежести
     """
-    logger.info("📡 [TRIGGER] Цикл анализа v7.5.1 запущен")
+    logger.info("📡 [TRIGGER] Цикл анализа v7.5 запущен")
     
     # ========================================================================
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
@@ -596,7 +577,7 @@ def run_analysis_cycle():
     # SMC АНАЛИЗ
     # ========================================================================
     
-    logger.info("🔬 Выполняем SMC анализ v7.5.1...")
+    logger.info("🔬 Выполняем SMC анализ v7.5...")
     analysis = smc_detector.analyze(candles)
     
     # Жёсткий фикс зон
@@ -642,7 +623,6 @@ def run_analysis_cycle():
         'int_choch_confirmed': len(analysis.get('internal_choch_confirmed', [])),
         'confirmed_total': analysis.get('confirmed_signals_count', 0)
     }
-    confirmed_count = smc_summary.get('confirmed_total', 0)
     
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
     
@@ -671,7 +651,7 @@ def run_analysis_cycle():
     # v6.0: Для торговых решений используем ТОЛЬКО confirmed сигналы
     # confirmed = пробой ТЕЛОМ (close), не тенью + bars_ago <= 5
     
-    # v7.5.1 FIX: Проверяем что сигналы действительно confirmed=True (не wick break!)
+    # v7.5 FIX: Проверяем что сигналы действительно confirmed=True (не wick break!)
     swing_bos_confirmed_list = analysis.get('swing_bos_confirmed', [])
     swing_choch_confirmed_list = analysis.get('swing_choch_confirmed', [])
     int_bos_confirmed_list = analysis.get('internal_bos_confirmed', [])
@@ -700,7 +680,7 @@ def run_analysis_cycle():
     is_reversal_setup = False
     impulse_reasons = []
     
-    logger.info(f"v7.5.1 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
+    logger.info(f"v7.5 Confirmed Signals (REAL confirmed=True): Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed} | "
                 f"Internal BOS={has_int_bos_confirmed}, CHoCH={has_int_choch_confirmed}")
     
     # ========================================================================
@@ -838,7 +818,7 @@ def run_analysis_cycle():
         return
     
     # ========================================================================
-    # v7.5.1: SMART COOLDOWN с OVERRIDE для критических событий
+    # v7.5: SMART COOLDOWN с OVERRIDE для критических событий
     # ========================================================================
     if not check_smart_cooldown():
         # Кулдаун активен, НО проверяем критические события для override
@@ -888,8 +868,8 @@ def run_analysis_cycle():
     # ========================================================================
     # LLM вызывается ТОЛЬКО если:
     # 1. Есть хотя бы один CONFIRMED BOS/CHoCH (пробой телом свечи)
-    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5.1 fix!)
-    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5.1 fix!)
+    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5 fix!)
+    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5 fix!)
     
     has_any_confirmed = (
         has_swing_bos_confirmed or 
@@ -898,7 +878,9 @@ def run_analysis_cycle():
         has_int_choch_confirmed
     )
     
-    # v7.5.1 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
+    confirmed_count = smc_summary.get('confirmed_total', 0)
+    
+    # v7.5 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
     # Это защищает от ложных пробоев (только wick, не body)
     impulse_needs_confirmation = (is_breakout_impulse or is_reversal_setup) and not has_internal_break_confirmed
     
@@ -913,7 +895,7 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # v7.5.1 FIX: Если impulse/reversal но нет даже internal confirmed → SKIP
+    # v7.5 FIX: Если impulse/reversal но нет даже internal confirmed → SKIP
     if impulse_needs_confirmation:
         status_data['status'] = 'impulse_no_confirmation'
         status_data['reason'] = (
@@ -962,34 +944,8 @@ def run_analysis_cycle():
         logger.info(f"   ⚡ Причины: {', '.join(impulse_reasons)}")
     logger.info("=" * 60)
     
-    # ========================================================================
-    # v7.5.1.1: ПРОВЕРКА API ЛИМИТА ПЕРЕД ВЫЗОВОМ LLM
-    # ========================================================================
-    can_request, limit_reason, current_count, limit = llm_rate_limiter.can_make_request()
-    
-    if not can_request:
-        logger.error(f"🚨 API LIMIT REACHED: {limit_reason}")
-        status_data['status'] = 'api_limit_reached'
-        status_data['reason'] = limit_reason
-        status_data['llm_count'] = current_count
-        status_data['llm_limit'] = limit
-        send_debug_notification(status_data)
-        return
-    
-    # Логируем использование API
-    if current_count >= limit * 0.8:  # Предупреждение при 80%
-        logger.warning(f"⚠️ API Usage: {current_count}/{limit} ({(current_count/limit)*100:.1f}%)")
-    else:
-        logger.info(f"📊 API Usage: {current_count}/{limit} requests today")
-    
     # Вызов Gemini
     ai_response = llm_service.get_signal_verdict(analysis)
-    
-    # ========================================================================
-    # v7.5.1.1: ЗАПИСЫВАЕМ УСПЕШНЫЙ ЗАПРОС К LLM
-    # ========================================================================
-    new_count = llm_rate_limiter.record_request()
-    logger.info(f"✅ LLM request successful. Total today: {new_count}")
     
     # Парсим ответ
     parsed_llm = parse_llm_response(ai_response)
@@ -1054,9 +1010,9 @@ def run_analysis_cycle():
 
 
 def start_watcher():
-    logger.info("🛰 Astra Watcher v7.5.1 Enhanced Confirmed Signals инициализирован")
+    logger.info("🛰 Astra Watcher v7.5 Enhanced Confirmed Signals инициализирован")
 
 
 if __name__ == "__main__":
-    logger.info("🧪 Ручной запуск анализа v7.5.1...")
+    logger.info("🧪 Ручной запуск анализа v7.5...")
     run_analysis_cycle()
