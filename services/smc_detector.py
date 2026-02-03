@@ -818,20 +818,15 @@ class SMCDetector:
         return result
     
     # ========================================================================
-    # РАСЧЁТ ЗОН PREMIUM/DISCOUNT v7.0 (SWING-BASED)
+    # РАСЧЁТ ЗОН PREMIUM/DISCOUNT v8.0 (СИНХРОН С TG БОТОМ)
     # ========================================================================
     
-    def calculate_zones(self, df: pd.DataFrame, swing_high: float = 0, swing_low: float = 0) -> Dict:
+    def calculate_zones(self, df: pd.DataFrame, swing_high: float = 0, swing_low: float = 0, zone_lookback: int = 0) -> Dict:
         """
-        Расчёт зон Premium/Discount v7.0
+        Расчёт зон Premium/Discount v8.0 — в точности как в watcher (TG бот).
         
-        УЛУЧШЕНИЯ:
-        - Использует актуальные Swing High/Low вместо 250 свечей
-        - Более узкие и точные зоны
-        - Fallback на последние 50 свечей если swing не найден
-        
-        ВАЖНО: Формат для фронтенда AIPanel.jsx:
-        analysis.advanced.key_levels.Current_Zone
+        zone_lookback: если > 0, диапазон по последним N барам (для синхрона с TG 250 баров).
+        Иначе по всем свечам в df. Пороги 33.3% / 66.6%.
         """
         try:
             if len(df) < 10:
@@ -839,21 +834,16 @@ class SMCDetector:
             
             current_close = float(df['close'].iloc[-1])
             
-            # ================================================================
-            # v7.0: Используем Swing High/Low если переданы
-            # Это даёт более точный и узкий диапазон
-            # ================================================================
-            if swing_high > 0 and swing_low > 0 and swing_high > swing_low:
-                h_max = swing_high
-                l_min = swing_low
-                range_source = 'SWING_POINTS'
+            # Диапазон: по zone_lookback барам (синхрон с TG) или по всем свечам
+            if zone_lookback > 0 and len(df) >= zone_lookback:
+                zone_df = df.tail(zone_lookback)
+                h_max = float(zone_df['high'].max())
+                l_min = float(zone_df['low'].min())
+                range_source = 'LOOKBACK_250'
             else:
-                # Fallback: используем последние 50 свечей (не 250!)
-                lookback = min(50, len(df))
-                recent_df = df.tail(lookback)
-                h_max = float(recent_df['high'].max())
-                l_min = float(recent_df['low'].min())
-                range_source = 'LOOKBACK_50'
+                h_max = float(df['high'].max())
+                l_min = float(df['low'].min())
+                range_source = 'FULL_RANGE'
             
             # Защита от деления на ноль
             if h_max == l_min:
@@ -901,7 +891,7 @@ class SMCDetector:
                 'position_in_range_pct': float(round(pos_pct, 2))
             }
             
-            logger.info(f"v7.0 Zones ({range_source}): {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}] (size: {range_size:.2f})")
+            logger.info(f"v8.0 Zones ({range_source}): {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}] (sync with TG bot)")
             
             return zones
             
@@ -1658,9 +1648,11 @@ class SMCDetector:
     # ГЛАВНЫЙ МЕТОД АНАЛИЗА
     # ========================================================================
     
-    def analyze(self, df) -> Dict:
+    def analyze(self, df, zone_lookback: int = 0) -> Dict:
         """
         Полный SMC анализ v7.0 Professional
+        
+        zone_lookback: если 250, зоны считаются по последним 250 барам (синхрон с TG).
         
         Улучшения v7.0:
         - Узкие зоны Premium/Discount на основе Swing Points
@@ -1709,10 +1701,10 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. Зоны Premium/Discount v7.0 (используем swing points для узких зон)
+            # 6. Зоны Premium/Discount v8.0 (zone_lookback=250 для синхрона с TG на графике)
             swing_high = market_structure.get('swing_pivot_high', 0)
             swing_low = market_structure.get('swing_pivot_low', 0)
-            zones = self.calculate_zones(df, swing_high, swing_low)
+            zones = self.calculate_zones(df, swing_high, swing_low, zone_lookback=zone_lookback)
             
             # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)

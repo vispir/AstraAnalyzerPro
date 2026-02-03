@@ -101,8 +101,8 @@ def get_candles():
             return jsonify(result), 500
 
         if "candles" in result:
-            # Добавляем анализ структур
-            result["analysis"] = calculator.get_market_analysis(result["candles"])
+            # Добавляем анализ структур (зоны по 250 барам — синхрон с TG)
+            result["analysis"] = calculator.get_market_analysis(result["candles"], zone_lookback=250)
             # Обрезаем свечи до того количества, которое просил юзер в limit
             if limit:
                 result["candles"] = result["candles"][-limit:]
