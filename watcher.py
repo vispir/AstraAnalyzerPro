@@ -1218,18 +1218,54 @@ def run_analysis_cycle():
     logger.info("=" * 60)
     
     # ========================================================================
-    # v8.3: Передаем analysis напрямую в LLM (только M15)
+    # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
     # ========================================================================
-    logger.info("📊 Подготавливаем данные M15 для LLM...")
+    logger.info("📊 Подготавливаем оптимизированные данные M15 для LLM...")
     
-    # Добавляем свечи к analysis для LLM
+    # Создаем легкую версию analysis без массивов all_* (они только для визуализации)
+    analysis_light = {
+        # Основные данные
+        'order_blocks': analysis.get('order_blocks', []),
+        'breaker_blocks': analysis.get('breaker_blocks', []),
+        'fvg': analysis.get('fvg', []),
+        'liquidity': analysis.get('liquidity', []),
+        'trend': analysis.get('trend', 'NEUTRAL'),
+        'zones': analysis.get('zones', {}),
+        
+        # Только свежие BOS/CHoCH (не все для визуализации)
+        'choch': analysis.get('choch', []),
+        'bos': analysis.get('bos', []),
+        'internal_choch': analysis.get('internal_choch', []),
+        'internal_bos': analysis.get('internal_bos', []),
+        'swing_choch': analysis.get('swing_choch', []),
+        'swing_bos': analysis.get('swing_bos', []),
+        
+        # CONFIRMED сигналы
+        'choch_confirmed': analysis.get('choch_confirmed', []),
+        'bos_confirmed': analysis.get('bos_confirmed', []),
+        'internal_choch_confirmed': analysis.get('internal_choch_confirmed', []),
+        'internal_bos_confirmed': analysis.get('internal_bos_confirmed', []),
+        
+        # Advanced данные (key_levels и т.д.)
+        'advanced': analysis.get('advanced', {}),
+        
+        # Импульс контекст
+        'impulse': analysis.get('impulse', {}),
+    }
+    
+    # Добавляем свечи
     if 'error' not in data and data.get('candles'):
         m15_candles = data.get('candles', [])[-50:]  # Последние 50 для LLM
-        analysis['candles'] = m15_candles
+        analysis_light['candles'] = m15_candles
         logger.info(f"✓ M15 данные подготовлены: {len(m15_candles)} свечей")
     
-    # Вызов Gemini с analysis
-    ai_response = llm_service.get_signal_verdict(analysis)
+    # Логируем размер payload
+    import json
+    payload_size = len(json.dumps(analysis_light, ensure_ascii=False))
+    logger.info(f"📦 Размер payload для LLM: {payload_size:,} символов ({payload_size/1024:.1f} KB)")
+    
+    # Вызов Gemini с оптимизированным analysis
+    ai_response = llm_service.get_signal_verdict(analysis_light)
     
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
