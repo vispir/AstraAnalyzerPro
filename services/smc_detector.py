@@ -1870,7 +1870,9 @@ class SMCDetector:
             # 6. Зоны Premium/Discount v8.1 — хаи/лои ИЗ структуры (как LuxAlgo)
             sw_high = market_structure.get('swing_pivot_high', 0)
             sw_low = market_structure.get('swing_pivot_low', 0)
+            logger.info(f"🔍 calculate_zones: sw_high={sw_high:.2f}, sw_low={sw_low:.2f}, zone_lookback={zone_lookback}")
             zones = self.calculate_zones(df, swing_high=sw_high, swing_low=sw_low, zone_lookback=zone_lookback)
+            logger.info(f"🔍 calculate_zones result: range_high={zones.get('range_high', 0):.2f}, range_low={zones.get('range_low', 0):.2f}, range_source={zones.get('range_source', 'NONE')}")
             
             # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)

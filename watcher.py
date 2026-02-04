@@ -761,6 +761,17 @@ def run_analysis_cycle():
     # Получаем текущую цену для валидации диапазона
     current_price = safe_float(candles[-1].get('close', 0), 0.0)
     
+    # ДИАГНОСТИКА: Логируем, что пришло из детектора
+    if zones:
+        logger.info(f"🔍 ДАННЫЕ ИЗ ДЕТЕКТОРА: zones.range_high={zones.get('range_high', 0):.2f}, zones.range_low={zones.get('range_low', 0):.2f}, zones.range_source={zones.get('range_source', 'NONE')}")
+    else:
+        logger.warning(f"⚠️ zones пустой или отсутствует в advanced!")
+    
+    # Также проверяем swing_pivot_high/low напрямую из market_structure
+    market_structure = analysis.get('swing_pivot_high', 0), analysis.get('swing_pivot_low', 0)
+    if market_structure[0] > 0 or market_structure[1] > 0:
+        logger.info(f"🔍 MARKET_STRUCTURE: swing_pivot_high={market_structure[0]:.2f}, swing_pivot_low={market_structure[1]:.2f}")
+    
     # Приоритет: zones -> key_levels -> fallback на calculate_forced_zones
     zone_source = 'FALLBACK'  # По умолчанию
     zones_valid = False
@@ -769,10 +780,15 @@ def run_analysis_cycle():
         global_high = zones.get('range_high', 0.0)
         global_low = zones.get('range_low', 0.0)
         range_size = global_high - global_low
+        range_source_detector = zones.get('range_source', 'UNKNOWN')
         
         # ВАЖНО: Проверяем валидность диапазона
         # Если диапазон слишком узкий (< 0.5% от цены) или цена выходит за пределы, используем fallback
         min_valid_range = current_price * 0.005  # Минимум 0.5% от цены
+        
+        # Детальное логирование для диагностики
+        logger.debug(f"🔍 Проверка диапазона из детектора: source={range_source_detector}, range=[{global_low:.2f} - {global_high:.2f}], size={range_size:.2f}, price={current_price:.2f}")
+        logger.debug(f"🔍 Валидация: min_valid={min_valid_range:.2f}, size_ok={range_size >= min_valid_range}, price_in_range={global_low <= current_price <= global_high}")
         
         if range_size >= min_valid_range and global_low <= current_price <= global_high:
             # Диапазон валидный - используем данные из нового детектора
@@ -780,12 +796,19 @@ def run_analysis_cycle():
             # ВАЖНО: Пересчитываем position_in_range_pct на основе текущей цены и валидированного диапазона
             # Это гарантирует правильность, даже если детектор вернул некорректное значение
             position_in_range_pct = ((current_price - global_low) / range_size) * 100
-            zone_source = zones.get('range_source', 'SWING_STRUCTURE')
+            zone_source = range_source_detector
             zones_valid = True
             logger.info(f"✅ Используем зоны из нового детектора ({zone_source}): [{global_low:.2f} - {global_high:.2f}], price={current_price:.2f}, pos={position_in_range_pct:.1f}%")
         else:
             # Диапазон невалидный - используем fallback
-            logger.warning(f"⚠️ Диапазон из детектора невалидный (size={range_size:.2f}, price={current_price:.2f} вне [{global_low:.2f}-{global_high:.2f}]), используем fallback")
+            reason = []
+            if range_size < min_valid_range:
+                reason.append(f"слишком узкий ({range_size:.2f} < {min_valid_range:.2f})")
+            if current_price < global_low:
+                reason.append(f"цена ниже диапазона ({current_price:.2f} < {global_low:.2f})")
+            if current_price > global_high:
+                reason.append(f"цена выше диапазона ({current_price:.2f} > {global_high:.2f})")
+            logger.warning(f"⚠️ Диапазон из детектора невалидный ({', '.join(reason)}), используем fallback")
     
     if not zones_valid:
         # Пробуем fallback на key_levels
