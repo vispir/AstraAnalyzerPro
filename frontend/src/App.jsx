@@ -84,7 +84,7 @@ function App() {
     const loadData = async () => {
       try {
         const res = await axios.get(`${API_BASE}/market/candles`, { 
-          params: { tf, source, limit: 300 },
+          params: { tf, source, limit: tf === 'M15' ? 600 : 300 },
           signal: controller.signal
         });
 

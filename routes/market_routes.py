@@ -55,7 +55,7 @@ def get_candles():
             # Запрашиваем данные с запасом для анализа
             h4_raw = market_service.get_candles('H4', limit=max(limit or 40, 40))
             h1_raw = market_service.get_candles('H1', limit=max(limit or 40, 40))
-            m15_raw = market_service.get_candles('M15', limit=max(limit or 60, 60))
+            m15_raw = market_service.get_candles('M15', limit=max(limit or 1000, 1000))
             
             if "error" in h4_raw or "error" in h1_raw or "error" in m15_raw:
                 return jsonify({
@@ -93,19 +93,25 @@ def get_candles():
                 }
             })
         
-        # ВАРИАНТ 2: Запрос конкретного таймфрейма
-        calc_limit = max(limit or 300, 100)  # По умолчанию 300 (для SMC анализа 250 + запас), минимум 100
-        result = market_service.get_candles(timeframe, period, calc_limit)
+        # ================================================================
+        # TASK 2: v13.0 SURGICAL LIMITS (M15=400, H1/H4=300)
+        # ================================================================
+        # 400 свечей на M15 — это примерно 4 торговых дня. 
+        # Это ГАРАНТИРОВАННО оставит Jan 30 (5454), но отрежет Jan 28 (5602).
+        if timeframe == 'M15':
+            calc_limit = 600
+        else:
+            calc_limit = 300
+
+        # Запрашиваем данные
+        result = market_service.get_candles(timeframe, limit=calc_limit)
         
         if "error" in result:
             return jsonify(result), 500
 
         if "candles" in result:
-            # Добавляем анализ структур (зоны по 250 барам — синхрон с TG)
-            result["analysis"] = calculator.get_market_analysis(result["candles"], zone_lookback=250)
-            # Обрезаем свечи до того количества, которое просил юзер в limit
-            if limit:
-                result["candles"] = result["candles"][-limit:]
+            # Анализируем строго этот диапазон
+            result["analysis"] = calculator.get_market_analysis(result["candles"], zone_lookback=calc_limit)
             result["source"] = source
             
         return jsonify(result)

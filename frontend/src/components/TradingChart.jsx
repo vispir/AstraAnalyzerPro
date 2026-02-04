@@ -31,6 +31,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   const seriesRef = useRef(null);
   const canvasRef = useRef(null);
   const linesRef = useRef({ entry: null, sl: null, tp: null });
+  const smcPriceLinesRef = useRef({ rangeHigh: null, rangeLow: null, equilibrium: null });
   const draggingRef = useRef(null);
   const levelsRef = useRef(levels);
   const userInteractedRef = useRef(false); // Флаг взаимодействия пользователя
@@ -61,11 +62,28 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     const series = seriesRef.current;
     const timeScale = chart.timeScale();
 
+    // TASK 3.1: Safety check - clear and return if data is missing
+    if (!history || !history.length || !analysis) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
     // Очищаем canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Если SMC выключен или нет данных анализа - не рисуем
-    if (!smcVisible || !analysis) return;
+    // Если SMC выключен - не рисуем
+    if (!smcVisible) return;
+
+    // Проверяем, что серия имеет данные (пробуем получить координату для последней свечи)
+    // Если серия еще не готова, priceToCoordinate вернет null
+    try {
+      const lastCandle = history[history.length - 1];
+      if (!lastCandle || !lastCandle.close) return;
+      const testCoord = series.priceToCoordinate(lastCandle.close);
+      if (testCoord === null || testCoord === undefined) return; // Серия еще не готова
+    } catch {
+      return; // Серия не готова или произошла ошибка
+    }
 
     // Получаем видимый диапазон
     const visibleRange = timeScale.getVisibleLogicalRange();
@@ -82,21 +100,29 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     // ============================================================
     const advancedZones = analysis.advanced?.zones;
     if (advancedZones && advancedZones.range_high > 0 && advancedZones.range_low > 0) {
-      const premiumTop = advancedZones.premium?.top || advancedZones.range_high;
-      const premiumBottom = advancedZones.premium?.bottom || 0;
-      const discountTop = advancedZones.discount?.top || 0;
-      const discountBottom = advancedZones.discount?.bottom || advancedZones.range_low;
-      const equilibriumPrice = advancedZones.equilibrium?.price || (premiumBottom + discountTop) / 2;
+      // Используем значения из zones, если они есть, иначе fallback к range
+      const premiumTop = advancedZones.premium?.top ?? advancedZones.range_high;
+      const premiumBottom = advancedZones.premium?.bottom ?? (advancedZones.range_high * 0.95); // 95% от high как fallback
+      const discountTop = advancedZones.discount?.top ?? (advancedZones.range_low * 1.05); // 5% от low как fallback
+      const discountBottom = advancedZones.discount?.bottom ?? advancedZones.range_low;
       
-      // Конвертируем цены в Y координаты
+      // Equilibrium зона (диапазон между Premium и Discount)
+      const equilibriumTop = advancedZones.equilibrium?.top;
+      const equilibriumBottom = advancedZones.equilibrium?.bottom;
+      
+      // Конвертируем цены в Y координаты и проверяем валидность
       const premiumTopY = series.priceToCoordinate(premiumTop);
       const premiumBottomY = series.priceToCoordinate(premiumBottom);
       const discountTopY = series.priceToCoordinate(discountTop);
       const discountBottomY = series.priceToCoordinate(discountBottom);
-      const equilibriumY = series.priceToCoordinate(equilibriumPrice);
+      const equilibriumTopY = equilibriumTop ? series.priceToCoordinate(equilibriumTop) : null;
+      const equilibriumBottomY = equilibriumBottom ? series.priceToCoordinate(equilibriumBottom) : null;
+      
+      // Проверяем, что координаты валидны (не null и в пределах canvas)
+      const isValidCoord = (y) => y !== null && y !== undefined && y >= 0 && y <= canvas.height;
       
       // PREMIUM ZONE (красноватая сверху)
-      if (premiumTopY !== null && premiumBottomY !== null) {
+      if (isValidCoord(premiumTopY) && isValidCoord(premiumBottomY)) {
         const premHeight = Math.abs(premiumBottomY - premiumTopY);
         ctx.fillStyle = 'rgba(239, 83, 80, 0.06)';
         ctx.fillRect(0, Math.min(premiumTopY, premiumBottomY), chartRightEdge, premHeight);
@@ -104,6 +130,17 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
         ctx.font = '9px Inter, Arial';
         ctx.fillText('Premium', chartRightEdge - 50, Math.min(premiumTopY, premiumBottomY) + 12);
+      }
+      
+      // EQUILIBRIUM ZONE (фиолетовая, посередине между Premium и Discount)
+      if (equilibriumTop && equilibriumBottom && isValidCoord(equilibriumTopY) && isValidCoord(equilibriumBottomY)) {
+        const eqHeight = Math.abs(equilibriumBottomY - equilibriumTopY);
+        ctx.fillStyle = 'rgba(156, 39, 176, 0.08)';
+        ctx.fillRect(0, Math.min(equilibriumTopY, equilibriumBottomY), chartRightEdge, eqHeight);
+        
+        ctx.fillStyle = 'rgba(156, 39, 176, 0.5)';
+        ctx.font = '9px Inter, Arial';
+        ctx.fillText('Equilibrium', chartRightEdge - 70, (Math.min(equilibriumTopY, equilibriumBottomY) + eqHeight / 2));
       }
       
       // DISCOUNT ZONE (зеленоватая снизу)
@@ -117,66 +154,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillText('Discount', chartRightEdge - 50, Math.max(discountTopY, discountBottomY) - 5);
       }
       
-      // EQUILIBRIUM LINE (пунктирная линия посередине)
-      if (equilibriumY !== null) {
-        ctx.beginPath();
-        ctx.setLineDash([8, 4]);
-        ctx.strokeStyle = 'rgba(156, 39, 176, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.moveTo(0, equilibriumY);
-        ctx.lineTo(chartRightEdge, equilibriumY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        
-        ctx.fillStyle = 'rgba(156, 39, 176, 0.6)';
-        ctx.font = '9px Inter, Arial';
-        ctx.fillText('Equilibrium', chartRightEdge - 60, equilibriumY - 3);
-      }
-      
-      // Swing High/Low маркеры (линии всегда; подпись — только если не заезжает на Premium/Discount)
-      const swingHighY = series.priceToCoordinate(advancedZones.range_high);
-      const swingLowY = series.priceToCoordinate(advancedZones.range_low);
-      const LABEL_OVERLAP_PX = 20; // порог по Y: не рисовать подпись Swing, если совпадает с зоной
-      const premMinY = premiumTopY != null && premiumBottomY != null ? Math.min(premiumTopY, premiumBottomY) : null;
-      const premMaxY = premiumTopY != null && premiumBottomY != null ? Math.max(premiumTopY, premiumBottomY) : null;
-      const discMinY = discountTopY != null && discountBottomY != null ? Math.min(discountTopY, discountBottomY) : null;
-      const discMaxY = discountTopY != null && discountBottomY != null ? Math.max(discountTopY, discountBottomY) : null;
-      const swingHighInPremium = swingHighY != null && premMinY != null && premMaxY != null &&
-        (swingHighY >= premMinY - LABEL_OVERLAP_PX && swingHighY <= premMaxY + LABEL_OVERLAP_PX);
-      const swingLowInDiscount = swingLowY != null && discMinY != null && discMaxY != null &&
-        (swingLowY >= discMinY - LABEL_OVERLAP_PX && swingLowY <= discMaxY + LABEL_OVERLAP_PX);
-      
-      if (swingHighY !== null) {
-        ctx.setLineDash([2, 2]);
-        ctx.strokeStyle = 'rgba(239, 83, 80, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, swingHighY);
-        ctx.lineTo(chartRightEdge, swingHighY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (!swingHighInPremium) {
-          ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
-          ctx.font = '8px Inter, Arial';
-          ctx.fillText('Swing High', chartRightEdge - 55, swingHighY + 10);
-        }
-      }
-      
-      if (swingLowY !== null) {
-        ctx.setLineDash([2, 2]);
-        ctx.strokeStyle = 'rgba(38, 166, 154, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, swingLowY);
-        ctx.lineTo(chartRightEdge, swingLowY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (!swingLowInDiscount) {
-          ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
-          ctx.font = '8px Inter, Arial';
-          ctx.fillText('Swing Low', chartRightEdge - 55, swingLowY - 4);
-        }
-      }
+      // Swing High/Low теперь рисуются через PriceLines (см. updateSMCPriceLines)
+      // Equilibrium также рисуется как линия через PriceLines для точности, но зона на canvas для визуализации
     }
 
     // ============================================================
@@ -439,6 +418,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) return;
 
+    // Сохраняем текущие значения ref для cleanup функции
+    const currentSmcPriceLines = smcPriceLinesRef.current;
+
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
@@ -610,6 +592,21 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('resize', handleResize);
+      
+      // Очищаем SMC PriceLines (используем значения, сохраненные в начале useEffect)
+      const seriesForCleanup = seriesRef.current;
+      if (seriesForCleanup && currentSmcPriceLines) {
+        Object.keys(currentSmcPriceLines).forEach(key => {
+          if (currentSmcPriceLines[key]) {
+            try {
+              seriesForCleanup.removePriceLine(currentSmcPriceLines[key]);
+            } catch {
+              // Игнорируем ошибки при очистке
+            }
+          }
+        });
+      }
+      
       if (canvasRef.current && canvasRef.current.parentNode) {
         canvasRef.current.parentNode.removeChild(canvasRef.current);
       }
@@ -632,10 +629,95 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     };
   }, [activeMode, setLevels, setActiveMode]);
 
+  // Функция для очистки всех SMC PriceLines
+  const clearSMCPriceLines = useCallback(() => {
+    if (!seriesRef.current) return;
+    const series = seriesRef.current;
+    const smcLines = smcPriceLinesRef.current;
+    Object.keys(smcLines).forEach(key => {
+      if (smcLines[key]) {
+        try {
+          series.removePriceLine(smcLines[key]);
+          smcLines[key] = null;
+        } catch (err) {
+          console.warn(`Failed to remove ${key} line:`, err);
+        }
+      }
+    });
+  }, []);
+
+  // Функция для управления SMC PriceLines (range_high, range_low, equilibrium)
+  const updateSMCPriceLines = useCallback(() => {
+    if (!seriesRef.current || !smcVisible || !analysis) {
+      console.log('updateSMCPriceLines skipped:', { 
+        hasSeries: !!seriesRef.current, 
+        smcVisible, 
+        hasAnalysis: !!analysis 
+      });
+      return;
+    }
+    
+    const series = seriesRef.current;
+    const advancedZones = analysis.advanced?.zones;
+    const keyLevels = analysis.advanced?.key_levels;
+    
+    if (!advancedZones || advancedZones.range_high <= 0) {
+      console.warn('updateSMCPriceLines: invalid zones', advancedZones);
+      return;
+    }
+    
+    console.log('updateSMCPriceLines: creating/updating lines', {
+      range_high: advancedZones.range_high,
+      range_low: advancedZones.range_low,
+      equilibrium: keyLevels?.Equilibrium_Price || ((advancedZones.range_high + advancedZones.range_low) / 2)
+    });
+
+    const updateLine = (key, price, color, lineStyle, title) => {
+      const parsedPrice = parseFloat(price);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) return;
+      
+      if (smcPriceLinesRef.current[key]) {
+        try {
+          smcPriceLinesRef.current[key].applyOptions({ price: parsedPrice, color, lineStyle, title });
+        } catch (e) { console.warn(e); }
+      } else {
+        try {
+          smcPriceLinesRef.current[key] = series.createPriceLine({
+            price: parsedPrice, color, lineWidth: 1, lineStyle, title, axisLabelVisible: true
+          });
+        } catch (e) { console.warn(e); }
+      }
+    };
+
+    // Swing High
+    updateLine('rangeHigh', advancedZones.range_high, 'rgba(239, 83, 80, 0.6)', 1, 'Swing High');
+    
+    // Swing Low
+    updateLine('rangeLow', advancedZones.range_low, 'rgba(38, 166, 154, 0.6)', 1, 'Swing Low');
+    
+    // 2. Equilibrium (Штрих-пунктир 2)
+    // Берем цену из key_levels ИЛИ считаем среднее сами
+    const eqPrice = keyLevels?.Equilibrium_Price || ((advancedZones.range_high + advancedZones.range_low) / 2);
+    
+    if (eqPrice > 0) {
+      updateLine('equilibrium', eqPrice, 'rgba(156, 39, 176, 0.8)', 2, 'Equilibrium');
+    }
+  }, [smcVisible, analysis]);
+
   useEffect(() => {
     if (!seriesRef.current || !history?.length) return;
     const chart = chartRef.current;
     if (!chart) return;
+
+    // КРИТИЧНО: Удаляем старые PriceLines перед установкой новых данных
+    // Это предотвращает "призраков" старых линий при переключении таймфрейма
+    clearSMCPriceLines();
+
+    // TASK 3.2.1: Immediately clear canvas to prevent old zones "ghosting"
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
 
     const timeScale = chart.timeScale();
     
@@ -648,7 +730,18 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       }
     }
 
+    // КРИТИЧНО: Устанавливаем данные свечей
     seriesRef.current.setData(history);
+    
+    // Пересчитываем координаты видимой области
+    try {
+      if (!userInteractedRef.current) {
+        // Только при первой загрузке - подгоняем под данные
+        chart.timeScale().fitContent();
+      }
+    } catch (e) {
+      console.warn('Could not fit content:', e.message);
+    }
 
     // Восстанавливаем диапазон после небольшой задержки
     if (savedRange && timeScale.setVisibleLogicalRange) {
@@ -660,10 +753,17 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         } catch (e) {
           console.warn('Could not restore visible range:', e.message);
         }
-      }, 50); // Увеличил задержку для надёжности
+      }, 50);
     }
     
-    setTimeout(drawSMCOverlay, 100);
+    // TASK 3.2.2: Increased timeout to 150ms for price scale stabilization
+    // Обновляем PriceLines только если есть analysis (иначе они будут созданы когда придет analysis)
+    const stabilityTimeout = setTimeout(() => {
+      if (analysis) {
+        updateSMCPriceLines();
+      }
+      drawSMCOverlay();
+    }, 150);
 
     if (analysis) {
       console.log('SMC Analysis received:', {
@@ -679,16 +779,41 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         sample_bos: analysis.all_internal_bos?.[0] || 'none'
       });
     }
-  }, [history, drawSMCOverlay, analysis]);
+
+    return () => clearTimeout(stabilityTimeout);
+  }, [history, drawSMCOverlay, analysis, updateSMCPriceLines, clearSMCPriceLines]);
 
   useEffect(() => {
+    // Обновляем SMC PriceLines при изменении analysis
+    updateSMCPriceLines();
     drawSMCOverlay();
-  }, [analysis, drawSMCOverlay]);
+  }, [analysis, drawSMCOverlay, updateSMCPriceLines]);
 
   // Перерисовываем при переключении SMC
   useEffect(() => {
+    // Удаляем или создаём PriceLines в зависимости от видимости
+    if (!smcVisible) {
+      // Удаляем все SMC PriceLines
+      const series = seriesRef.current;
+      const smcLines = smcPriceLinesRef.current;
+      if (series) {
+        Object.keys(smcLines).forEach(key => {
+          if (smcLines[key]) {
+            try {
+              series.removePriceLine(smcLines[key]);
+              smcLines[key] = null;
+            } catch (err) {
+              console.warn(`Failed to remove ${key} line:`, err);
+            }
+          }
+        });
+      }
+    } else {
+      // Создаём PriceLines если SMC включен
+      updateSMCPriceLines();
+    }
     drawSMCOverlay();
-  }, [smcVisible, drawSMCOverlay]);
+  }, [smcVisible, drawSMCOverlay, updateSMCPriceLines, clearSMCPriceLines]);
 
   useEffect(() => {
     const s = seriesRef.current;

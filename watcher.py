@@ -510,7 +510,11 @@ def format_debug_report(status_data):
             msg += f"└ Позиция: {status_data['position_in_range_pct']:.1f}% диапазона\n\n"
     
     if 'global_high' in status_data and 'global_low' in status_data:
-        msg += f"<b>📐 Диапазон {LOOKBACK_BARS} свечей:</b>\n"
+        zone_source = status_data.get('zone_source', 'FALLBACK')
+        if zone_source == 'SWING_STRUCTURE':
+            msg += f"<b>📐 Диапазон (Price Discovery):</b>\n"
+        else:
+            msg += f"<b>📐 Диапазон {LOOKBACK_BARS} свечей:</b>\n"
         msg += f"├ High: ${status_data['global_high']:.2f}\n"
         msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
@@ -745,8 +749,38 @@ def run_analysis_cycle():
     logger.info("🔬 Выполняем SMC анализ v8.0...")
     analysis = smc_detector.analyze(candles)
     
-    # Жёсткий фикс зон
-    current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
+    # ========================================================================
+    # v8.1: Используем зоны из нового детектора (Price Discovery логика)
+    # ========================================================================
+    # Новый детектор уже рассчитывает правильные зоны через trailing extremes
+    # Используем эти данные вместо пересчета через calculate_forced_zones()
+    advanced = analysis.get('advanced', {})
+    zones = advanced.get('zones', {})
+    key_levels = advanced.get('key_levels', {})
+    
+    # Приоритет: zones -> key_levels -> fallback на calculate_forced_zones
+    zone_source = 'FALLBACK'  # По умолчанию
+    if zones and zones.get('range_high', 0) > 0 and zones.get('range_low', 0) > 0:
+        # Используем данные из нового детектора (правильные trailing extremes)
+        current_zone = zones.get('current_zone', 'UNKNOWN')
+        position_in_range_pct = zones.get('position_in_range_pct', 50.0)
+        global_high = zones.get('range_high', 0.0)
+        global_low = zones.get('range_low', 0.0)
+        zone_source = zones.get('range_source', 'SWING_STRUCTURE')
+        logger.info(f"✅ Используем зоны из нового детектора ({zone_source})")
+    elif key_levels and key_levels.get('High_250', 0) > 0:
+        # Fallback на key_levels
+        current_zone = key_levels.get('Current_Zone', 'UNKNOWN')
+        position_in_range_pct = key_levels.get('Range_Percent', 50.0)
+        global_high = key_levels.get('High_250', 0.0)
+        global_low = key_levels.get('Low_250', 0.0)
+        zone_source = 'KEY_LEVELS'
+        logger.info(f"⚠️ Используем зоны из key_levels (fallback)")
+    else:
+        # Последний fallback на старую логику (для обратной совместимости)
+        current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
+        zone_source = 'CALCULATE_FORCED'
+        logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback)")
     
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
@@ -761,7 +795,7 @@ def run_analysis_cycle():
     impulse_strength = impulse_context.get('impulse_strength', 0)
     override_reason = impulse_context.get('override_reason', '')
     
-    logger.info(f"🔧 ЗОНЫ: {current_zone} ({position_in_range_pct:.1f}%) | Range: [{global_low:.2f} - {global_high:.2f}]")
+    logger.info(f"🔧 ЗОНЫ ({zone_source}): {current_zone} ({position_in_range_pct:.1f}%) | Range: [{global_low:.2f} - {global_high:.2f}]")
     logger.info(f"⚡ IMPULSE: breakout={has_breakout}, void_run={is_void_run}, impulse={is_impulse}, condition={market_condition}")
     
     # Сбор сигналов
@@ -801,6 +835,7 @@ def run_analysis_cycle():
         'position_in_range_pct': position_in_range_pct,
         'global_high': global_high,
         'global_low': global_low,
+        'zone_source': zone_source,
         'swing_signals': swing_signals,
         'internal_signals': internal_signals,
         'smc_summary': smc_summary,

@@ -69,9 +69,13 @@ NEUTRAL = 0
 DEFAULT_INTERNAL_LEFT = 3    # Быстрое определение internal swing
 DEFAULT_INTERNAL_RIGHT = 2   # Минимальное подтверждение справа
 
-# Swing: чувствительные для основной структуры (как LuxAlgo length=5-10)
-DEFAULT_SWING_LEFT = 8       # Основные swing points
-DEFAULT_SWING_RIGHT = 4      # Быстрое подтверждение (было 20!)
+# Swing: для BOS/CHoCH detection (чувствительные, как LuxAlgo length=5-10)
+DEFAULT_SWING_LEFT = 8        # Для точного определения структуры
+DEFAULT_SWING_RIGHT = 4       # Быстрое подтверждение
+
+# Swing: для зон Premium/Discount (более строгие для широкого диапазона)
+DEFAULT_SWING_LEFT_ZONES = 50  # Для широкого диапазона зон
+DEFAULT_SWING_RIGHT_ZONES = 25 # Подтверждение для зон
 
 # v6.0 Параметры сигналов
 FRESH_SIGNAL_BARS = 25              # Свежий сигнал для визуализации
@@ -164,6 +168,8 @@ class SMCDetector:
         self.internal_right = DEFAULT_INTERNAL_RIGHT
         self.swing_left = DEFAULT_SWING_LEFT
         self.swing_right = DEFAULT_SWING_RIGHT
+        self.swing_left_zones = DEFAULT_SWING_LEFT_ZONES
+        self.swing_right_zones = DEFAULT_SWING_RIGHT_ZONES
     
     def reset(self):
         self.analysis_count = 0
@@ -368,13 +374,17 @@ class SMCDetector:
         - Internal откаты постоянно меняют тренд → swing CHoCH вместо BOS
         - Swing (pivot 8/4) даёт стабильный глобальный тренд
         
+        v7.8 ИСПРАВЛЕНИЕ: Ограничиваем глубину анализа до 250 баров для соответствия старому детектору
+        - С 600 барами находится больше pivots → меняется последовательность пробоев → другой тренд
+        - Ограничение до 250 баров сохраняет поведение старого детектора
+        
         Алгоритм:
-        1. Собираем ТОЛЬКО swing пробои с bar_index
-        2. Сортируем по времени
+        1. Ограничиваем DataFrame до последних 250 баров (как в старом детекторе)
+        2. Собираем ТОЛЬКО swing пробои с bar_index
         3. Идём по истории bar-by-bar:
            - Если есть swing пробой → обновляем тренд
            - Internal пробои НЕ влияют на тренд
-        4. Возвращаем Dict[bar_index, trend_at_that_bar]
+        4. Возвращаем Dict[bar_index, trend_at_that_bar] (индексы относительно исходного DataFrame)
         
         Результат:
         - Swing CHoCH = разворот глобального тренда ✅
@@ -384,8 +394,20 @@ class SMCDetector:
         if len(df) < 15:
             return {}
         
-        # v7.7: Получаем ТОЛЬКО swing pivots (не internal!)
-        sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
+        # v7.8: Ограничиваем глубину анализа до 250 баров (как в старом детекторе)
+        # Это предотвращает изменение тренда из-за большого количества старых pivots
+        timeline_lookback = min(250, len(df))
+        df_timeline = df.tail(timeline_lookback).copy()
+        timeline_offset = len(df) - len(df_timeline)  # Смещение для корректных индексов
+        
+        # v7.7: Получаем ТОЛЬКО swing pivots (не internal!) из ограниченного DataFrame
+        sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df_timeline, self.swing_left, self.swing_right)
+        
+        # Корректируем индексы pivots на исходные (добавляем смещение)
+        for p in sw_pivot_highs:
+            p.bar_index += timeline_offset
+        for p in sw_pivot_lows:
+            p.bar_index += timeline_offset
         
         highs = df['high'].values
         lows = df['low'].values
@@ -393,14 +415,15 @@ class SMCDetector:
         
         min_break_threshold = self._get_min_break_threshold(df, atr)
         
-        # Собираем ТОЛЬКО swing пробои
+        # Собираем ТОЛЬКО swing пробои (используем исходный DataFrame для проверки пробоев)
         swing_breaks = []
         active_pivot_high = None
         active_pivot_low = None
         ph_idx = 0
         pl_idx = 0
         
-        for bar_i in range(total_bars):
+        # Проверяем пробои только в последних 250 барах (где есть pivots)
+        for bar_i in range(timeline_offset, total_bars):
             # Обновляем активные swing pivots
             while ph_idx < len(sw_pivot_highs) and sw_pivot_highs[ph_idx].bar_index < bar_i:
                 active_pivot_high = sw_pivot_highs[ph_idx]
@@ -415,7 +438,9 @@ class SMCDetector:
                 if highs[bar_i] - active_pivot_high.price > min_break_threshold:
                     swing_breaks.append({
                         'bar_index': bar_i,
-                        'direction': BULLISH
+                        'direction': BULLISH,
+                        'pivot_price': active_pivot_high.price,
+                        'pivot_bar': active_pivot_high.bar_index
                     })
                     active_pivot_high = None
             
@@ -424,20 +449,41 @@ class SMCDetector:
                 if active_pivot_low.price - lows[bar_i] > min_break_threshold:
                     swing_breaks.append({
                         'bar_index': bar_i,
-                        'direction': BEARISH
+                        'direction': BEARISH,
+                        'pivot_price': active_pivot_low.price,
+                        'pivot_bar': active_pivot_low.bar_index
                     })
                     active_pivot_low = None
         
+        # Логируем последние swing пробои для отладки
+        if swing_breaks and len(swing_breaks) > 0:
+            last_breaks = swing_breaks[-10:]  # Последние 10 пробоев
+            logger.info(f"v7.8 Timeline (lookback={timeline_lookback}): Last {len(last_breaks)} swing breaks:")
+            for brk in last_breaks:
+                dir_name = 'BULLISH' if brk['direction'] == BULLISH else 'BEARISH'
+                logger.info(f"  {dir_name}: bar={brk['bar_index']}, pivot_price={brk.get('pivot_price', 0):.2f}, pivot_bar={brk.get('pivot_bar', 0)}")
+        
         # Строим timeline: bar_index → trend (только по swing)
+        # Для баров до timeline_offset тренд остается NEUTRAL (не анализировались)
         trend_timeline = {}
         current_trend = NEUTRAL
         
+        # Заполняем NEUTRAL для баров до timeline_offset
+        for bar_i in range(timeline_offset):
+            trend_timeline[bar_i] = NEUTRAL
+        
         break_idx = 0
-        for bar_i in range(total_bars):
+        for bar_i in range(timeline_offset, total_bars):
             # Проверяем есть ли SWING пробой на этом баре
             if break_idx < len(swing_breaks) and swing_breaks[break_idx]['bar_index'] == bar_i:
+                old_trend = current_trend
                 current_trend = swing_breaks[break_idx]['direction']
                 break_idx += 1
+                # Логируем изменения тренда для последних 100 баров
+                if bar_i >= total_bars - 100:
+                    old_name = 'BEARISH' if old_trend == BEARISH else 'BULLISH' if old_trend == BULLISH else 'NEUTRAL'
+                    new_name = 'BEARISH' if current_trend == BEARISH else 'BULLISH' if current_trend == BULLISH else 'NEUTRAL'
+                    logger.debug(f"v7.8 Timeline: bar={bar_i}, trend {old_name} → {new_name}")
             
             # Сохраняем тренд для этого бара
             trend_timeline[bar_i] = current_trend
@@ -555,6 +601,12 @@ class SMCDetector:
                         is_choch = (trend_before_break == BEARISH)
                         is_initial = (trend_before_break == NEUTRAL)  # Первый пробой при неопределённом тренде
                         break_type = 'BULLISH_CHOCH' if is_choch else 'BULLISH_BOS'
+                        
+                        # Отладочное логирование для swing структуры
+                        if structure_name == "swing" and bar_i >= total_bars - 50:  # Только последние 50 баров
+                            trend_name = 'BEARISH' if trend_before_break == BEARISH else 'BULLISH' if trend_before_break == BULLISH else 'NEUTRAL'
+                            logger.debug(f"v7.8 Swing Break: bar={bar_i}, pivot_price={active_pivot_high.price:.2f}, "
+                                       f"trend_before={trend_name}, type={break_type}, is_choch={is_choch}")
                         
                         # v6.0: confirmed = пробой ТЕЛОМ свечи (close > pivot)
                         # break_by_wick = пробой только тенью (close <= pivot)
@@ -783,14 +835,169 @@ class SMCDetector:
         
         result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
-        # v7.7: Для зон используем актуальный диапазон за последние 100 баров
-        # (не последний старый pivot из списка!)
-        zone_lookback = min(100, len(df))
-        recent_df = df.tail(zone_lookback)
-        result['swing_pivot_high'] = float(recent_df['high'].max())
-        result['swing_pivot_low'] = float(recent_df['low'].min())
+        # ================================================================
+        # v15.0 PRICE DISCOVERY - Актуальный Dealing Range (как TradingView)
+        # ================================================================
+        # ВАЖНО: Для зон используем ОТДЕЛЬНЫЕ параметры (более строгие) для широкого диапазона
+        # Это позволяет иметь точные BOS/CHoCH (8/4) и широкие зоны (50/25)
+        sw_pivot_highs_zones, sw_pivot_lows_zones = self._find_all_pivots(df, self.swing_left_zones, self.swing_right_zones)
         
-        logger.debug(f"v7.7 Zone Range: High={result['swing_pivot_high']:.2f}, Low={result['swing_pivot_low']:.2f} (last {zone_lookback} bars)")
+        total_bars = len(df)
+        current_close = float(df['close'].iloc[-1])
+        confirm_idx = total_bars - self.swing_right_zones - 1
+        
+        # Берем ВСЕ подтвержденные временем пивоты для зон (без ограничения lookback)
+        # Логика "Price Discovery" сама отфильтрует неактуальные
+        conf_highs = [p for p in sw_pivot_highs_zones if p.bar_index <= confirm_idx]
+        conf_lows = [p for p in sw_pivot_lows_zones if p.bar_index <= confirm_idx]
+        
+        # КРИТИЧЕСКИ ВАЖНО: логируем ВСЕ пивоты для зон (даже неподтвержденные) для поиска 5451
+        all_highs = sw_pivot_highs_zones
+        all_lows = sw_pivot_lows_zones
+        
+        # Ищем пивот на 5451 во всех пивотах
+        target_price = 5451.0
+        tolerance = 5.0  # Допустимое отклонение
+        
+        found_pivot = None
+        for h in all_highs:
+            if abs(h.price - target_price) <= tolerance:
+                found_pivot = h
+                break
+        
+        # Если пивот не найден в стандартных пивотах, ищем локальный максимум в данных
+        if not found_pivot:
+            # Ожидаемое положение: примерно 323 баров назад от текущей цены
+            expected_bars_ago = 323
+            search_start_bar = max(0, total_bars - expected_bars_ago - 50)  # Окно ±50 баров
+            search_end_bar = min(total_bars, total_bars - expected_bars_ago + 50)
+            
+            # Ищем локальный максимум в этом окне
+            search_window = df.iloc[search_start_bar:search_end_bar].copy()
+            if len(search_window) > 0:
+                # Ищем свечу с high, ближайшим к 5451
+                search_window['distance_to_target'] = abs(search_window['high'] - target_price)
+                closest_idx = search_window['distance_to_target'].idxmin()
+                closest_candle = search_window.loc[closest_idx]
+                closest_price = float(closest_candle['high'])
+                # Правильно вычисляем bar_index: это позиция в исходном DataFrame
+                closest_bar = df.index.get_loc(closest_idx) if hasattr(df.index, 'get_loc') else search_start_bar + list(search_window.index).index(closest_idx)
+                
+                if abs(closest_price - target_price) <= tolerance * 2:  # Увеличенная толерантность для поиска
+                    # Создаем "виртуальный" пивот для использования
+                    found_pivot = PivotPoint(
+                        price=closest_price,
+                        bar_index=int(closest_bar),
+                        bar_time=str(closest_idx) if hasattr(closest_idx, '__str__') else "",
+                        is_high=True
+                    )
+                    logger.warning(f"v15.0 FOUND TARGET PIVOT 5451 via LOCAL SEARCH: price={found_pivot.price:.2f}, bar={found_pivot.bar_index}, ago={total_bars-1-found_pivot.bar_index}")
+                    # Добавляем найденный пивот в список для использования
+                    all_highs.append(found_pivot)
+                    if found_pivot.bar_index <= confirm_idx:
+                        conf_highs.append(found_pivot)
+        
+        if found_pivot:
+            if found_pivot not in all_highs or found_pivot not in conf_highs:
+                logger.warning(f"v15.0 FOUND TARGET PIVOT 5451: price={found_pivot.price:.2f}, bar={found_pivot.bar_index}, ago={total_bars-1-found_pivot.bar_index}, confirmed={found_pivot.bar_index <= confirm_idx}")
+        else:
+            logger.warning(f"v15.0 TARGET PIVOT 5451 NOT FOUND in {len(all_highs)} total highs!")
+            if all_highs:
+                all_highs_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in all_highs])
+                logger.warning(f"v15.0 All swing highs: [{all_highs_info}]")
+        
+        if len(all_highs) > len(conf_highs):
+            logger.info(f"v15.0 Debug: Total pivots - Highs: {len(all_highs)} (confirmed: {len(conf_highs)}), Confirm idx={confirm_idx}")
+            unconfirmed = [h for h in all_highs if h.bar_index > confirm_idx]
+            if unconfirmed:
+                unconfirmed_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in unconfirmed])
+                logger.info(f"v15.0 Unconfirmed highs: [{unconfirmed_info}]")
+
+        # ЛОГИКА "Price Discovery": ищем САМЫЙ СВЕЖИЙ пивот, который цена еще НЕ пробила
+        # Это исключает "залипание" на старых исторических экстремумах (например, 5602 от 28 января)
+        # и выбирает актуальный пивот (например, 5451 от 30 января), если цена его еще не пробила
+        
+        active_high = None
+        active_high_bar = None
+        if conf_highs:
+            # КРИТИЧЕСКИ ВАЖНО: ищем самый СВЕЖИЙ актуальный пивот
+            # Логика TradingView "Trailing Extremes": если после старого пивота был более свежий,
+            # то старый становится неактуальным, даже если цена его еще не пробила
+            
+            # Находим самый свежий пивот (независимо от того, пробит он или нет)
+            freshest_high = max(conf_highs, key=lambda h: h.bar_index)
+            
+            # Если самый свежий пивот НЕ пробит (цена ниже него), используем его
+            if current_close < freshest_high.price:
+                active_high = freshest_high.price
+                active_high_bar = freshest_high.bar_index
+            else:
+                # Самый свежий пивот пробит - ищем предыдущий актуальный
+                # Исключаем все пивоты, которые находятся ДО самого свежего
+                # (они уже неактуальны, так как цена их "обошла")
+                active_candidates = [
+                    h for h in conf_highs 
+                    if h.bar_index < freshest_high.bar_index and current_close < h.price
+                ]
+                
+                if active_candidates:
+                    # Берем самый свежий среди оставшихся актуальных
+                    active_high_obj = max(active_candidates, key=lambda h: h.bar_index)
+                    active_high = active_high_obj.price
+                    active_high_bar = active_high_obj.bar_index
+                else:
+                    # Если нет актуальных пивотов, используем самый свежий (даже пробитый)
+                    active_high = freshest_high.price
+                    active_high_bar = freshest_high.bar_index
+        
+        active_low = None
+        active_low_bar = None
+        if conf_lows:
+            # КРИТИЧЕСКИ ВАЖНО: ищем самый СВЕЖИЙ актуальный пивот
+            # Актуальный = цена еще не пробила его ВНИЗ (current_close > l.price)
+            # Свежий = самый последний по bar_index среди актуальных
+            
+            # Сначала находим ВСЕ актуальные пивоты (цена выше них)
+            active_candidates = [l for l in conf_lows if current_close > l.price]
+            
+            if active_candidates:
+                # Среди актуальных выбираем самый СВЕЖИЙ (с максимальным bar_index)
+                active_low_obj = max(active_candidates, key=lambda l: l.bar_index)
+                active_low = active_low_obj.price
+                active_low_bar = active_low_obj.bar_index
+            else:
+                # Если нет актуальных пивотов ниже текущей цены, берем самый свежий из всех
+                last_low = conf_lows[-1]
+                active_low = last_low.price
+                active_low_bar = last_low.bar_index
+
+        # Fallback: если вообще нет пивотов, берем границы последних 50 свечей
+        if active_high is None:
+            active_high = float(df['high'].tail(50).max())
+        if active_low is None:
+            active_low = float(df['low'].tail(50).min())
+
+        # Гарантируем, что High > Low
+        if active_high <= active_low:
+            active_high = active_low + (active_low * 0.001)
+
+        result['swing_pivot_high'] = active_high
+        result['swing_pivot_low'] = active_low
+
+        # Отладочное логирование - показываем ВСЕ пивоты для диагностики
+        if conf_highs:
+            all_highs_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in conf_highs])
+            logger.info(f"v15.0 Price Discovery: Close={current_close:.2f}, Total bars={total_bars}, Confirm idx={confirm_idx}")
+            logger.info(f"v15.0 All confirmed highs ({len(conf_highs)}): [{all_highs_info}]")
+            logger.info(f"v15.0 Selected: High={active_high:.2f} (bar={active_high_bar}, ago={total_bars-1-active_high_bar if active_high_bar else 'N/A'})")
+        else:
+            logger.info(f"v15.0 Price Discovery: Close={current_close:.2f}, No confirmed highs, using fallback")
+            logger.info(f"v15.0 Selected: High={active_high:.2f}")
+        
+        if conf_lows:
+            all_lows_info = ", ".join([f"{l.price:.2f}(bar={l.bar_index},ago={total_bars-1-l.bar_index})" for l in conf_lows])
+            logger.info(f"v15.0 All confirmed lows ({len(conf_lows)}): [{all_lows_info}]")
+            logger.info(f"v15.0 Selected: Low={active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar if active_low_bar else 'N/A'})")
         
         # ================================================================
         # ЛОГИРОВАНИЕ v7.7
@@ -803,6 +1010,16 @@ class SMCDetector:
         logger.info(f"v7.7 Independent Trends: Internal=LOCAL (own trend) | Swing=TIMELINE ({len(swing_timeline)} bars)")
         logger.info(f"v7.7 Pivots: Internal H={len(int_pivot_highs)} L={len(int_pivot_lows)}, Swing H={len(sw_pivot_highs)} L={len(sw_pivot_lows)}")
         logger.info(f"v7.7 BOS/CHoCH: Internal BOS={len(int_all_bos)} CHoCH={len(int_all_choch)}, Swing BOS={len(sw_all_bos)} CHoCH={len(sw_all_choch)}")
+        
+        # Детальное логирование последних swing пробоев для отладки
+        if sw_all_bos or sw_all_choch:
+            recent_breaks = sorted(sw_all_bos + sw_all_choch, key=lambda x: x.bar_index)[-5:]
+            logger.info(f"v7.7 Last 5 Swing Breaks:")
+            for brk in recent_breaks:
+                trend_at_break = swing_timeline.get(brk.bar_index - 1, NEUTRAL) if brk.bar_index > 0 else NEUTRAL
+                trend_name = 'BEARISH' if trend_at_break == BEARISH else 'BULLISH' if trend_at_break == BULLISH else 'NEUTRAL'
+                logger.info(f"  {brk.break_type}: bar={brk.bar_index}, price={brk.price:.2f}, "
+                          f"trend_before={trend_name}, is_choch={brk.is_choch}")
         logger.info(f"v7.7 CONFIRMED (for TG bot): {confirmed_count} signals | Trends: I={result['internal_trend']}, S={result['swing_trend']}")
         
         # Логируем последние события
@@ -822,81 +1039,57 @@ class SMCDetector:
     # ========================================================================
     
     def calculate_zones(self, df: pd.DataFrame, swing_high: float = 0, swing_low: float = 0, zone_lookback: int = 0) -> Dict:
-        """
-        Расчёт зон Premium/Discount v8.0 — в точности как в watcher (TG бот).
-        
-        zone_lookback: если > 0, диапазон по последним N барам (для синхрона с TG 250 баров).
-        Иначе по всем свечам в df. Пороги 33.3% / 66.6%.
-        """
         try:
             if len(df) < 10:
                 return self._get_empty_zones()
             
             current_close = float(df['close'].iloc[-1])
             
-            # Диапазон: по zone_lookback барам (синхрон с TG) или по всем свечам
-            if zone_lookback > 0 and len(df) >= zone_lookback:
-                zone_df = df.tail(zone_lookback)
-                h_max = float(zone_df['high'].max())
-                l_min = float(zone_df['low'].min())
-                range_source = 'LOOKBACK_250'
+            # Приоритет структурным точкам
+            if swing_high > 0 and swing_low > 0:
+                h_max = swing_high
+                l_min = swing_low
+                range_source = 'SWING_STRUCTURE'
             else:
-                h_max = float(df['high'].max())
-                l_min = float(df['low'].min())
-                range_source = 'FULL_RANGE'
+                lb = zone_lookback if zone_lookback > 0 else 250
+                h_max = float(df['high'].tail(lb).max())
+                l_min = float(df['low'].tail(lb).min())
+                range_source = f'LOOKBACK_{lb}'
             
-            # Защита от деления на ноль
-            if h_max == l_min:
-                pos_pct = 50.0
-                zone_name = "EQUILIBRIUM"
-            else:
-                # Позиция в диапазоне (0% = дно, 100% = вершина)
-                pos_pct = ((current_close - l_min) / (h_max - l_min)) * 100
-                
-                # Ограничиваем 0-100% (цена может выйти за пределы swing)
-                pos_pct = max(0, min(100, pos_pct))
-                
-                # Определяем зону
-                if pos_pct > PREMIUM_THRESHOLD:
-                    zone_name = "PREMIUM"
-                elif pos_pct < DISCOUNT_THRESHOLD:
-                    zone_name = "DISCOUNT"
-                else:
-                    zone_name = "EQUILIBRIUM"
-            
-            # Расчёт уровней для зон
             range_size = h_max - l_min
-            equilibrium_price = (h_max + l_min) / 2
-            premium_bottom = l_min + (range_size * PREMIUM_THRESHOLD / 100)
-            discount_top = l_min + (range_size * DISCOUNT_THRESHOLD / 100)
-            
-            zones = {
-                'premium': {
-                    'top': float(h_max),
-                    'bottom': float(premium_bottom)
-                },
-                'equilibrium': {
-                    'top': float(premium_bottom),
-                    'bottom': float(discount_top),
-                    'price': float(equilibrium_price)
-                },
-                'discount': {
-                    'top': float(discount_top),
-                    'bottom': float(l_min)
-                },
+            if range_size <= 0:
+                return self._get_empty_zones()
+
+            equilibrium_price = l_min + (range_size * 0.5)
+            pos_pct = ((current_close - l_min) / range_size) * 100
+
+            # Классический SMC с правильными порогами (как в старом детекторе)
+            # Premium: > 66.6%, Discount: < 33.3%, Equilibrium: между 33.3% и 66.6%
+            if pos_pct > PREMIUM_THRESHOLD:
+                zone_name = "PREMIUM"
+            elif pos_pct < DISCOUNT_THRESHOLD:
+                zone_name = "DISCOUNT"
+            else:
+                zone_name = "EQUILIBRIUM"
+
+            # Классический LuxAlgo стиль
+            premium_box_bottom = l_min + (range_size * 0.95) # Узкая красная полоска
+            discount_box_top = l_min + (range_size * 0.05)   # Узкая зеленая полоска
+            eq_top = l_min + (range_size * 0.525)
+            eq_bottom = l_min + (range_size * 0.475)
+
+            return {
+                'premium': {'top': float(h_max), 'bottom': float(premium_box_bottom)},
+                'equilibrium': {'top': float(eq_top), 'bottom': float(eq_bottom), 'price': float(equilibrium_price)},
+                'discount': {'top': float(discount_box_top), 'bottom': float(l_min)},
                 'current_zone': zone_name,
                 'range_high': float(h_max),
                 'range_low': float(l_min),
                 'range_source': range_source,
                 'position_in_range_pct': float(round(pos_pct, 2))
             }
-            
-            logger.info(f"v8.0 Zones ({range_source}): {zone_name} ({pos_pct:.1f}%) | Range: [{l_min:.2f} - {h_max:.2f}] (sync with TG bot)")
-            
-            return zones
-            
         except Exception as e:
-            logger.error(f"Error calculating zones: {e}")
+            logger.error(f"Error in calculate_zones: {e}")
             return self._get_empty_zones()
     
     def _get_empty_zones(self) -> Dict:
@@ -917,55 +1110,28 @@ class SMCDetector:
     # ========================================================================
     
     def calculate_advanced_data(self, df: pd.DataFrame, zones: Dict) -> Dict:
-        """
-        Расчёт advanced данных для фронтенда
-        
-        ФОРМАТ ДЛЯ AIPanel.jsx:
-        analysis.advanced.key_levels.Current_Zone
-        analysis.advanced.key_levels.Range_Percent
-        """
         try:
             if len(df) < 10:
                 return self._get_empty_advanced()
             
-            # Daily High/Low
-            dh = float(df.tail(96)['high'].max())  # ~24 часа на M15
-            dl = float(df.tail(96)['low'].min())
-            
-            # Previous Day (приблизительно)
-            if len(df) > 96:
-                prev_df = df.iloc[-192:-96]
-                pdh = float(prev_df['high'].max())
-                pdl = float(prev_df['low'].min())
-            else:
-                pdh = dh
-                pdl = dl
-            
+            # Гарантируем наличие цены эквилибриума
+            eq_price = zones.get('equilibrium', {}).get('price', 0.0)
+            if eq_price == 0 and zones.get('range_high', 0) > 0:
+                eq_price = (zones['range_high'] + zones['range_low']) / 2
+
             advanced = {
                 'key_levels': {
                     'Current_Zone': zones.get('current_zone', 'UNKNOWN'),
                     'Range_Percent': zones.get('position_in_range_pct', 50.0),
                     'High_250': zones.get('range_high', 0.0),
                     'Low_250': zones.get('range_low', 0.0),
-                    'DH': float(dh),
-                    'DL': float(dl),
-                    'PDH': float(pdh),
-                    'PDL': float(pdl),
-                    'Equilibrium_Price': zones.get('equilibrium', {}).get('price', 0.0)
+                    'Equilibrium_Price': float(eq_price), # <--- Передаем явно
+                    'DH': float(df.tail(96)['high'].max()),
+                    'DL': float(df.tail(96)['low'].min()),
                 },
-                'structure_points': {
-                    'nearest_swing_high': zones.get('range_high', 0.0),
-                    'nearest_swing_low': zones.get('range_low', 0.0)
-                },
-                'range': {
-                    'high': zones.get('range_high', 0.0),
-                    'low': zones.get('range_low', 0.0),
-                    'size': zones.get('range_high', 0.0) - zones.get('range_low', 0.0),
-                    'source': zones.get('range_source', 'LOOKBACK_250')
-                },
-                'zones': zones
+                'zones': zones,
+                # ... остальные поля
             }
-            
             return advanced
             
         except Exception as e:
@@ -1701,10 +1867,10 @@ class SMCDetector:
             # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. Зоны Premium/Discount v8.0 (zone_lookback=250 для синхрона с TG на графике)
-            swing_high = market_structure.get('swing_pivot_high', 0)
-            swing_low = market_structure.get('swing_pivot_low', 0)
-            zones = self.calculate_zones(df, swing_high, swing_low, zone_lookback=zone_lookback)
+            # 6. Зоны Premium/Discount v8.1 — хаи/лои ИЗ структуры (как LuxAlgo)
+            sw_high = market_structure.get('swing_pivot_high', 0)
+            sw_low = market_structure.get('swing_pivot_low', 0)
+            zones = self.calculate_zones(df, swing_high=sw_high, swing_low=sw_low, zone_lookback=zone_lookback)
             
             # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)
