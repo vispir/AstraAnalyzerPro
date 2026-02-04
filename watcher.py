@@ -1065,8 +1065,9 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # Equilibrium (пропускаем при импульсе)
-    if current_zone == "EQUILIBRIUM" and not is_breakout_impulse:
+    # Equilibrium (пропускаем при импульсе ИЛИ при CONFIRMED сигналах ИЛИ при пробое 20 свечей)
+    # v8.1 FIX: CONFIRMED сигналы и пробой 20 свечей снимают запрет Equilibrium
+    if current_zone == "EQUILIBRIUM" and not is_breakout_impulse and not has_breakout and not has_swing_break_confirmed and not has_internal_break_confirmed:
         status_data['status'] = 'equilibrium_zone'
         status_data['reason'] = f'Цена в Equilibrium ({position_in_range_pct:.1f}%)'
         send_debug_notification(status_data)
