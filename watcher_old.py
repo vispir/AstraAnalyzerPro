@@ -42,7 +42,7 @@ from services.telegram_service import telegram_service
 SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
 WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
 FRESH_SIGNAL_BARS = 25
-LOOKBACK_BARS = 600  # Увеличено до 600 для правильного Price Discovery (нужно найти пивоты до 331 баров назад)
+LOOKBACK_BARS = 250
 EXTREME_DISCOUNT_THRESHOLD = 15.0
 EXTREME_PREMIUM_THRESHOLD = 85.0
 
@@ -290,7 +290,7 @@ def format_signal_message_with_verdict(ai_response, verdict):
     Форматирует сигнал с уже готовым verdict (для передачи low_confidence_override)
     """
     parsed_data = parse_llm_response(ai_response)
-    return _format_signal_internal(parsed_data, verdict, ai_response)
+    return _format_signal_internal(parsed_data, verdict)
 
 
 def format_signal_message(ai_response):
@@ -300,13 +300,12 @@ def format_signal_message(ai_response):
     """
     parsed_data = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_data)
-    return _format_signal_internal(parsed_data, verdict, ai_response)
+    return _format_signal_internal(parsed_data, verdict)
 
 
-def _format_signal_internal(parsed_data, verdict, ai_response=''):
+def _format_signal_internal(parsed_data, verdict):
     """
     Внутренняя функция форматирования сигнала.
-    ai_response — сырой ответ LLM для fallback при неудачном парсинге.
     """
     
     if verdict and verdict['action'] in ['BUY', 'SELL']:
@@ -434,8 +433,7 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
         return msg
     
     # Если не удалось распарсить — выводим как есть
-    raw = ai_response if ai_response else (str(parsed_data) if parsed_data else 'Raw response unavailable')
-    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{escape_html(raw)}"
+    return f"<b>📢 НОВЫЙ СИГНАЛ XAUUSD:</b>\n\n{escape_html(ai_response)}"
 
 
 def format_debug_report(status_data):
@@ -510,11 +508,7 @@ def format_debug_report(status_data):
             msg += f"└ Позиция: {status_data['position_in_range_pct']:.1f}% диапазона\n\n"
     
     if 'global_high' in status_data and 'global_low' in status_data:
-        zone_source = status_data.get('zone_source', 'FALLBACK')
-        if zone_source == 'SWING_STRUCTURE':
-            msg += f"<b>📐 Диапазон (Price Discovery):</b>\n"
-        else:
-            msg += f"<b>📐 Диапазон {LOOKBACK_BARS} свечей:</b>\n"
+        msg += f"<b>📐 Диапазон {LOOKBACK_BARS} свечей:</b>\n"
         msg += f"├ High: ${status_data['global_high']:.2f}\n"
         msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
@@ -749,99 +743,12 @@ def run_analysis_cycle():
     logger.info("🔬 Выполняем SMC анализ v8.0...")
     analysis = smc_detector.analyze(candles)
     
-    # ========================================================================
-    # v8.1: Используем зоны из нового детектора (Price Discovery логика)
-    # ========================================================================
-    # Новый детектор уже рассчитывает правильные зоны через trailing extremes
-    # Используем эти данные вместо пересчета через calculate_forced_zones()
-    advanced = analysis.get('advanced', {})
-    zones = advanced.get('zones', {})
-    key_levels = advanced.get('key_levels', {})
-    
-    # Получаем текущую цену для валидации диапазона
-    current_price = safe_float(candles[-1].get('close', 0), 0.0)
-    
-    # ДИАГНОСТИКА: Логируем, что пришло из детектора
-    if zones:
-        logger.info(f"🔍 ДАННЫЕ ИЗ ДЕТЕКТОРА: zones.range_high={zones.get('range_high', 0):.2f}, zones.range_low={zones.get('range_low', 0):.2f}, zones.range_source={zones.get('range_source', 'NONE')}")
-    else:
-        logger.warning(f"⚠️ zones пустой или отсутствует в advanced!")
-    
-    # Также проверяем swing_pivot_high/low напрямую из market_structure
-    market_structure = analysis.get('swing_pivot_high', 0), analysis.get('swing_pivot_low', 0)
-    if market_structure[0] > 0 or market_structure[1] > 0:
-        logger.info(f"🔍 MARKET_STRUCTURE: swing_pivot_high={market_structure[0]:.2f}, swing_pivot_low={market_structure[1]:.2f}")
-    
-    # Приоритет: zones -> key_levels -> fallback на calculate_forced_zones
-    zone_source = 'FALLBACK'  # По умолчанию
-    zones_valid = False
-    
-    if zones and zones.get('range_high', 0) > 0 and zones.get('range_low', 0) > 0:
-        global_high = zones.get('range_high', 0.0)
-        global_low = zones.get('range_low', 0.0)
-        range_size = global_high - global_low
-        range_source_detector = zones.get('range_source', 'UNKNOWN')
-        
-        # ВАЖНО: Проверяем валидность диапазона
-        # Если диапазон слишком узкий (< 0.5% от цены) или цена выходит за пределы, используем fallback
-        min_valid_range = current_price * 0.005  # Минимум 0.5% от цены
-        
-        # Детальное логирование для диагностики
-        logger.debug(f"🔍 Проверка диапазона из детектора: source={range_source_detector}, range=[{global_low:.2f} - {global_high:.2f}], size={range_size:.2f}, price={current_price:.2f}")
-        logger.debug(f"🔍 Валидация: min_valid={min_valid_range:.2f}, size_ok={range_size >= min_valid_range}, price_in_range={global_low <= current_price <= global_high}")
-        
-        if range_size >= min_valid_range and global_low <= current_price <= global_high:
-            # Диапазон валидный - используем данные из нового детектора
-            current_zone = zones.get('current_zone', 'UNKNOWN')
-            # ВАЖНО: Пересчитываем position_in_range_pct на основе текущей цены и валидированного диапазона
-            # Это гарантирует правильность, даже если детектор вернул некорректное значение
-            position_in_range_pct = ((current_price - global_low) / range_size) * 100
-            zone_source = range_source_detector
-            zones_valid = True
-            logger.info(f"✅ Используем зоны из нового детектора ({zone_source}): [{global_low:.2f} - {global_high:.2f}], price={current_price:.2f}, pos={position_in_range_pct:.1f}%")
-        else:
-            # Диапазон невалидный - используем fallback
-            reason = []
-            if range_size < min_valid_range:
-                reason.append(f"слишком узкий ({range_size:.2f} < {min_valid_range:.2f})")
-            if current_price < global_low:
-                reason.append(f"цена ниже диапазона ({current_price:.2f} < {global_low:.2f})")
-            if current_price > global_high:
-                reason.append(f"цена выше диапазона ({current_price:.2f} > {global_high:.2f})")
-            logger.warning(f"⚠️ Диапазон из детектора невалидный ({', '.join(reason)}), используем fallback")
-    
-    if not zones_valid:
-        # Пробуем fallback на key_levels
-        if key_levels and key_levels.get('High_250', 0) > 0:
-            # Fallback на key_levels
-            current_zone = key_levels.get('Current_Zone', 'UNKNOWN')
-            global_high = key_levels.get('High_250', 0.0)
-            global_low = key_levels.get('Low_250', 0.0)
-            # ВАЖНО: Пересчитываем position_in_range_pct на основе текущей цены
-            range_size_fallback = global_high - global_low
-            if range_size_fallback > 0:
-                position_in_range_pct = ((current_price - global_low) / range_size_fallback) * 100
-            else:
-                position_in_range_pct = 50.0
-            zone_source = 'KEY_LEVELS'
-            logger.info(f"⚠️ Используем зоны из key_levels (fallback): [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
-        else:
-            # Последний fallback на старую логику (для обратной совместимости)
-            current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
-            zone_source = 'CALCULATE_FORCED'
-            logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback): [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
-    
-    # ВАЖНО: Гарантируем, что position_in_range_pct находится в разумных пределах (0-100%)
-    # Это защита от некорректных значений из детектора или fallback
-    if position_in_range_pct < 0:
-        logger.warning(f"⚠️ position_in_range_pct < 0 ({position_in_range_pct:.1f}%), ограничиваем до 0%")
-        position_in_range_pct = 0.0
-    elif position_in_range_pct > 100:
-        logger.warning(f"⚠️ position_in_range_pct > 100 ({position_in_range_pct:.1f}%), ограничиваем до 100%")
-        position_in_range_pct = 100.0
+    # Жёсткий фикс зон
+    current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
     
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
+    current_price = safe_float(candles[-1].get('close', 0), 0.0)
     
     # Impulse Context v5.2
     impulse_context = analysis.get('impulse_context', {})
@@ -852,7 +759,7 @@ def run_analysis_cycle():
     impulse_strength = impulse_context.get('impulse_strength', 0)
     override_reason = impulse_context.get('override_reason', '')
     
-    logger.info(f"🔧 ЗОНЫ ({zone_source}): {current_zone} ({position_in_range_pct:.1f}%) | Range: [{global_low:.2f} - {global_high:.2f}]")
+    logger.info(f"🔧 ЗОНЫ: {current_zone} ({position_in_range_pct:.1f}%) | Range: [{global_low:.2f} - {global_high:.2f}]")
     logger.info(f"⚡ IMPULSE: breakout={has_breakout}, void_run={is_void_run}, impulse={is_impulse}, condition={market_condition}")
     
     # Сбор сигналов
@@ -892,7 +799,6 @@ def run_analysis_cycle():
         'position_in_range_pct': position_in_range_pct,
         'global_high': global_high,
         'global_low': global_low,
-        'zone_source': zone_source,
         'swing_signals': swing_signals,
         'internal_signals': internal_signals,
         'smc_summary': smc_summary,
@@ -1065,9 +971,8 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # Equilibrium (пропускаем при импульсе ИЛИ при CONFIRMED сигналах ИЛИ при пробое 20 свечей)
-    # v8.1 FIX: CONFIRMED сигналы и пробой 20 свечей снимают запрет Equilibrium
-    if current_zone == "EQUILIBRIUM" and not is_breakout_impulse and not has_breakout and not has_swing_break_confirmed and not has_internal_break_confirmed:
+    # Equilibrium (пропускаем при импульсе)
+    if current_zone == "EQUILIBRIUM" and not is_breakout_impulse:
         status_data['status'] = 'equilibrium_zone'
         status_data['reason'] = f'Цена в Equilibrium ({position_in_range_pct:.1f}%)'
         send_debug_notification(status_data)
@@ -1217,56 +1122,8 @@ def run_analysis_cycle():
         logger.info(f"   ⚡ Причины: {', '.join(impulse_reasons)}")
     logger.info("=" * 60)
     
-    # ========================================================================
-    # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
-    # ========================================================================
-    logger.info("📊 Подготавливаем оптимизированные данные M15 для LLM...")
-    
-    # Создаем легкую версию analysis без массивов all_* (они только для визуализации)
-    analysis_light = {
-        # Основные данные
-        'order_blocks': analysis.get('order_blocks', []),
-        'breaker_blocks': analysis.get('breaker_blocks', []),
-        'fvg': analysis.get('fvg', []),
-        'liquidity': analysis.get('liquidity', []),
-        'trend': analysis.get('trend', 'NEUTRAL'),
-        'zones': analysis.get('zones', {}),
-        
-        # Только свежие BOS/CHoCH (не все для визуализации)
-        'choch': analysis.get('choch', []),
-        'bos': analysis.get('bos', []),
-        'internal_choch': analysis.get('internal_choch', []),
-        'internal_bos': analysis.get('internal_bos', []),
-        'swing_choch': analysis.get('swing_choch', []),
-        'swing_bos': analysis.get('swing_bos', []),
-        
-        # CONFIRMED сигналы
-        'choch_confirmed': analysis.get('choch_confirmed', []),
-        'bos_confirmed': analysis.get('bos_confirmed', []),
-        'internal_choch_confirmed': analysis.get('internal_choch_confirmed', []),
-        'internal_bos_confirmed': analysis.get('internal_bos_confirmed', []),
-        
-        # Advanced данные (key_levels и т.д.)
-        'advanced': analysis.get('advanced', {}),
-        
-        # Импульс контекст (режим импульса, breakout, причины override — для LLM)
-        'impulse_context': analysis.get('impulse_context', {}),
-        'impulse': analysis.get('impulse', {}),
-    }
-    
-    # Добавляем свечи
-    if 'error' not in data and data.get('candles'):
-        m15_candles = data.get('candles', [])[-50:]  # Последние 50 для LLM
-        analysis_light['candles'] = m15_candles
-        logger.info(f"✓ M15 данные подготовлены: {len(m15_candles)} свечей")
-    
-    # Логируем размер payload
-    import json
-    payload_size = len(json.dumps(analysis_light, ensure_ascii=False))
-    logger.info(f"📦 Размер payload для LLM: {payload_size:,} символов ({payload_size/1024:.1f} KB)")
-    
-    # Вызов Gemini с оптимизированным analysis
-    ai_response = llm_service.get_signal_verdict(analysis_light)
+    # Вызов Gemini
+    ai_response = llm_service.get_signal_verdict(analysis)
     
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
