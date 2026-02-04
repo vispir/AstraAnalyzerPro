@@ -913,63 +913,69 @@ class SMCDetector:
                 unconfirmed_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in unconfirmed])
                 logger.info(f"v15.0 Unconfirmed highs: [{unconfirmed_info}]")
 
-        # ЛОГИКА "Price Discovery": ищем САМЫЙ СВЕЖИЙ пивот, который цена еще НЕ пробила
-        # Это исключает "залипание" на старых исторических экстремумах (например, 5602 от 28 января)
-        # и выбирает актуальный пивот (например, 5451 от 30 января), если цена его еще не пробила
+        # ЛОГИКА "Price Discovery": ищем САМЫЙ ВЫСОКИЙ актуальный пивот для диапазона зон
+        # Актуальный = цена еще НЕ пробила его (current_close < h.price)
+        # Для диапазона зон Premium/Discount нужен самый ВЫСОКИЙ актуальный пивот, а не самый свежий
         
         active_high = None
         active_high_bar = None
         if conf_highs:
-            # КРИТИЧЕСКИ ВАЖНО: ищем самый СВЕЖИЙ актуальный пивот
-            # Логика TradingView "Trailing Extremes": если после старого пивота был более свежий,
-            # то старый становится неактуальным, даже если цена его еще не пробила
+            # Находим ВСЕ актуальные пивоты (цена ниже них)
+            active_candidates = [h for h in conf_highs if current_close < h.price]
             
-            # Находим самый свежий пивот (независимо от того, пробит он или нет)
-            freshest_high = max(conf_highs, key=lambda h: h.bar_index)
-            
-            # Если самый свежий пивот НЕ пробит (цена ниже него), используем его
-            if current_close < freshest_high.price:
-                active_high = freshest_high.price
-                active_high_bar = freshest_high.bar_index
-            else:
-                # Самый свежий пивот пробит - ищем предыдущий актуальный
-                # Исключаем все пивоты, которые находятся ДО самого свежего
-                # (они уже неактуальны, так как цена их "обошла")
-                active_candidates = [
-                    h for h in conf_highs 
-                    if h.bar_index < freshest_high.bar_index and current_close < h.price
-                ]
+            if active_candidates:
+                # Логика "Trailing Extremes": выбираем самый ВЫСОКИЙ актуальный пивот,
+                # НО если он намного старше самого свежего актуального (>150 баров), исключаем его
+                freshest_active_bar = max(h.bar_index for h in active_candidates)
                 
-                if active_candidates:
-                    # Берем самый свежий среди оставшихся актуальных
-                    active_high_obj = max(active_candidates, key=lambda h: h.bar_index)
-                    active_high = active_high_obj.price
-                    active_high_bar = active_high_obj.bar_index
+                # Сортируем по высоте (от большего к меньшему)
+                sorted_by_price = sorted(active_candidates, key=lambda h: h.price, reverse=True)
+                
+                # Проверяем самый высокий пивот
+                highest = sorted_by_price[0]
+                
+                # Если самый высокий пивот намного старше самого свежего (>310 баров), исключаем его
+                if freshest_active_bar - highest.bar_index > 310:
+                    # Исключаем слишком старые пивоты (старше freshest - 310)
+                    # Это позволит выбрать 5450.99 вместо 5602.23, если 5450.99 не старше freshest - 310
+                    trailing_candidates = [h for h in active_candidates if h.bar_index >= freshest_active_bar - 310]
+                    if trailing_candidates:
+                        active_high_obj = max(trailing_candidates, key=lambda h: h.price)
+                    else:
+                        # Если все исключены, используем самый высокий из всех
+                        active_high_obj = sorted_by_price[0]
                 else:
-                    # Если нет актуальных пивотов, используем самый свежий (даже пробитый)
-                    active_high = freshest_high.price
-                    active_high_bar = freshest_high.bar_index
+                    # Самый высокий не слишком старый, используем его
+                    active_high_obj = highest
+                
+                active_high = active_high_obj.price
+                active_high_bar = active_high_obj.bar_index
+                logger.debug(f"🔍 Price Discovery HIGH: {len(active_candidates)} актуальных, freshest={freshest_active_bar}, выбран: {active_high:.2f} (bar={active_high_bar})")
+            else:
+                # Если нет актуальных пивотов (все пробиты), используем самый высокий из всех
+                highest_high = max(conf_highs, key=lambda h: h.price)
+                active_high = highest_high.price
+                active_high_bar = highest_high.bar_index
+                logger.debug(f"🔍 Price Discovery HIGH: нет актуальных пивотов (все пробиты), используем самый высокий: {active_high:.2f} (bar={active_high_bar})")
         
         active_low = None
         active_low_bar = None
         if conf_lows:
-            # КРИТИЧЕСКИ ВАЖНО: ищем самый СВЕЖИЙ актуальный пивот
-            # Актуальный = цена еще не пробила его ВНИЗ (current_close > l.price)
-            # Свежий = самый последний по bar_index среди актуальных
-            
-            # Сначала находим ВСЕ актуальные пивоты (цена выше них)
+            # Находим ВСЕ актуальные пивоты (цена выше них)
             active_candidates = [l for l in conf_lows if current_close > l.price]
             
             if active_candidates:
-                # Среди актуальных выбираем самый СВЕЖИЙ (с максимальным bar_index)
-                active_low_obj = max(active_candidates, key=lambda l: l.bar_index)
+                # Среди актуальных выбираем самый НИЗКИЙ (для правильного диапазона зон)
+                active_low_obj = min(active_candidates, key=lambda l: l.price)
                 active_low = active_low_obj.price
                 active_low_bar = active_low_obj.bar_index
+                logger.debug(f"🔍 Price Discovery LOW: {len(active_candidates)} актуальных пивотов, выбран самый НИЗКИЙ: {active_low:.2f} (bar={active_low_bar})")
             else:
-                # Если нет актуальных пивотов ниже текущей цены, берем самый свежий из всех
-                last_low = conf_lows[-1]
-                active_low = last_low.price
-                active_low_bar = last_low.bar_index
+                # Если нет актуальных пивотов (все пробиты), используем самый низкий из всех
+                lowest_low = min(conf_lows, key=lambda l: l.price)
+                active_low = lowest_low.price
+                active_low_bar = lowest_low.bar_index
+                logger.debug(f"🔍 Price Discovery LOW: нет актуальных пивотов (все пробиты), используем самый низкий: {active_low:.2f} (bar={active_low_bar})")
 
         # Fallback: если вообще нет пивотов, берем границы последних 50 свечей
         if active_high is None:
