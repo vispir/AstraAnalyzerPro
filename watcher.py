@@ -42,7 +42,7 @@ from services.telegram_service import telegram_service
 SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
 WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
 FRESH_SIGNAL_BARS = 25
-LOOKBACK_BARS = 250
+LOOKBACK_BARS = 600  # Увеличено до 600 для правильного Price Discovery (нужно найти пивоты до 331 баров назад)
 EXTREME_DISCOUNT_THRESHOLD = 15.0
 EXTREME_PREMIUM_THRESHOLD = 85.0
 
