@@ -758,33 +758,51 @@ def run_analysis_cycle():
     zones = advanced.get('zones', {})
     key_levels = advanced.get('key_levels', {})
     
+    # Получаем текущую цену для валидации диапазона
+    current_price = safe_float(candles[-1].get('close', 0), 0.0)
+    
     # Приоритет: zones -> key_levels -> fallback на calculate_forced_zones
     zone_source = 'FALLBACK'  # По умолчанию
+    zones_valid = False
+    
     if zones and zones.get('range_high', 0) > 0 and zones.get('range_low', 0) > 0:
-        # Используем данные из нового детектора (правильные trailing extremes)
-        current_zone = zones.get('current_zone', 'UNKNOWN')
-        position_in_range_pct = zones.get('position_in_range_pct', 50.0)
         global_high = zones.get('range_high', 0.0)
         global_low = zones.get('range_low', 0.0)
-        zone_source = zones.get('range_source', 'SWING_STRUCTURE')
-        logger.info(f"✅ Используем зоны из нового детектора ({zone_source})")
-    elif key_levels and key_levels.get('High_250', 0) > 0:
-        # Fallback на key_levels
-        current_zone = key_levels.get('Current_Zone', 'UNKNOWN')
-        position_in_range_pct = key_levels.get('Range_Percent', 50.0)
-        global_high = key_levels.get('High_250', 0.0)
-        global_low = key_levels.get('Low_250', 0.0)
-        zone_source = 'KEY_LEVELS'
-        logger.info(f"⚠️ Используем зоны из key_levels (fallback)")
-    else:
-        # Последний fallback на старую логику (для обратной совместимости)
-        current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
-        zone_source = 'CALCULATE_FORCED'
-        logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback)")
+        range_size = global_high - global_low
+        
+        # ВАЖНО: Проверяем валидность диапазона
+        # Если диапазон слишком узкий (< 0.5% от цены) или цена выходит за пределы, используем fallback
+        min_valid_range = current_price * 0.005  # Минимум 0.5% от цены
+        
+        if range_size >= min_valid_range and global_low <= current_price <= global_high:
+            # Диапазон валидный - используем данные из нового детектора
+            current_zone = zones.get('current_zone', 'UNKNOWN')
+            position_in_range_pct = zones.get('position_in_range_pct', 50.0)
+            zone_source = zones.get('range_source', 'SWING_STRUCTURE')
+            zones_valid = True
+            logger.info(f"✅ Используем зоны из нового детектора ({zone_source}): [{global_low:.2f} - {global_high:.2f}], price={current_price:.2f}")
+        else:
+            # Диапазон невалидный - используем fallback
+            logger.warning(f"⚠️ Диапазон из детектора невалидный (size={range_size:.2f}, price={current_price:.2f} вне [{global_low:.2f}-{global_high:.2f}]), используем fallback")
+    
+    if not zones_valid:
+        # Пробуем fallback на key_levels
+        if key_levels and key_levels.get('High_250', 0) > 0:
+            # Fallback на key_levels
+            current_zone = key_levels.get('Current_Zone', 'UNKNOWN')
+            position_in_range_pct = key_levels.get('Range_Percent', 50.0)
+            global_high = key_levels.get('High_250', 0.0)
+            global_low = key_levels.get('Low_250', 0.0)
+            zone_source = 'KEY_LEVELS'
+            logger.info(f"⚠️ Используем зоны из key_levels (fallback)")
+        else:
+            # Последний fallback на старую логику (для обратной совместимости)
+            current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
+            zone_source = 'CALCULATE_FORCED'
+            logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback)")
     
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
-    current_price = safe_float(candles[-1].get('close', 0), 0.0)
     
     # Impulse Context v5.2
     impulse_context = analysis.get('impulse_context', {})
