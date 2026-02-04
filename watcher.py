@@ -777,10 +777,12 @@ def run_analysis_cycle():
         if range_size >= min_valid_range and global_low <= current_price <= global_high:
             # Диапазон валидный - используем данные из нового детектора
             current_zone = zones.get('current_zone', 'UNKNOWN')
-            position_in_range_pct = zones.get('position_in_range_pct', 50.0)
+            # ВАЖНО: Пересчитываем position_in_range_pct на основе текущей цены и валидированного диапазона
+            # Это гарантирует правильность, даже если детектор вернул некорректное значение
+            position_in_range_pct = ((current_price - global_low) / range_size) * 100
             zone_source = zones.get('range_source', 'SWING_STRUCTURE')
             zones_valid = True
-            logger.info(f"✅ Используем зоны из нового детектора ({zone_source}): [{global_low:.2f} - {global_high:.2f}], price={current_price:.2f}")
+            logger.info(f"✅ Используем зоны из нового детектора ({zone_source}): [{global_low:.2f} - {global_high:.2f}], price={current_price:.2f}, pos={position_in_range_pct:.1f}%")
         else:
             # Диапазон невалидный - используем fallback
             logger.warning(f"⚠️ Диапазон из детектора невалидный (size={range_size:.2f}, price={current_price:.2f} вне [{global_low:.2f}-{global_high:.2f}]), используем fallback")
@@ -790,16 +792,30 @@ def run_analysis_cycle():
         if key_levels and key_levels.get('High_250', 0) > 0:
             # Fallback на key_levels
             current_zone = key_levels.get('Current_Zone', 'UNKNOWN')
-            position_in_range_pct = key_levels.get('Range_Percent', 50.0)
             global_high = key_levels.get('High_250', 0.0)
             global_low = key_levels.get('Low_250', 0.0)
+            # ВАЖНО: Пересчитываем position_in_range_pct на основе текущей цены
+            range_size_fallback = global_high - global_low
+            if range_size_fallback > 0:
+                position_in_range_pct = ((current_price - global_low) / range_size_fallback) * 100
+            else:
+                position_in_range_pct = 50.0
             zone_source = 'KEY_LEVELS'
-            logger.info(f"⚠️ Используем зоны из key_levels (fallback)")
+            logger.info(f"⚠️ Используем зоны из key_levels (fallback): [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
         else:
             # Последний fallback на старую логику (для обратной совместимости)
             current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
             zone_source = 'CALCULATE_FORCED'
-            logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback)")
+            logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback): [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
+    
+    # ВАЖНО: Гарантируем, что position_in_range_pct находится в разумных пределах (0-100%)
+    # Это защита от некорректных значений из детектора или fallback
+    if position_in_range_pct < 0:
+        logger.warning(f"⚠️ position_in_range_pct < 0 ({position_in_range_pct:.1f}%), ограничиваем до 0%")
+        position_in_range_pct = 0.0
+    elif position_in_range_pct > 100:
+        logger.warning(f"⚠️ position_in_range_pct > 100 ({position_in_range_pct:.1f}%), ограничиваем до 100%")
+        position_in_range_pct = 100.0
     
     swing_trend = analysis.get('trend', 'NEUTRAL')
     internal_trend = analysis.get('internal_trend', 'NEUTRAL')
