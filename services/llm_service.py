@@ -1098,10 +1098,20 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             
             # Мы вызываем уже существующий метод _analyze_with_gemini.
             # Он внутри сам склеит self.SYSTEM_PROMPT и данные.
+            
+            # v8.2 FIX: Извлекаем key_levels из новой структуры с timeframes
+            computed_levels = {}
+            if 'timeframes' in analysis_data and 'M15' in analysis_data['timeframes']:
+                m15_analysis = analysis_data['timeframes']['M15'].get('analysis', {})
+                computed_levels = m15_analysis.get('advanced', {}).get('key_levels', {})
+            else:
+                # Fallback для старой структуры
+                computed_levels = analysis_data.get('advanced', {}).get('key_levels', {})
+            
             result = self._analyze_with_gemini(
                 technical_data=analysis_data,
                 news_data={"info": "Automated Watcher Alert - No high impact news checked"},
-                computed_levels=analysis_data.get('advanced', {}).get('key_levels', {}),
+                computed_levels=computed_levels,
                 chart_images={}, # В фоновом режиме пока без картинок для скорости
                 language='ru'
             )
