@@ -1218,57 +1218,18 @@ def run_analysis_cycle():
     logger.info("=" * 60)
     
     # ========================================================================
-    # v8.2: Формируем структуру technical_data с timeframes для LLM
+    # v8.3: Передаем analysis напрямую в LLM (только M15)
     # ========================================================================
-    # LLM ожидает структуру с timeframes (H4, H1, M15), как в llm_routes
-    logger.info("📊 Запрашиваем данные всех ТФ для LLM...")
+    logger.info("📊 Подготавливаем данные M15 для LLM...")
     
-    # Запрашиваем H4 и H1 данные
-    h4_data = oanda_service.get_candles(timeframe='H4', limit=40)
-    h1_data = oanda_service.get_candles(timeframe='H1', limit=40)
-    
-    # Формируем анализ для каждого ТФ
-    technical_data = {
-        'timeframes': {}
-    }
-    
-    # M15 (уже есть)
+    # Добавляем свечи к analysis для LLM
     if 'error' not in data and data.get('candles'):
         m15_candles = data.get('candles', [])[-50:]  # Последние 50 для LLM
-        m15_analysis = analysis  # Уже проанализировано выше
-        technical_data['timeframes']['M15'] = {
-            'candles': m15_candles,
-            'analysis': m15_analysis
-        }
+        analysis['candles'] = m15_candles
+        logger.info(f"✓ M15 данные подготовлены: {len(m15_candles)} свечей")
     
-    # H1
-    if 'error' not in h1_data and h1_data.get('candles'):
-        h1_candles = h1_data.get('candles', [])[-20:]  # Последние 20 для LLM
-        h1_analysis = smc_detector.analyze(h1_candles) if smc_detector else {}
-        technical_data['timeframes']['H1'] = {
-            'candles': h1_candles,
-            'analysis': h1_analysis
-        }
-        logger.info(f"✓ H1 данные получены: {len(h1_candles)} свечей")
-    else:
-        logger.warning(f"⚠️ H1 данные недоступны: {h1_data.get('error', 'Unknown')}")
-    
-    # H4
-    if 'error' not in h4_data and h4_data.get('candles'):
-        h4_candles = h4_data.get('candles', [])[-10:]  # Последние 10 для LLM
-        h4_analysis = smc_detector.analyze(h4_candles) if smc_detector else {}
-        technical_data['timeframes']['H4'] = {
-            'candles': h4_candles,
-            'analysis': h4_analysis
-        }
-        logger.info(f"✓ H4 данные получены: {len(h4_candles)} свечей")
-    else:
-        logger.warning(f"⚠️ H4 данные недоступны: {h4_data.get('error', 'Unknown')}")
-    
-    logger.info(f"📊 Technical data подготовлен: {len(technical_data.get('timeframes', {}))} ТФ")
-    
-    # Вызов Gemini с полными данными всех ТФ
-    ai_response = llm_service.get_signal_verdict(technical_data)
+    # Вызов Gemini с analysis
+    ai_response = llm_service.get_signal_verdict(analysis)
     
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
