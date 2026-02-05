@@ -965,11 +965,36 @@ class SMCDetector:
             active_candidates = [l for l in conf_lows if current_close > l.price]
             
             if active_candidates:
-                # Среди актуальных выбираем самый НИЗКИЙ (для правильного диапазона зон)
-                active_low_obj = min(active_candidates, key=lambda l: l.price)
+                # Логика "Trailing Extremes": выбираем самый НИЗКИЙ актуальный пивот,
+                # НО если он намного старше самого свежего актуального (>310 баров), исключаем его
+                freshest_active_bar = max(l.bar_index for l in active_candidates)
+                
+                # Сортируем по высоте (от меньшего к большему)
+                sorted_by_price = sorted(active_candidates, key=lambda l: l.price, reverse=False)
+                
+                # Проверяем самый низкий пивот
+                lowest = sorted_by_price[0]
+                
+                # Если самый низкий пивот намного старше самого свежего (>250 баров), исключаем его
+                # Используем меньшее окно для lows (250 вместо 310), чтобы быстрее обновляться на свежие минимумы
+                if freshest_active_bar - lowest.bar_index > 250:
+                    # Исключаем слишком старые пивоты (старше freshest - 250)
+                    # Это позволит выбрать более свежий low (например, 4789.65) вместо старого исторического минимума (4402.38)
+                    trailing_candidates = [l for l in active_candidates if l.bar_index >= freshest_active_bar - 250]
+                    if trailing_candidates:
+                        active_low_obj = min(trailing_candidates, key=lambda l: l.price)
+                        logger.info(f"v15.0 Price Discovery LOW: lowest={lowest.price:.2f}(bar={lowest.bar_index}) слишком старый (>{freshest_active_bar - 310}), выбран из trailing: {active_low_obj.price:.2f}(bar={active_low_obj.bar_index})")
+                    else:
+                        # Если все исключены, используем самый низкий из всех
+                        active_low_obj = sorted_by_price[0]
+                        logger.warning(f"v15.0 Price Discovery LOW: все актуальные исключены по возрасту, используем самый низкий: {active_low_obj.price:.2f}(bar={active_low_obj.bar_index})")
+                else:
+                    # Самый низкий не слишком старый, используем его
+                    active_low_obj = lowest
+                
                 active_low = active_low_obj.price
                 active_low_bar = active_low_obj.bar_index
-                logger.debug(f"🔍 Price Discovery LOW: {len(active_candidates)} актуальных пивотов, выбран самый НИЗКИЙ: {active_low:.2f} (bar={active_low_bar})")
+                logger.info(f"🔍 Price Discovery LOW: {len(active_candidates)} актуальных, freshest={freshest_active_bar}, выбран: {active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar})")
             else:
                 # Если нет актуальных пивотов (все пробиты), используем самый низкий из всех
                 lowest_low = min(conf_lows, key=lambda l: l.price)
