@@ -1,5 +1,5 @@
 """
-SMC Detector v7.8 - Improved BOS/CHoCH Logic
+SMC Detector v7.9 - LuxAlgo-aligned Swing & Premium/Discount
 ===========================================================
 НОВОЕ v7.8 - УЛУЧШЕННАЯ ЛОГИКА BOS vs CHoCH:
 - Добавлен флаг is_initial для первого пробоя при NEUTRAL тренде
@@ -73,9 +73,10 @@ DEFAULT_INTERNAL_RIGHT = 2   # Минимальное подтверждение
 DEFAULT_SWING_LEFT = 8        # Для точного определения структуры
 DEFAULT_SWING_RIGHT = 4       # Быстрое подтверждение
 
-# Swing: для зон Premium/Discount (более строгие для широкого диапазона)
-DEFAULT_SWING_LEFT_ZONES = 50  # Для широкого диапазона зон
-DEFAULT_SWING_RIGHT_ZONES = 25 # Подтверждение для зон
+# Swing: для зон Premium/Discount (LuxAlgo Fibonacci Ranges - L/R параметры)
+# LuxAlgo: "Swing Settings (L & R)" - типично 5 или 10 для актуальных swing
+DEFAULT_SWING_LEFT_ZONES = 5   # LuxAlgo-style L
+DEFAULT_SWING_RIGHT_ZONES = 5  # LuxAlgo-style R (как ta.pivothigh(left, right))
 
 # v6.0 Параметры сигналов
 FRESH_SIGNAL_BARS = 25              # Свежий сигнал для визуализации
@@ -89,9 +90,13 @@ BREAKOUT_LOOKBACK = 20              # Пробой = ниже минимума N
 VOID_RUN_THRESHOLD = 0.005          # 0.5% от экстремума = void run
 IMPULSE_THRESHOLD = 2               # Минимум BOS для IMPULSE_TREND
 
-# Пороги зон
+# Пороги зон (LuxAlgo Price Action Concepts)
 PREMIUM_THRESHOLD = 66.6            # > 66.6% = Premium
 DISCOUNT_THRESHOLD = 33.3           # < 33.3% = Discount
+
+# LuxAlgo Fibonacci zone boundaries (docs.luxalgo.com)
+FIB_PREMIUM_BOTTOM = 0.618   # 61.8% - нижняя граница Premium
+FIB_DISCOUNT_TOP = 0.382     # 38.2% - верхняя граница Discount
 
 # v6.1 Фильтр шума - минимальный порог пробоя
 MIN_BREAK_ATR_RATIO = 0.15          # Пробой должен быть минимум 0.15 ATR (убирает микро-шум)
@@ -251,11 +256,10 @@ class SMCDetector:
     
     def _find_all_pivots(self, df: pd.DataFrame, left_bars: int, right_bars: int) -> Tuple[List[PivotPoint], List[PivotPoint]]:
         """
-        Находит ВСЕ pivot точки в истории (v6.0 LuxAlgo style)
+        Находит pivot точки как ta.pivothigh/ta.pivotlow в Pine Script (LuxAlgo).
         
-        Включает:
-        1. Подтверждённые pivot'ы (есть данные слева И справа)
-        2. Потенциальные pivot'ы для последних баров (только слева, partial confirmation)
+        Логика: bar[i] - pivot high если high[i] >= max(high[i-left..i-1]) И high[i] >= max(high[i+1..i+right]).
+        Аналогично для pivot low с <=.
         """
         pivot_highs = []
         pivot_lows = []
@@ -281,7 +285,7 @@ class SMCDetector:
             right_highs = highs[i + 1:i + right_bars + 1]
             
             if len(left_highs) > 0 and len(right_highs) > 0:
-                if current_high > np.max(left_highs) and current_high >= np.max(right_highs):
+                if current_high >= np.max(left_highs) and current_high >= np.max(right_highs):
                     bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
                     pivot_highs.append(PivotPoint(
                         price=float(current_high),
@@ -295,7 +299,7 @@ class SMCDetector:
             right_lows = lows[i + 1:i + right_bars + 1]
             
             if len(left_lows) > 0 and len(right_lows) > 0:
-                if current_low < np.min(left_lows) and current_low <= np.min(right_lows):
+                if current_low <= np.min(left_lows) and current_low <= np.min(right_lows):
                     bar_time = str(df.index[i]) if hasattr(df.index, '__getitem__') else str(i)
                     pivot_lows.append(PivotPoint(
                         price=float(current_low),
@@ -305,12 +309,11 @@ class SMCDetector:
                     ))
         
         # ================================================================
-        # 2. ПОТЕНЦИАЛЬНЫЕ PIVOT'ы для последних баров (v6.0 LuxAlgo style)
-        # Проверяем только левую сторону + частичную правую (сколько есть)
+        # 2. ПОТЕНЦИАЛЬНЫЕ PIVOT'ы для последних баров (включая текущий)
+        # Проверяем левую сторону + частичную правую (сколько есть)
+        # Включаем последние бары, чтобы подхватить новый swing low при пробое
         # ================================================================
-        min_right_confirm = max(1, right_bars // 2)  # Минимум 50% правых баров
-        
-        for i in range(confirmed_end, total_bars - min_right_confirm):
+        for i in range(confirmed_end, total_bars):
             current_high = highs[i]
             current_low = lows[i]
             available_right = total_bars - i - 1
@@ -329,7 +332,7 @@ class SMCDetector:
             
             # Потенциальный Pivot High
             if len(left_highs) > 0:
-                is_left_valid = current_high > np.max(left_highs)
+                is_left_valid = current_high >= np.max(left_highs)
                 is_right_valid = len(right_highs) == 0 or current_high >= np.max(right_highs)
                 
                 if is_left_valid and is_right_valid:
@@ -343,7 +346,7 @@ class SMCDetector:
             
             # Потенциальный Pivot Low
             if len(left_lows) > 0:
-                is_left_valid = current_low < np.min(left_lows)
+                is_left_valid = current_low <= np.min(left_lows)
                 is_right_valid = len(right_lows) == 0 or current_low <= np.min(right_lows)
                 
                 if is_left_valid and is_right_valid:
@@ -836,10 +839,7 @@ class SMCDetector:
         result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
         # ================================================================
-        # v15.0 PRICE DISCOVERY - Актуальный Dealing Range (как TradingView)
-        # ================================================================
-        # ВАЖНО: Для зон используем ОТДЕЛЬНЫЕ параметры (более строгие) для широкого диапазона
-        # Это позволяет иметь точные BOS/CHoCH (8/4) и широкие зоны (50/25)
+        # LuxAlgo Price Discovery - swing high/low для зон (L/R=5/5, latest pivot)
         sw_pivot_highs_zones, sw_pivot_lows_zones = self._find_all_pivots(df, self.swing_left_zones, self.swing_right_zones)
         
         total_bars = len(df)
@@ -851,157 +851,33 @@ class SMCDetector:
         conf_highs = [p for p in sw_pivot_highs_zones if p.bar_index <= confirm_idx]
         conf_lows = [p for p in sw_pivot_lows_zones if p.bar_index <= confirm_idx]
         
-        # КРИТИЧЕСКИ ВАЖНО: логируем ВСЕ пивоты для зон (даже неподтвержденные) для поиска 5451
         all_highs = sw_pivot_highs_zones
         all_lows = sw_pivot_lows_zones
-        
-        # Ищем пивот на 5451 во всех пивотах
-        target_price = 5451.0
-        tolerance = 5.0  # Допустимое отклонение
-        
-        found_pivot = None
-        for h in all_highs:
-            if abs(h.price - target_price) <= tolerance:
-                found_pivot = h
-                break
-        
-        # Если пивот не найден в стандартных пивотах, ищем локальный максимум в данных
-        if not found_pivot:
-            # Ожидаемое положение: примерно 323 баров назад от текущей цены
-            expected_bars_ago = 323
-            search_start_bar = max(0, total_bars - expected_bars_ago - 50)  # Окно ±50 баров
-            search_end_bar = min(total_bars, total_bars - expected_bars_ago + 50)
-            
-            # Ищем локальный максимум в этом окне
-            search_window = df.iloc[search_start_bar:search_end_bar].copy()
-            if len(search_window) > 0:
-                # Ищем свечу с high, ближайшим к 5451
-                search_window['distance_to_target'] = abs(search_window['high'] - target_price)
-                closest_idx = search_window['distance_to_target'].idxmin()
-                closest_candle = search_window.loc[closest_idx]
-                closest_price = float(closest_candle['high'])
-                # Правильно вычисляем bar_index: это позиция в исходном DataFrame
-                closest_bar = df.index.get_loc(closest_idx) if hasattr(df.index, 'get_loc') else search_start_bar + list(search_window.index).index(closest_idx)
-                
-                if abs(closest_price - target_price) <= tolerance * 2:  # Увеличенная толерантность для поиска
-                    # Создаем "виртуальный" пивот для использования
-                    found_pivot = PivotPoint(
-                        price=closest_price,
-                        bar_index=int(closest_bar),
-                        bar_time=str(closest_idx) if hasattr(closest_idx, '__str__') else "",
-                        is_high=True
-                    )
-                    logger.warning(f"v15.0 FOUND TARGET PIVOT 5451 via LOCAL SEARCH: price={found_pivot.price:.2f}, bar={found_pivot.bar_index}, ago={total_bars-1-found_pivot.bar_index}")
-                    # Добавляем найденный пивот в список для использования
-                    all_highs.append(found_pivot)
-                    if found_pivot.bar_index <= confirm_idx:
-                        conf_highs.append(found_pivot)
-        
-        if found_pivot:
-            if found_pivot not in all_highs or found_pivot not in conf_highs:
-                logger.warning(f"v15.0 FOUND TARGET PIVOT 5451: price={found_pivot.price:.2f}, bar={found_pivot.bar_index}, ago={total_bars-1-found_pivot.bar_index}, confirmed={found_pivot.bar_index <= confirm_idx}")
-        else:
-            logger.warning(f"v15.0 TARGET PIVOT 5451 NOT FOUND in {len(all_highs)} total highs!")
-            if all_highs:
-                all_highs_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in all_highs])
-                logger.warning(f"v15.0 All swing highs: [{all_highs_info}]")
-        
-        if len(all_highs) > len(conf_highs):
-            logger.info(f"v15.0 Debug: Total pivots - Highs: {len(all_highs)} (confirmed: {len(conf_highs)}), Confirm idx={confirm_idx}")
-            unconfirmed = [h for h in all_highs if h.bar_index > confirm_idx]
-            if unconfirmed:
-                unconfirmed_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in unconfirmed])
-                logger.info(f"v15.0 Unconfirmed highs: [{unconfirmed_info}]")
 
-        # ЛОГИКА "Price Discovery": ищем САМЫЙ ВЫСОКИЙ актуальный пивот для диапазона зон
-        # Актуальный = цена еще НЕ пробила его (current_close < h.price)
-        # Для диапазона зон Premium/Discount нужен самый ВЫСОКИЙ актуальный пивот, а не самый свежий
+        # Swing High (Premium): ВЫСОЧАЙШИЙ среди недавних — формирует потолок зоны (4943, не 4906)
+        # Swing Low (Discount): ПОСЛЕДНИЙ — подхватывает новый low при пробое (4749)
+        lookback_high = 80  # баров для поиска высочайшего swing high
+        min_bar_high = max(0, total_bars - 1 - lookback_high)
         
         active_high = None
         active_high_bar = None
-        if conf_highs:
-            # Находим ВСЕ актуальные пивоты (цена ниже них)
-            active_candidates = [h for h in conf_highs if current_close < h.price]
-            
-            if active_candidates:
-                # Логика "Trailing Extremes": выбираем самый ВЫСОКИЙ актуальный пивот,
-                # НО если он намного старше самого свежего актуального (>150 баров), исключаем его
-                freshest_active_bar = max(h.bar_index for h in active_candidates)
-                
-                # Сортируем по высоте (от большего к меньшему)
-                sorted_by_price = sorted(active_candidates, key=lambda h: h.price, reverse=True)
-                
-                # Проверяем самый высокий пивот
-                highest = sorted_by_price[0]
-                
-                # Если самый высокий пивот намного старше самого свежего (>310 баров), исключаем его
-                if freshest_active_bar - highest.bar_index > 310:
-                    # Исключаем слишком старые пивоты (старше freshest - 310)
-                    # Это позволит выбрать 5450.99 вместо 5602.23, если 5450.99 не старше freshest - 310
-                    trailing_candidates = [h for h in active_candidates if h.bar_index >= freshest_active_bar - 310]
-                    if trailing_candidates:
-                        active_high_obj = max(trailing_candidates, key=lambda h: h.price)
-                    else:
-                        # Если все исключены, используем самый высокий из всех
-                        active_high_obj = sorted_by_price[0]
-                else:
-                    # Самый высокий не слишком старый, используем его
-                    active_high_obj = highest
-                
-                active_high = active_high_obj.price
-                active_high_bar = active_high_obj.bar_index
-                logger.debug(f"🔍 Price Discovery HIGH: {len(active_candidates)} актуальных, freshest={freshest_active_bar}, выбран: {active_high:.2f} (bar={active_high_bar})")
-            else:
-                # Если нет актуальных пивотов (все пробиты), используем самый высокий из всех
-                highest_high = max(conf_highs, key=lambda h: h.price)
+        if all_highs:
+            recent_highs = [h for h in all_highs if h.bar_index >= min_bar_high]
+            if recent_highs:
+                highest_high = max(recent_highs, key=lambda h: h.price)
                 active_high = highest_high.price
                 active_high_bar = highest_high.bar_index
-                logger.debug(f"🔍 Price Discovery HIGH: нет актуальных пивотов (все пробиты), используем самый высокий: {active_high:.2f} (bar={active_high_bar})")
+            else:
+                highest_high = max(all_highs, key=lambda h: h.price)
+                active_high = highest_high.price
+                active_high_bar = highest_high.bar_index
         
         active_low = None
         active_low_bar = None
-        if conf_lows:
-            # Находим ВСЕ актуальные пивоты (цена выше них)
-            active_candidates = [l for l in conf_lows if current_close > l.price]
-            
-            if active_candidates:
-                # Логика "Trailing Extremes": выбираем самый НИЗКИЙ актуальный пивот,
-                # НО если он намного старше самого свежего актуального (>310 баров), исключаем его
-                freshest_active_bar = max(l.bar_index for l in active_candidates)
-                
-                # Сортируем по высоте (от меньшего к большему)
-                sorted_by_price = sorted(active_candidates, key=lambda l: l.price, reverse=False)
-                
-                # Проверяем самый низкий пивот
-                lowest = sorted_by_price[0]
-                
-                # Если самый низкий пивот намного старше самого свежего (>250 баров), исключаем его
-                # Используем меньшее окно для lows (250 вместо 310), чтобы быстрее обновляться на свежие минимумы
-                if freshest_active_bar - lowest.bar_index > 250:
-                    # Исключаем слишком старые пивоты (старше freshest - 250)
-                    # Это позволит выбрать более свежий low (например, 4789.65) вместо старого исторического минимума (4402.38)
-                    trailing_candidates = [l for l in active_candidates if l.bar_index >= freshest_active_bar - 250]
-                    if trailing_candidates:
-                        active_low_obj = min(trailing_candidates, key=lambda l: l.price)
-                        logger.info(f"v15.0 Price Discovery LOW: lowest={lowest.price:.2f}(bar={lowest.bar_index}) слишком старый (>{freshest_active_bar - 310}), выбран из trailing: {active_low_obj.price:.2f}(bar={active_low_obj.bar_index})")
-                    else:
-                        # Если все исключены, используем самый низкий из всех
-                        active_low_obj = sorted_by_price[0]
-                        logger.warning(f"v15.0 Price Discovery LOW: все актуальные исключены по возрасту, используем самый низкий: {active_low_obj.price:.2f}(bar={active_low_obj.bar_index})")
-                else:
-                    # Самый низкий не слишком старый, используем его
-                    active_low_obj = lowest
-                
-                active_low = active_low_obj.price
-                active_low_bar = active_low_obj.bar_index
-                logger.info(f"🔍 Price Discovery LOW: {len(active_candidates)} актуальных, freshest={freshest_active_bar}, выбран: {active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar})")
-            else:
-                # Если нет актуальных пивотов (все пробиты), используем самый низкий из всех
-                lowest_low = min(conf_lows, key=lambda l: l.price)
-                active_low = lowest_low.price
-                active_low_bar = lowest_low.bar_index
-                logger.debug(f"🔍 Price Discovery LOW: нет актуальных пивотов (все пробиты), используем самый низкий: {active_low:.2f} (bar={active_low_bar})")
-
+        if all_lows:
+            latest_low = max(all_lows, key=lambda l: l.bar_index)
+            active_low = latest_low.price
+            active_low_bar = latest_low.bar_index
         # Fallback: если вообще нет пивотов, берем границы последних 50 свечей
         if active_high is None:
             active_high = float(df['high'].tail(50).max())
@@ -1028,7 +904,19 @@ class SMCDetector:
         if conf_lows:
             all_lows_info = ", ".join([f"{l.price:.2f}(bar={l.bar_index},ago={total_bars-1-l.bar_index})" for l in conf_lows])
             logger.info(f"v15.0 All confirmed lows ({len(conf_lows)}): [{all_lows_info}]")
-            logger.info(f"v15.0 Selected: Low={active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar if active_low_bar else 'N/A'})")
+        is_potential_low = active_low_bar is not None and active_low_bar > confirm_idx
+        suffix = " [potential]" if is_potential_low else ""
+        logger.info(f"v15.0 Selected: Low={active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar if active_low_bar else 'N/A'}){suffix}")
+        
+        # Highs/Lows за последние 115 баров (M15)
+        lookback_115 = 115
+        min_bar_115 = max(0, total_bars - 1 - lookback_115)
+        highs_115 = [h for h in all_highs if h.bar_index >= min_bar_115]
+        lows_115 = [l for l in all_lows if l.bar_index >= min_bar_115]
+        highs_115_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in sorted(highs_115, key=lambda x: x.bar_index)])
+        lows_115_info = ", ".join([f"{l.price:.2f}(bar={l.bar_index},ago={total_bars-1-l.bar_index})" for l in sorted(lows_115, key=lambda x: x.bar_index)])
+        logger.info(f"v15.0 Last {lookback_115} bars (M15) - Highs ({len(highs_115)}): [{highs_115_info}]")
+        logger.info(f"v15.0 Last {lookback_115} bars (M15) - Lows ({len(lows_115)}): [{lows_115_info}]")
         
         # ================================================================
         # ЛОГИРОВАНИЕ v7.7
@@ -1103,11 +991,11 @@ class SMCDetector:
             else:
                 zone_name = "EQUILIBRIUM"
 
-            # Классический LuxAlgo стиль
-            premium_box_bottom = l_min + (range_size * 0.95) # Узкая красная полоска
-            discount_box_top = l_min + (range_size * 0.05)   # Узкая зеленая полоска
-            eq_top = l_min + (range_size * 0.525)
-            eq_bottom = l_min + (range_size * 0.475)
+            # LuxAlgo Fibonacci zones: Premium 61.8%-100%, Discount 0%-38.2%
+            premium_box_bottom = l_min + (range_size * FIB_PREMIUM_BOTTOM)
+            discount_box_top = l_min + (range_size * FIB_DISCOUNT_TOP)
+            eq_top = l_min + (range_size * 0.618)
+            eq_bottom = l_min + (range_size * 0.382)
 
             return {
                 'premium': {'top': float(h_max), 'bottom': float(premium_box_bottom)},
@@ -1760,11 +1648,23 @@ class SMCDetector:
             swing_lows = []
             
             for i in range(2, len(recent_df) - 2):
+                idx_val = None
+                try:
+                    idx_val = int(recent_df.index[i])
+                except Exception:
+                    idx_val = None
+                time_val = None
+                if 'time' in recent_df.columns:
+                    try:
+                        time_val = int(recent_df['time'].iloc[i])
+                    except Exception:
+                        time_val = None
+
                 if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
-                    swing_highs.append({'price': float(recent_df['high'].iloc[i]), 'index': i})
+                    swing_highs.append({'price': float(recent_df['high'].iloc[i]), 'index': idx_val, 'time': time_val})
                 
                 if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
-                    swing_lows.append({'price': float(recent_df['low'].iloc[i]), 'index': i})
+                    swing_lows.append({'price': float(recent_df['low'].iloc[i]), 'index': idx_val, 'time': time_val})
             
             # Equal Highs
             for i in range(len(swing_highs) - 1):
@@ -1772,7 +1672,17 @@ class SMCDetector:
                     if abs(swing_highs[i]['price'] - swing_highs[j]['price']) < threshold:
                         avg_price = (swing_highs[i]['price'] + swing_highs[j]['price']) / 2
                         if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eqh']):
-                            equal_levels['eqh'].append({'price': float(avg_price), 'type': 'EQUAL_HIGHS', 'touches': 2})
+                            left = swing_highs[i]
+                            right = swing_highs[j]
+                            equal_levels['eqh'].append({
+                                'price': float(avg_price),
+                                'type': 'EQUAL_HIGHS',
+                                'touches': 2,
+                                'left_index': left.get('index'),
+                                'right_index': right.get('index'),
+                                'left_time': left.get('time'),
+                                'right_time': right.get('time')
+                            })
             
             # Equal Lows
             for i in range(len(swing_lows) - 1):
@@ -1780,7 +1690,17 @@ class SMCDetector:
                     if abs(swing_lows[i]['price'] - swing_lows[j]['price']) < threshold:
                         avg_price = (swing_lows[i]['price'] + swing_lows[j]['price']) / 2
                         if not any(abs(eq['price'] - avg_price) < threshold for eq in equal_levels['eql']):
-                            equal_levels['eql'].append({'price': float(avg_price), 'type': 'EQUAL_LOWS', 'touches': 2})
+                            left = swing_lows[i]
+                            right = swing_lows[j]
+                            equal_levels['eql'].append({
+                                'price': float(avg_price),
+                                'type': 'EQUAL_LOWS',
+                                'touches': 2,
+                                'left_index': left.get('index'),
+                                'right_index': right.get('index'),
+                                'left_time': left.get('time'),
+                                'right_time': right.get('time')
+                            })
             
             equal_levels['eqh'] = equal_levels['eqh'][-3:]
             equal_levels['eql'] = equal_levels['eql'][-3:]

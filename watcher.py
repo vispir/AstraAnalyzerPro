@@ -317,12 +317,19 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
         sl = escape_html(verdict['sl'] or 'N/A')
         tp = escape_html(verdict['tp'] or 'N/A')
         confidence = verdict['confidence'] or 0
-        reason = escape_html(verdict['reason'] or 'SMC Confirmation')
         
         # Получаем дополнительные данные
         signal_data = parsed_data.get('signal', {}) if parsed_data else {}
         trade_plan = parsed_data.get('trade_plan', {}) if parsed_data else {}
         math_log = parsed_data.get('math_debug_log', {}) if parsed_data else {}
+        
+        # ВАЖНО: Используем ПОЛНЫЙ executive_summary из parsed_data для Telegram сообщения
+        # (не обрезанный reason из verdict, который ограничен 500 символами для БД)
+        full_reason = parsed_data.get('executive_summary', '') if parsed_data else ''
+        if not full_reason:
+            # Fallback на обрезанный reason из verdict, если executive_summary нет
+            full_reason = verdict.get('reason', 'SMC Confirmation')
+        reason = escape_html(full_reason)
         
         setup_type = escape_html(signal_data.get('setup_type', 'N/A'))
         setup_grade = escape_html(signal_data.get('setup_grade', 'N/A'))

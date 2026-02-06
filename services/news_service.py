@@ -1,6 +1,7 @@
 """
 Сервис для работы с экономическими новостями через investpy и gnews
 """
+import json
 import logging
 import concurrent.futures
 from datetime import datetime, timedelta
@@ -146,8 +147,15 @@ class NewsService:
             
             return events
             
+        except json.JSONDecodeError as e:
+            # investpy: Investing.com часто возвращает пустой/HTML вместо JSON
+            logger.warning(
+                f"investpy returned invalid response (Investing.com may have changed API): {e}. "
+                "Calendar data unavailable for this request."
+            )
+            return []
         except Exception as e:
-            logger.error(f"Error fetching calendar from investpy: {str(e)}")
+            logger.warning(f"Error fetching calendar from investpy: {str(e)}")
             return []
     
     def _get_currency_from_zone(self, zone: str) -> str:

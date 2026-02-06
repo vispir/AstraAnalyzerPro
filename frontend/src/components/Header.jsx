@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, ChevronDown } from 'lucide-react';
+import { User, LogOut, ChevronDown, TrendingUp, TrendingDown } from 'lucide-react';
 
 // Теперь Header - "тупой" компонент, получающий все как пропсы
-const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) => {
+const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout, onAddProjection, onClearProjections, placementMode }) => {
   const [time, setTime] = useState(new Date());
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showProjectionMenu, setShowProjectionMenu] = useState(false);
   const menuRef = useRef(null);
+  const projectionMenuRef = useRef(null);
 
   // ТАЙМЕР И КЛИК ВНЕ МЕНЮ
   useEffect(() => {
@@ -14,6 +16,9 @@ const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) 
     const handleClickOutside = (event) => {
       if (menuRef.current && !menuRef.current.contains(event.target)) {
         setShowUserMenu(false);
+      }
+      if (projectionMenuRef.current && !projectionMenuRef.current.contains(event.target)) {
+        setShowProjectionMenu(false);
       }
     };
 
@@ -52,6 +57,55 @@ const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) 
 
         {/* ПРАВО: ТАЙМФРЕЙМ КНОПКИ + СЕЛЕКТ ИСТОЧНИКА + ЛОГИН */}
         <div className="header-section controls-area">
+          {onAddProjection && (
+            <div className="projection-menu-wrapper" ref={projectionMenuRef}>
+              <button
+                type="button"
+                className={`projection-trigger ${showProjectionMenu ? 'active' : ''}`}
+                onClick={() => setShowProjectionMenu(prev => !prev)}
+              >
+                <span>Projection</span>
+                <ChevronDown size={14} className={`arrow-icon ${showProjectionMenu ? 'rotate' : ''}`} />
+              </button>
+              {showProjectionMenu && (
+                <div className="projection-dropdown glass-panel animate-fade-in">
+                  <div className="projection-buttons" title={placementMode ? 'Кликните на графике для размещения' : ''}>
+                    <button
+                      type="button"
+                      className={`projection-btn long ${placementMode?.type === 'long' ? 'active' : ''}`}
+                      onClick={() => onAddProjection('long')}
+                      title={placementMode?.type === 'long' ? 'Кликните на графике' : 'Добавить Long позицию'}
+                    >
+                      <TrendingUp size={14} />
+                      <span>Long</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`projection-btn short ${placementMode?.type === 'short' ? 'active' : ''}`}
+                      onClick={() => onAddProjection('short')}
+                      title={placementMode?.type === 'short' ? 'Кликните на графике' : 'Добавить Short позицию'}
+                    >
+                      <TrendingDown size={14} />
+                      <span>Short</span>
+                    </button>
+                  </div>
+                  <div className="projection-menu-actions">
+                    <button
+                      type="button"
+                      className="projection-clear-btn"
+                      onClick={() => {
+                        if (onClearProjections) onClearProjections();
+                        setShowProjectionMenu(false);
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="tf-buttons">
             {['M15', 'H1', 'H4'].map((t) => (
               <button
@@ -64,7 +118,7 @@ const Header = ({ tf, setTf, source, setSource, user, onLoginClick, onLogout }) 
               </button>
             ))}
           </div>
-          
+
           <select value={source} onChange={(e) => setSource(e.target.value)} className="select-modern src-select">
             <option value="oanda">OANDA</option>
             <option value="twelvedata">Twelve Data</option>

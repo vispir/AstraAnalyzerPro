@@ -31,6 +31,20 @@ function App() {
     return saved ? JSON.parse(saved) : { entry: '', sl: '', tp: '' };
   });
 
+  // Проекции Long/Short (как на TradingView) - из localStorage
+  const [projections, setProjections] = useState(() => {
+    try {
+      const saved = localStorage.getItem('astra_projections');
+      const list = saved ? JSON.parse(saved) : [];
+      return list;
+    } catch {
+      return [];
+    }
+  });
+
+  // Режим размещения: после клика Long/Short — следующий клик на графике создаёт проекцию
+  const [placementMode, setPlacementMode] = useState(null); // { type: 'long'|'short' } | null
+
   const [activeMode, setActiveMode] = useState(null);
   const [serverConnected, setServerConnected] = useState(true);
 
@@ -51,6 +65,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('astra_levels', JSON.stringify(levels));
   }, [levels]);
+
+  // Сохраняем проекции Long/Short в localStorage
+  useEffect(() => {
+    localStorage.setItem('astra_projections', JSON.stringify(projections));
+  }, [projections]);
 
   // ============ ФУНКЦИИ АВТОРИЗАЦИИ (МЕМОИЗИРОВАННЫЕ) ============
   const handleLoginSuccess = useCallback((userData) => {
@@ -147,6 +166,12 @@ function App() {
         user={user}
         onLoginClick={handleOpenLogin}
         onLogout={handleLogout}
+        onAddProjection={(type) => setPlacementMode(prev => prev?.type === type ? null : { type })}
+        onClearProjections={() => {
+          setProjections([]);
+          setPlacementMode(null);
+        }}
+        placementMode={placementMode}
       />
       <main className="main-layout">
         <RiskPanel 
@@ -159,9 +184,29 @@ function App() {
           <TradingChart 
             history={marketData.candles} 
             analysis={marketData.analysis}
+            tf={tf}
+            source={source}
             levels={levels} setLevels={setLevels} 
             activeMode={activeMode} setActiveMode={setActiveMode}
             serverConnected={serverConnected}
+            projections={projections}
+            setProjections={setProjections}
+            placementMode={placementMode}
+            onPlaceProjection={(time, price, type) => {
+              const entry = price;
+              const step = Math.max(entry * 0.003, 10);
+              const newProj = {
+                id: `proj_${Date.now()}`,
+                type,
+                entry: entry.toFixed(2),
+                sl: (type === 'long' ? entry - step : entry + step).toFixed(2),
+                tp: (type === 'long' ? entry + step : entry - step).toFixed(2),
+                time,
+                widthPx: 110,
+              };
+              setProjections(prev => [...prev, newProj]);
+              setPlacementMode(null);
+            }}
           />
         </div>
         <AIPanel analysis={marketData.analysis} levels={levels} account={account} />

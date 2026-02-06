@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-charts';
 
 // ============================================================
@@ -25,16 +25,36 @@ const SMC_COLORS = {
  * - Lines для BOS/CHoCH
  * - Price Lines для EQH/EQL
  */
-const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setActiveMode, serverConnected }) => {
+const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setActiveMode, serverConnected, projections = [], setProjections, placementMode, onPlaceProjection, tf, source }) => {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const canvasRef = useRef(null);
   const linesRef = useRef({ entry: null, sl: null, tp: null });
   const smcPriceLinesRef = useRef({ rangeHigh: null, rangeLow: null, equilibrium: null });
+  const projectionPriceLinesRef = useRef({}); // { [projId]: { entry, sl, tp } }
   const draggingRef = useRef(null);
   const levelsRef = useRef(levels);
   const userInteractedRef = useRef(false); // Флаг взаимодействия пользователя
+  const hasInitialFitRef = useRef(false); // Первая загрузка — fitContent, далее всегда сохраняем позицию
+  const lastTfSourceRef = useRef(null); // tf+source для сброса при смене таймфрейма/источника
+  const lastVisibleLogicalRangeRef = useRef(null);
+  const tfRef = useRef(tf);
+  const historyRef = useRef(history);
+  const drawSMCOverlayRef = useRef(null);
+  const projectionRectsRef = useRef({}); // Hit-test rects для проекций
+  const selectedProjectionRef = useRef(null); // Выбранная проекция для контекстного меню
+  const [contextMenu, setContextMenu] = useState(null); // { x, y, projectionId }
+  const projectionDragRef = useRef(null); // { id, startX, startY, startEntry, startSl, startTp, startTime }
+  const projectionResizeRef = useRef(null); // { id, handle: 'sl'|'tp', startY, startPrice }
+  const projectionsRef = useRef(projections);
+  const placementModeRef = useRef(placementMode);
+  const onPlaceProjectionRef = useRef(onPlaceProjection);
+  useEffect(() => { projectionsRef.current = projections; }, [projections]);
+  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+  useEffect(() => { onPlaceProjectionRef.current = onPlaceProjection; }, [onPlaceProjection]);
+  useEffect(() => { tfRef.current = tf; }, [tf]);
+  useEffect(() => { historyRef.current = history; }, [history]);
   
   // Состояние видимости SMC (сохраняем в localStorage)
   const [smcVisible, setSmcVisible] = useState(() => {
@@ -62,8 +82,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     const series = seriesRef.current;
     const timeScale = chart.timeScale();
 
-    // TASK 3.1: Safety check - clear and return if data is missing
-    if (!history || !history.length || !analysis) {
+    // TASK 3.1: Safety check - clear and return if data is missing (projections draw without analysis)
+    if (!history || !history.length) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
@@ -71,8 +91,8 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     // Очищаем canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Если SMC выключен - не рисуем
-    if (!smcVisible) return;
+    // Если SMC выключен - не рисуем SMC (проекции рисуем в конце)
+    const drawSMC = smcVisible && analysis;
 
     // Проверяем, что серия имеет данные (пробуем получить координату для последней свечи)
     // Если серия еще не готова, priceToCoordinate вернет null
@@ -98,12 +118,17 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     // ============================================================
     // 0. PREMIUM/DISCOUNT/EQUILIBRIUM ZONES (ФОН - рисуем первым)
     // ============================================================
+    let eqTopY = null;
+    let eqBottomY = null;
+    let eqHeight = null;
+    if (drawSMC) {
     const advancedZones = analysis.advanced?.zones;
     if (advancedZones && advancedZones.range_high > 0 && advancedZones.range_low > 0) {
       // Используем значения из zones, если они есть, иначе fallback к range
       const premiumTop = advancedZones.premium?.top ?? advancedZones.range_high;
-      const premiumBottom = advancedZones.premium?.bottom ?? (advancedZones.range_high * 0.95); // 95% от high как fallback
-      const discountTop = advancedZones.discount?.top ?? (advancedZones.range_low * 1.05); // 5% от low как fallback
+      const rangeSize = advancedZones.range_high - advancedZones.range_low;
+      const premiumBottom = advancedZones.premium?.bottom ?? (advancedZones.range_low + rangeSize * 0.618); // LuxAlgo 61.8%
+      const discountTop = advancedZones.discount?.top ?? (advancedZones.range_low + rangeSize * 0.382); // LuxAlgo 38.2%
       const discountBottom = advancedZones.discount?.bottom ?? advancedZones.range_low;
       
       // Equilibrium зона (диапазон между Premium и Discount)
@@ -134,13 +159,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       
       // EQUILIBRIUM ZONE (фиолетовая, посередине между Premium и Discount)
       if (equilibriumTop && equilibriumBottom && isValidCoord(equilibriumTopY) && isValidCoord(equilibriumBottomY)) {
-        const eqHeight = Math.abs(equilibriumBottomY - equilibriumTopY);
-        ctx.fillStyle = 'rgba(156, 39, 176, 0.08)';
-        ctx.fillRect(0, Math.min(equilibriumTopY, equilibriumBottomY), chartRightEdge, eqHeight);
-        
-        ctx.fillStyle = 'rgba(156, 39, 176, 0.5)';
-        ctx.font = '9px Inter, Arial';
-        ctx.fillText('Equilibrium', chartRightEdge - 70, (Math.min(equilibriumTopY, equilibriumBottomY) + eqHeight / 2));
+        eqTopY = Math.min(equilibriumTopY, equilibriumBottomY);
+        eqBottomY = Math.max(equilibriumTopY, equilibriumBottomY);
+        eqHeight = Math.abs(equilibriumBottomY - equilibriumTopY);
       }
       
       // DISCOUNT ZONE (зеленоватая снизу)
@@ -154,6 +175,22 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillText('Discount', chartRightEdge - 50, Math.max(discountTopY, discountBottomY) - 5);
       }
       
+      const drawSwingLabel = (label, price, color, yOffset) => {
+        const y = series.priceToCoordinate(price);
+        if (y === null || y === undefined || y < 0 || y > canvas.height) return;
+        ctx.font = '9px Inter, Arial';
+        const textWidth = ctx.measureText(label).width;
+        const x = chartRightEdge - textWidth - 8;
+        const textY = Math.max(10, Math.min(canvas.height - 6, y + yOffset));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(x - 4, textY - 9, textWidth + 8, 12);
+        ctx.fillStyle = color;
+        ctx.fillText(label, x, textY);
+      };
+
+      drawSwingLabel('Swing High', advancedZones.range_high, 'rgba(239, 83, 80, 0.9)', -6);
+      drawSwingLabel('Swing Low', advancedZones.range_low, 'rgba(38, 166, 154, 0.9)', 12);
+
       // Swing High/Low теперь рисуются через PriceLines (см. updateSMCPriceLines)
       // Equilibrium также рисуется как линия через PriceLines для точности, но зона на canvas для визуализации
     }
@@ -269,6 +306,15 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       ctx.fillText('FVG', leftX + 3, y + 9);
     });
 
+    if (eqTopY != null && eqBottomY != null && eqHeight != null) {
+      ctx.fillStyle = 'rgba(156, 39, 176, 0.12)';
+      ctx.fillRect(0, eqTopY, chartRightEdge, eqHeight);
+      
+      ctx.fillStyle = 'rgba(156, 39, 176, 0.7)';
+      ctx.font = '9px Inter, Arial';
+      ctx.fillText('Equilibrium', chartRightEdge - 70, (eqTopY + eqHeight / 2));
+    }
+
     // ============================================================
     // 3. BOS/CHoCH LINES (Internal + Swing) - LuxAlgo Style
     // ============================================================
@@ -310,6 +356,10 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         const isBullish = brk.type?.includes('BULLISH');
         const isChoch = brk.is_choch === true || brk.type?.includes('CHOCH');
         
+        const lineMinX = Math.min(pivotX, breakX);
+        const lineMaxX = Math.max(pivotX, breakX);
+        if (lineMaxX < 0 || lineMinX > chartRightEdge) return;
+
         // ============================================================
         // СТИЛЬ ЛИНИЙ (как на TradingView/LuxAlgo)
         // BOS: сплошная линия (—)
@@ -332,6 +382,9 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         }
         ctx.stroke();
         ctx.setLineDash([]);
+
+        const isLabelVisible = breakX >= 0 && breakX <= chartRightEdge && priceY >= 0 && priceY <= canvas.height;
+        if (!isLabelVisible) return;
 
         // ============================================================
         //  // МЕТКА с тёмным фоном для контраста (как на TradingView)
@@ -387,30 +440,174 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     // 4. EQUAL HIGHS/LOWS (Пунктирные линии)
     // ============================================================
     const drawEqualLevels = (eqLevels, color, label) => {
+      const resolveX = (lvl, side) => {
+        const timeKey = side === 'left' ? 'left_time' : 'right_time';
+        const indexKey = side === 'left' ? 'left_index' : 'right_index';
+        const t = lvl?.[timeKey];
+        if (t != null) {
+          const x = timeScale.timeToCoordinate(t);
+          if (x !== null && x !== undefined) return x;
+        }
+        const idx = lvl?.[indexKey];
+        if (idx != null && history?.[idx]?.time != null) {
+          const x = timeScale.timeToCoordinate(history[idx].time);
+          if (x !== null && x !== undefined) return x;
+        }
+        return null;
+      };
+
       eqLevels.forEach(lvl => {
         const priceY = series.priceToCoordinate(lvl.price);
         if (priceY === null) return;
+
+        const leftX = resolveX(lvl, 'left') ?? 0;
+        const rightX = resolveX(lvl, 'right') ?? chartRightEdge;
+        const x1 = Math.max(0, Math.min(leftX, rightX));
+        const x2 = Math.min(chartRightEdge, Math.max(leftX, rightX));
+        if (x2 <= 0 || x1 >= chartRightEdge) return;
 
         ctx.beginPath();
         ctx.setLineDash([2, 2]);
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
-        ctx.moveTo(0, priceY);
-        // Ограничиваем линию правой границей графика
-        ctx.lineTo(chartRightEdge, priceY);
+        ctx.moveTo(x1, priceY);
+        ctx.lineTo(x2, priceY);
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = color;
         ctx.font = '9px Arial';
-        ctx.fillText(label, chartRightEdge - 35, priceY - 3);
+        const labelX = Math.max(0, Math.min(chartRightEdge - 35, x2 - 35));
+        ctx.fillText(label, labelX, priceY - 3);
       });
     };
 
     drawEqualLevels(analysis.eqh || [], SMC_COLORS.EQH, 'EQH');
     drawEqualLevels(analysis.eql || [], SMC_COLORS.EQL, 'EQL');
+    } // конец if (drawSMC)
 
-  }, [analysis, history, smcVisible]);
+    // ============================================================
+    // 5. LONG/SHORT ПРОЕКЦИИ (TradingView style) — рисуем всегда
+    // Фиксированная ширина бара, позиция по времени (свече)
+    // ============================================================
+    const DEFAULT_PROJ_WIDTH = 90;
+    const projList = projections || [];
+    projectionRectsRef.current = {};
+    const lastCandleTime = history?.length ? history[history.length - 1]?.time : null;
+    const getTfSeconds = (value) => {
+      const tfValue = (value || '').toString().toUpperCase();
+      const match = tfValue.match(/^([MHDW])(\d+)$/);
+      if (!match) return 60;
+      const unit = match[1];
+      const amount = parseInt(match[2], 10);
+      if (!amount) return 60;
+      if (unit === 'M') return amount * 60;
+      if (unit === 'H') return amount * 3600;
+      if (unit === 'D') return amount * 86400;
+      if (unit === 'W') return amount * 604800;
+      return 60;
+    };
+
+    const getXFromTime = (t) => {
+      const directX = timeScale.timeToCoordinate(t);
+      if (directX !== null && directX !== undefined) return directX;
+      if (!history?.length) return null;
+      const lastTime = history[history.length - 1]?.time;
+      if (typeof lastTime !== 'number') return null;
+      const lastX = timeScale.timeToCoordinate(lastTime);
+      if (lastX === null || lastX === undefined) return null;
+      const barSpacing = timeScale.barSpacing?.() ?? 8;
+      const tfSeconds = getTfSeconds(tf);
+      const barsOffset = (t - lastTime) / tfSeconds;
+      return lastX + barsOffset * barSpacing;
+    };
+
+    projList.forEach((proj) => {
+      const entry = parseFloat(proj.entry);
+      const sl = parseFloat(proj.sl);
+      const tp = parseFloat(proj.tp);
+      if (isNaN(entry) || isNaN(sl) || isNaN(tp)) return;
+
+      const t = proj.time ?? lastCandleTime;
+      if (t == null) return;
+      const leftX = getXFromTime(t);
+      if (leftX === null || leftX === undefined) return;
+
+      const topPrice = Math.max(entry, sl, tp);
+      const bottomPrice = Math.min(entry, sl, tp);
+      const topY = series.priceToCoordinate(topPrice);
+      const bottomY = series.priceToCoordinate(bottomPrice);
+      if (topY === null || bottomY === null) return;
+
+      const width = Math.max(40, parseFloat(proj.widthPx ?? proj.width ?? DEFAULT_PROJ_WIDTH));
+      const widthDraw = Math.max(0, Math.min(width, chartRightEdge - leftX));
+      if (widthDraw <= 0) return;
+      const rightX = leftX + widthDraw;
+      const height = Math.abs(bottomY - topY) || 20;
+      const rectTop = Math.min(topY, bottomY);
+      const rectBottom = Math.max(topY, bottomY);
+      const entryY = series.priceToCoordinate(entry);
+      const slY = series.priceToCoordinate(sl);
+      const tpY = series.priceToCoordinate(tp);
+      if (entryY === null || slY === null || tpY === null) return;
+
+      projectionRectsRef.current[proj.id] = {
+        left: leftX, top: rectTop, right: rightX, bottom: rectBottom,
+        entryY, slY, tpY, entry, sl, tp,
+      };
+
+      const isLong = proj.type === 'long';
+
+      // Long: green (TP) above entry, red (SL) below. Short: red above, green below
+      if (isLong) {
+        ctx.fillStyle = 'rgba(20, 90, 70, 0.25)';
+        ctx.fillRect(leftX, Math.min(entryY, tpY), widthDraw, Math.abs(tpY - entryY));
+        ctx.fillStyle = 'rgba(90, 25, 25, 0.25)';
+        ctx.fillRect(leftX, Math.min(entryY, slY), widthDraw, Math.abs(slY - entryY));
+      } else {
+        ctx.fillStyle = 'rgba(90, 25, 25, 0.25)';
+        ctx.fillRect(leftX, Math.min(entryY, slY), widthDraw, Math.abs(slY - entryY));
+        ctx.fillStyle = 'rgba(20, 90, 70, 0.25)';
+        ctx.fillRect(leftX, Math.min(entryY, tpY), widthDraw, Math.abs(tpY - entryY));
+      }
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(leftX, rectTop, widthDraw, height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(leftX, entryY);
+      ctx.lineTo(rightX, entryY);
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = '9px Inter, Arial';
+      ctx.fillText('E', leftX + 4, entryY + 3);
+
+      const risk = Math.abs(entry - sl);
+      const reward = Math.abs(tp - entry);
+      if (risk > 0 && reward >= 0) {
+        const ratio = reward / risk;
+        const ratioText = ratio
+          .toFixed(2)
+          .replace(/\.00$/, '')
+          .replace(/(\.\d)0$/, '$1');
+        const rrText = `R:R 1:${ratioText}`;
+        ctx.font = '11px Inter, Arial';
+        const textWidth = ctx.measureText(rrText).width;
+        const textX = leftX + widthDraw / 2 - textWidth / 2;
+        const textY = rectTop + height / 2 + 4;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(textX - 6, textY - 12, textWidth + 12, 16);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fillText(rrText, textX, textY);
+      }
+    });
+
+  }, [analysis, history, smcVisible, projections, tf]);
+  useEffect(() => { drawSMCOverlayRef.current = drawSMCOverlay; }, [drawSMCOverlay]);
 
   // ============================================================
   // CHART INITIALIZATION
@@ -456,23 +653,24 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       if (canvas && chartContainerRef.current) {
         canvas.width = chartContainerRef.current.clientWidth;
         canvas.height = chartContainerRef.current.clientHeight;
-        drawSMCOverlay();
+        drawSMCOverlayRef.current?.();
       }
     };
     resizeCanvas();
 
-    chart.timeScale().subscribeVisibleLogicalRangeChange(drawSMCOverlay);
-    chart.subscribeCrosshairMove(drawSMCOverlay);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawSMCOverlayRef.current?.());
+    chart.subscribeCrosshairMove(() => drawSMCOverlayRef.current?.());
     
     // Отслеживаем взаимодействие пользователя (zoom/scroll)
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       userInteractedRef.current = true;
+      if (range) lastVisibleLogicalRangeRef.current = range;
     });
 
     // Непрерывная перерисовка оверлея: уровни остаются привязаны к ценам при растяжении графика (вертикальный зум)
     let rafId = null;
     const tick = () => {
-      drawSMCOverlay();
+      drawSMCOverlayRef.current?.();
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -503,10 +701,138 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     const container = chartContainerRef.current;
     
+    const RESIZE_THRESHOLD = 8;
+    const getTfSeconds = (value) => {
+      const tfValue = (value || '').toString().toUpperCase();
+      const match = tfValue.match(/^([MHDW])(\d+)$/);
+      if (!match) return 60;
+      const unit = match[1];
+      const amount = parseInt(match[2], 10);
+      if (!amount) return 60;
+      if (unit === 'M') return amount * 60;
+      if (unit === 'H') return amount * 3600;
+      if (unit === 'D') return amount * 86400;
+      if (unit === 'W') return amount * 604800;
+      return 60;
+    };
+
+    const getTimeFromX = (x) => {
+      const ts = chart.timeScale();
+      const time = ts.coordinateToTime ? ts.coordinateToTime(x) : null;
+      if (time != null) return time;
+      const data = historyRef.current;
+      if (!data || !data.length) return null;
+      const lastTime = data[data.length - 1]?.time;
+      if (typeof lastTime !== 'number') return null;
+      const lastX = ts.timeToCoordinate ? ts.timeToCoordinate(lastTime) : null;
+      if (lastX == null) return lastTime;
+      const barSpacing = ts.barSpacing?.() ?? 8;
+      const barsOffset = (x - lastX) / barSpacing;
+      const offsetSeconds = Math.round(barsOffset) * getTfSeconds(tfRef.current);
+      return lastTime + offsetSeconds;
+    };
+
+    const getChartRightEdge = () => {
+      const ts = chart.timeScale();
+      if (ts.width) return ts.width();
+      return container.clientWidth;
+    };
+
+    const getProjectionAtPoint = (x, y) => {
+      const rects = projectionRectsRef.current;
+      for (const [id, r] of Object.entries(rects)) {
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return id;
+      }
+      return null;
+    };
+
+    const getProjectionResizeHandle = (x, y) => {
+      const rects = projectionRectsRef.current;
+      for (const [id, r] of Object.entries(rects)) {
+        if (x < r.left || x > r.right) continue;
+        if (r.slY != null && Math.abs(y - r.slY) <= RESIZE_THRESHOLD) return { id, handle: 'sl' };
+        if (r.tpY != null && Math.abs(y - r.tpY) <= RESIZE_THRESHOLD) return { id, handle: 'tp' };
+      }
+      return null;
+    };
+
+    const updateProjectionPriceLines = (proj) => {
+      const s = seriesRef.current;
+      const pl = projectionPriceLinesRef.current;
+      if (!s || !proj || !pl[proj.id]) return;
+      const entry = parseFloat(proj.entry);
+      const sl = parseFloat(proj.sl);
+      const tp = parseFloat(proj.tp);
+      if (isNaN(entry) || isNaN(sl) || isNaN(tp)) return;
+      const lines = pl[proj.id];
+      try {
+        if (lines.entry) lines.entry.applyOptions({ price: entry });
+        if (lines.sl) lines.sl.applyOptions({ price: sl });
+        if (lines.tp) lines.tp.applyOptions({ price: tp });
+      } catch { /* ignore */ }
+    };
+
     const onMouseDown = (e) => {
       const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      
+
+      // Режим размещения: клик на графике создаёт проекцию
+      const placeCb = onPlaceProjectionRef.current;
+      if (placementModeRef.current && placeCb && !getProjectionAtPoint(x, y)) {
+        const time = getTimeFromX(x);
+        const price = series.coordinateToPrice(y);
+        if (time != null && price != null) {
+          e.preventDefault();
+          e.stopPropagation();
+          placeCb(time, price, placementModeRef.current.type);
+          return;
+        }
+      }
+
+      const resizeHandle = getProjectionResizeHandle(x, y);
+      if (resizeHandle && setProjections) {
+        const proj = (projectionsRef.current || []).find(p => p.id === resizeHandle.id);
+        if (proj) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectedProjectionRef.current = resizeHandle.id;
+          projectionResizeRef.current = {
+            id: resizeHandle.id,
+            handle: resizeHandle.handle,
+            startY: y,
+            startPrice: parseFloat(proj[resizeHandle.handle]),
+          };
+          chart.applyOptions({ handleScroll: false, handleScale: false });
+          return;
+        }
+      }
+
+      const projId = getProjectionAtPoint(x, y);
+      if (projId && setProjections) {
+        const proj = (projectionsRef.current || []).find(p => p.id === projId);
+        if (proj) {
+          const rects = projectionRectsRef.current;
+          const rect = rects ? rects[projId] : null;
+          const dragOffsetX = rect ? x - rect.left : 0;
+          e.preventDefault();
+          e.stopPropagation();
+          selectedProjectionRef.current = projId;
+          projectionDragRef.current = {
+            id: projId,
+            startX: x,
+            startY: y,
+            dragOffsetX,
+            startEntry: parseFloat(proj.entry),
+            startSl: parseFloat(proj.sl),
+            startTp: parseFloat(proj.tp),
+            startTime: proj.time,
+          };
+          chart.applyOptions({ handleScroll: false, handleScale: false });
+          return;
+        }
+      }
+
       const price = series.coordinateToPrice(y);
       if (!price) return;
 
@@ -534,13 +860,77 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     const onMouseMove = (e) => {
       const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+
+      // Ресайз SL или TP (точка входа статична)
+      if (projectionResizeRef.current && setProjections) {
+        const resize = projectionResizeRef.current;
+        const priceNow = series.coordinateToPrice(y);
+        if (priceNow != null) {
+          const updated = (projectionsRef.current || []).map(p => {
+            if (p.id !== resize.id) return p;
+            const entryPrice = parseFloat(p.entry);
+            const isLong = p.type === 'long';
+            const minStep = 0.01;
+            const constrainedPrice = isLong
+              ? (resize.handle === 'sl' ? Math.min(priceNow, entryPrice - minStep) : Math.max(priceNow, entryPrice + minStep))
+              : (resize.handle === 'sl' ? Math.max(priceNow, entryPrice + minStep) : Math.min(priceNow, entryPrice - minStep));
+            return { ...p, [resize.handle]: constrainedPrice.toFixed(2) };
+          });
+          setProjections(updated);
+          const proj = updated.find(p => p.id === resize.id);
+          if (proj) updateProjectionPriceLines(proj);
+        }
+        return;
+      }
       
+      if (projectionDragRef.current && setProjections) {
+        const drag = projectionDragRef.current;
+        const priceAtStart = series.coordinateToPrice(drag.startY);
+        const priceAtNow = series.coordinateToPrice(y);
+        const targetX = drag.dragOffsetX != null ? x - drag.dragOffsetX : x;
+        const projForDrag = (projectionsRef.current || []).find(p => p.id === drag.id);
+        const projWidth = Math.max(40, parseFloat(projForDrag?.widthPx ?? projForDrag?.width ?? 90));
+        const maxLeftX = Math.max(0, getChartRightEdge() - projWidth);
+        const clampedX = Math.min(targetX, maxLeftX);
+        const newTime = getTimeFromX(clampedX);
+        if (priceAtStart != null && priceAtNow != null) {
+          const deltaPrice = priceAtNow - priceAtStart;
+          const updated = (projectionsRef.current || []).map(p => {
+            if (p.id !== drag.id) return p;
+            return {
+              ...p,
+              entry: (drag.startEntry + deltaPrice).toFixed(2),
+              sl: (drag.startSl + deltaPrice).toFixed(2),
+              tp: (drag.startTp + deltaPrice).toFixed(2),
+              time: newTime != null ? newTime : p.time,
+            };
+          });
+          setProjections(updated);
+          const proj = updated.find(p => p.id === drag.id);
+          if (proj) updateProjectionPriceLines(proj);
+        }
+        return;
+      }
+
       if (draggingRef.current) {
         const price = series.coordinateToPrice(y);
         if (price) {
           setLevels(prev => ({ ...prev, [draggingRef.current]: price.toFixed(2) }));
         }
+        return;
+      }
+
+      const resizeHandle = getProjectionResizeHandle(x, y);
+      if (resizeHandle) {
+        container.style.cursor = 'ns-resize';
+        return;
+      }
+
+      const projId = getProjectionAtPoint(x, y);
+      if (projId) {
+        container.style.cursor = 'move';
         return;
       }
 
@@ -555,19 +945,50 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
           }
         }
       });
-      container.style.cursor = isNearLine ? 'ns-resize' : 'crosshair';
+      container.style.cursor = placementModeRef.current ? 'crosshair' : (isNearLine ? 'ns-resize' : 'crosshair');
     };
 
     const onMouseUp = () => {
+      if (projectionDragRef.current || projectionResizeRef.current) {
+        projectionDragRef.current = null;
+        projectionResizeRef.current = null;
+        chart.applyOptions({ handleScroll: true, handleScale: true });
+      }
       if (draggingRef.current) {
         draggingRef.current = null;
         chart.applyOptions({ handleScroll: true, handleScale: true });
       }
     };
 
-    container.addEventListener('mousedown', onMouseDown);
+    const onContextMenu = (e) => {
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const projId = getProjectionAtPoint(x, y);
+      if (projId && setProjections) {
+        e.preventDefault();
+        selectedProjectionRef.current = projId;
+        setContextMenu({ x, y, projectionId: projId });
+      }
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const sel = selectedProjectionRef.current;
+        if (sel && setProjections) {
+          e.preventDefault();
+          setProjections(prev => prev.filter(p => p.id !== sel));
+          selectedProjectionRef.current = null;
+          setContextMenu(null);
+        }
+      }
+    };
+
+    container.addEventListener('mousedown', onMouseDown, true);
+    container.addEventListener('contextmenu', onContextMenu, true);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('keydown', onKeyDown);
 
     chart.subscribeClick((param) => {
       if (!param.point || !window.currentActiveMode || draggingRef.current) return;
@@ -588,9 +1009,11 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
-      container.removeEventListener('mousedown', onMouseDown);
+      container.removeEventListener('mousedown', onMouseDown, true);
+      container.removeEventListener('contextmenu', onContextMenu, true);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', handleResize);
       
       // Очищаем SMC PriceLines (используем значения, сохраненные в начале useEffect)
@@ -615,7 +1038,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         chartRef.current = null;
       }
     };
-  }, [setLevels, drawSMCOverlay]);
+  }, [setLevels, setProjections]);
 
   useEffect(() => {
     levelsRef.current = levels;
@@ -672,28 +1095,28 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       equilibrium: keyLevels?.Equilibrium_Price || ((advancedZones.range_high + advancedZones.range_low) / 2)
     });
 
-    const updateLine = (key, price, color, lineStyle, title) => {
+    const updateLine = (key, price, color, lineStyle, title, axisLabelVisible = true) => {
       const parsedPrice = parseFloat(price);
       if (isNaN(parsedPrice) || parsedPrice <= 0) return;
       
       if (smcPriceLinesRef.current[key]) {
         try {
-          smcPriceLinesRef.current[key].applyOptions({ price: parsedPrice, color, lineStyle, title });
+          smcPriceLinesRef.current[key].applyOptions({ price: parsedPrice, color, lineStyle, title, axisLabelVisible });
         } catch (e) { console.warn(e); }
       } else {
         try {
           smcPriceLinesRef.current[key] = series.createPriceLine({
-            price: parsedPrice, color, lineWidth: 1, lineStyle, title, axisLabelVisible: true
+            price: parsedPrice, color, lineWidth: 1, lineStyle, title, axisLabelVisible
           });
         } catch (e) { console.warn(e); }
       }
     };
 
     // Swing High
-    updateLine('rangeHigh', advancedZones.range_high, 'rgba(239, 83, 80, 0.6)', 1, 'Swing High');
+    updateLine('rangeHigh', advancedZones.range_high, 'rgba(239, 83, 80, 0.6)', 1, '', false);
     
     // Swing Low
-    updateLine('rangeLow', advancedZones.range_low, 'rgba(38, 166, 154, 0.6)', 1, 'Swing Low');
+    updateLine('rangeLow', advancedZones.range_low, 'rgba(38, 166, 154, 0.6)', 1, '', false);
     
     // 2. Equilibrium (Штрих-пунктир 2)
     // Берем цену из key_levels ИЛИ считаем среднее сами
@@ -710,78 +1133,57 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     if (!chart) return;
 
     // КРИТИЧНО: Удаляем старые PriceLines перед установкой новых данных
-    // Это предотвращает "призраков" старых линий при переключении таймфрейма
     clearSMCPriceLines();
 
-    // TASK 3.2.1: Immediately clear canvas to prevent old zones "ghosting"
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
 
     const timeScale = chart.timeScale();
-    
-    // Сохраняем текущий видимый диапазон ТОЛЬКО если пользователь взаимодействовал
-    let savedRange = null;
-    if (userInteractedRef.current) {
-      const currentRange = timeScale.getVisibleLogicalRange && timeScale.getVisibleLogicalRange();
-      if (currentRange && currentRange.from !== undefined && currentRange.to !== undefined) {
-        savedRange = { from: currentRange.from, to: currentRange.to };
-      }
+
+    // При смене таймфрейма или источника — сбрасываем, чтобы fitContent выполнился заново
+    const tfSourceKey = `${tf || ''}_${source || ''}`;
+    if (lastTfSourceRef.current !== null && lastTfSourceRef.current !== tfSourceKey) {
+      hasInitialFitRef.current = false;
+    }
+    lastTfSourceRef.current = tfSourceKey;
+
+    let savedLogicalRange = null;
+    if (hasInitialFitRef.current) {
+      savedLogicalRange = lastVisibleLogicalRangeRef.current ?? timeScale.getVisibleLogicalRange?.();
     }
 
-    // КРИТИЧНО: Устанавливаем данные свечей
+    // Устанавливаем данные свечей
     seriesRef.current.setData(history);
-    
-    // Пересчитываем координаты видимой области
-    try {
-      if (!userInteractedRef.current) {
-        // Только при первой загрузке - подгоняем под данные
-        chart.timeScale().fitContent();
-      }
-    } catch (e) {
-      console.warn('Could not fit content:', e.message);
-    }
 
-    // Восстанавливаем диапазон после небольшой задержки
-    if (savedRange && timeScale.setVisibleLogicalRange) {
+    if (!hasInitialFitRef.current) {
+      try {
+        chart.timeScale().fitContent();
+        hasInitialFitRef.current = true;
+      } catch (e) {
+        console.warn('Could not fit content:', e.message);
+      }
+    } else if (savedLogicalRange && timeScale.setVisibleLogicalRange) {
+      // Восстанавливаем позицию пользователя (зум, скролл)
       setTimeout(() => {
         try {
-          if (chartRef.current) {
-            chartRef.current.timeScale().setVisibleLogicalRange(savedRange);
+          if (chartRef.current?.timeScale) {
+            chartRef.current.timeScale().setVisibleLogicalRange(savedLogicalRange);
           }
         } catch (e) {
           console.warn('Could not restore visible range:', e.message);
         }
       }, 50);
     }
-    
-    // TASK 3.2.2: Increased timeout to 150ms for price scale stabilization
-    // Обновляем PriceLines только если есть analysis (иначе они будут созданы когда придет analysis)
+
     const stabilityTimeout = setTimeout(() => {
-      if (analysis) {
-        updateSMCPriceLines();
-      }
-      drawSMCOverlay();
+      if (analysis) updateSMCPriceLines();
+      drawSMCOverlayRef.current?.();
     }, 150);
 
-    if (analysis) {
-      console.log('SMC Analysis received:', {
-        history_length: history.length,
-        order_blocks: analysis.order_blocks?.length || 0,
-        fvg: analysis.fvg?.length || 0,
-        all_internal_bos: analysis.all_internal_bos?.length || 0,
-        all_internal_choch: analysis.all_internal_choch?.length || 0,
-        all_swing_bos: analysis.all_swing_bos?.length || 0,
-        all_swing_choch: analysis.all_swing_choch?.length || 0,
-        eqh: analysis.eqh?.length || 0,
-        eql: analysis.eql?.length || 0,
-        sample_bos: analysis.all_internal_bos?.[0] || 'none'
-      });
-    }
-
     return () => clearTimeout(stabilityTimeout);
-  }, [history, drawSMCOverlay, analysis, updateSMCPriceLines, clearSMCPriceLines]);
+  }, [history, analysis, updateSMCPriceLines, clearSMCPriceLines, tf, source]);
 
   useEffect(() => {
     // Обновляем SMC PriceLines при изменении analysis
@@ -848,12 +1250,129 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     updateLine('tp', levels.tp, '#26a69a', 'TP');
   }, [levels]);
 
+  // PriceLines для проекций Long/Short (Entry, SL, TP на шкале цен)
+  useEffect(() => {
+    const s = seriesRef.current;
+    if (!s) return;
+    if (!projections?.length) {
+      const pl = projectionPriceLinesRef.current;
+      Object.keys(pl).forEach(projId => {
+        const lines = pl[projId];
+        if (lines) {
+          ['entry', 'sl', 'tp'].forEach(k => {
+            if (lines[k]) { try { s.removePriceLine(lines[k]); } catch { /* ignore */ } }
+          });
+        }
+      });
+      projectionPriceLinesRef.current = {};
+      return;
+    }
+
+    const currentIds = new Set(projections.map(p => p.id));
+    const pl = projectionPriceLinesRef.current;
+
+    // Удаляем линии для проекций, которых больше нет
+    Object.keys(pl).forEach(projId => {
+      if (!currentIds.has(projId)) {
+        const lines = pl[projId];
+        if (lines) {
+          ['entry', 'sl', 'tp'].forEach(k => {
+            if (lines[k]) { try { s.removePriceLine(lines[k]); } catch { /* ignore */ } }
+          });
+        }
+        delete pl[projId];
+      }
+    });
+
+    projections.forEach(proj => {
+      const entry = parseFloat(proj.entry);
+      const sl = parseFloat(proj.sl);
+      const tp = parseFloat(proj.tp);
+      if (isNaN(entry) || isNaN(sl) || isNaN(tp)) return;
+
+      if (!pl[proj.id]) pl[proj.id] = { entry: null, sl: null, tp: null };
+      const lines = pl[proj.id];
+
+      const upsert = (key, price, color, title) => {
+        if (lines[key]) {
+          try { lines[key].applyOptions({ price }); } catch { /* ignore */ }
+        } else {
+          try {
+            lines[key] = s.createPriceLine({
+              price, color, lineWidth: 1, lineStyle: 2, title, axisLabelVisible: true
+            });
+          } catch { /* ignore */ }
+        }
+      };
+      upsert('entry', entry, 'rgba(41, 98, 255, 0.8)', 'E');
+      upsert('sl', sl, 'rgba(239, 83, 80, 0.8)', 'SL');
+      upsert('tp', tp, 'rgba(38, 166, 154, 0.8)', 'TP');
+    });
+  }, [projections]);
+
+  // Закрытие контекстного меню при клике вне
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [contextMenu]);
+
+  const handleFlipProjection = () => {
+    if (!contextMenu || !setProjections) return;
+    setProjections(prev => prev.map(p => {
+      if (p.id !== contextMenu.projectionId) return p;
+      return { ...p, sl: p.tp, tp: p.sl };
+    }));
+    setContextMenu(null);
+  };
+
+  const handleDeleteProjection = () => {
+    if (!contextMenu || !setProjections) return;
+    setProjections(prev => prev.filter(p => p.id !== contextMenu.projectionId));
+    selectedProjectionRef.current = null;
+    setContextMenu(null);
+  };
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={chartContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }} />
       {!serverConnected && (
         <div className="server-status-indicator">
           Соединение с сервером отсутствует
+        </div>
+      )}
+
+      {/* Контекстное меню для проекций Long/Short */}
+      {contextMenu && (
+        <div
+          className="projection-context-menu glass-panel"
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            zIndex: 9999,
+            minWidth: '160px',
+            padding: '6px 0',
+            borderRadius: '8px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={handleFlipProjection}
+          >
+            Переворот (SL↔TP)
+          </button>
+          <button
+            type="button"
+            className="context-menu-item delete"
+            onClick={handleDeleteProjection}
+          >
+            Удалить
+          </button>
         </div>
       )}
       
