@@ -18,6 +18,15 @@ class TelegramService:
         self.webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL")
         self.use_polling = os.getenv("USE_TELEGRAM_POLLING", "false").lower() == "true"
         
+        # Astra Signal Bot — только BUY/SELL (без анализа и WAIT)
+        self.bot_signals_token = os.getenv("TELEGRAM_BOT_TOKEN_SIGNALS")
+        self.bot_signals = None
+        if self.bot_signals_token:
+            self.bot_signals = telebot.TeleBot(self.bot_signals_token, threaded=False)
+            logger.info("✅ Astra Signal Bot (@AstraSignal_Bot) инициализирован")
+        else:
+            logger.info("📱 TELEGRAM_BOT_TOKEN_SIGNALS: не установлен (Signal Bot отключен)")
+        
         # Логируем конфигурацию
         logger.info(f"📱 TELEGRAM_BOT_TOKEN: {'установлен ✅' if self.bot_token else '❌ не установлен'}")
         logger.info(f"📱 Режим работы: {'POLLING' if self.use_polling else 'WEBHOOK'}")
@@ -476,6 +485,26 @@ class TelegramService:
                 time.sleep(1)
         
         logger.info(f"📤 Рассылка завершена: {success_count}/{len(user_ids)} доставлено")
+        return success_count
+    
+    def broadcast_deals_only(self, user_ids, message):
+        """
+        Рассылка ТОЛЬКО в Astra Signal Bot (@AstraSignal_Bot).
+        Используется для BUY/SELL — без анализа каждые 15 мин и без WAIT.
+        """
+        if not self.bot_signals or not user_ids:
+            return 0
+        success_count = 0
+        for i, user_id in enumerate(user_ids):
+            try:
+                self.bot_signals.send_message(user_id, message, parse_mode='HTML')
+                success_count += 1
+            except Exception as e:
+                logger.warning(f"Signal Bot: не удалось отправить user {user_id}: {e}")
+            if (i + 1) % 25 == 0:
+                import time
+                time.sleep(1)
+        logger.info(f"📤 Astra Signal Bot: {success_count}/{len(user_ids)} доставлено")
         return success_count
     
     def send_approval_notification(self, user_id, user_name):

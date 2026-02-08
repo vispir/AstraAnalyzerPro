@@ -1324,7 +1324,8 @@ def run_analysis_cycle():
         if user_ids:
             formatted_msg = format_signal_message(ai_response)
             telegram_service.broadcast_signal(user_ids, formatted_msg)
-            logger.info(f"📤 Сигнал отправлен {len(user_ids)} пользователям")
+            telegram_service.broadcast_deals_only(user_ids, formatted_msg)  # Astra Signal Bot — только BUY/SELL
+            logger.info(f"📤 Сигнал отправлен {len(user_ids)} пользователям (в т.ч. Signal Bot)")
         
         status_data['status'] = 'signal_sent'
         status_data['reason'] = f'{mode_text} Gemini подтвердил {llm_action}!\n' + '\n'.join(impulse_reasons)
