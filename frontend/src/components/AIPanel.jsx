@@ -222,7 +222,7 @@ const AIPanel = ({ levels, account, analysis }) => {
         />
       </div>
       
-      <div className="ai-content-scroll" style={{flex: 1, overflow: 'auto'}}>
+      <div className="ai-content-scroll" style={{flex: 1, minHeight: 0, overflow: 'auto'}}>
         {loading ? (
           <div className="ai-loading">
             <Loader2 className="spinner" size={32} />

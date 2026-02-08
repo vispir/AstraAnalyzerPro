@@ -76,10 +76,8 @@ class OandaService:
                 low_price = round(float(mid["l"]), 2)
                 close_price = round(float(mid["c"]), 2)
 
-                # Фильтрация плоских свечей (как в Twelve Data)
-                price_range = high_price - low_price
-                if price_range < 0.01:
-                    continue
+                # Не фильтруем плоские свечи — TradingView их показывает.
+                # Пропуск баров сдвигает индексы → уровни не совпадают с LuxAlgo.
 
                 # OANDA отдает время в формате "2026-01-23T21:45:00.000000000Z"
                 # Обрезаем наносекунды для корректного парсинга

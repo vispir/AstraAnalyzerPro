@@ -52,9 +52,9 @@ def get_candles():
 
         # ВАРИАНТ 1: Если таймфрейм не указан - возвращаем данные по всем ТФ (H4, H1, M15)
         if not timeframe:
-            # Запрашиваем данные с запасом для анализа
-            h4_raw = market_service.get_candles('H4', limit=max(limit or 40, 40))
-            h1_raw = market_service.get_candles('H1', limit=max(limit or 40, 40))
+            # LuxAlgo: M15=1000, H1=600, H4=300
+            h4_raw = market_service.get_candles('H4', limit=max(limit or 300, 300))
+            h1_raw = market_service.get_candles('H1', limit=max(limit or 600, 600))
             m15_raw = market_service.get_candles('M15', limit=max(limit or 1000, 1000))
             
             if "error" in h4_raw or "error" in h1_raw or "error" in m15_raw:
@@ -93,12 +93,10 @@ def get_candles():
                 }
             })
         
-        # ================================================================
-        # TASK 2: v13.0 SURGICAL LIMITS (M15=400, H1/H4=300)
-        # ================================================================
-        # 400 свечей на M15 — это примерно 4 торговых дня. 
-        # Это ГАРАНТИРОВАННО оставит Jan 30 (5454), но отрежет Jan 28 (5602).
+        # LuxAlgo: M15=1000, H1=600, H4=300
         if timeframe == 'M15':
+            calc_limit = 1000
+        elif timeframe == 'H1':
             calc_limit = 600
         else:
             calc_limit = 300

@@ -1,6 +1,13 @@
 """
-SMC Detector v7.9 - LuxAlgo-aligned Swing & Premium/Discount
-===========================================================
+SMC Detector v20.0 - LuxAlgo leg-based Pivots + Trailing Extremes
+=================================================================
+v20.0 LUXALGO LOGIC:
+- leg(size): pivot high/low с правосторонней проверкой (high[i] > max(high[i+1:i+1+size]))
+- Swing size=50, Internal size=5 (как в LuxAlgo Smart Money Concepts)
+- trailing.top / trailing.bottom для swing_pivot_high/low (Strong/Weak High/Low)
+- USE_LUXALGO_LOGIC: переключатель старой/новой логики
+
+v7.9 - LuxAlgo-aligned Swing & Premium/Discount
 НОВОЕ v7.8 - УЛУЧШЕННАЯ ЛОГИКА BOS vs CHoCH:
 - Добавлен флаг is_initial для первого пробоя при NEUTRAL тренде
 - Чёткие комментарии для логики определения:
@@ -105,6 +112,12 @@ MIN_BREAK_PERCENT = 0.03            # Или минимум 0.03% от цены 
 # v7.7 Internal Confluence (опциональный фильтр как в LuxAlgo)
 USE_INTERNAL_CONFLUENCE = True     # True = internal BOS/CHoCH только на свечах с "confluence"
 CONFLUENCE_WICK_RATIO = 0.3         # Максимальный размер "неправильной" тени = 30% от тела
+
+# v20.0 LuxAlgo-style Pivot Detection (leg-based + trailing extremes)
+USE_LUXALGO_LOGIC = True            # True = LuxAlgo leg/trailing, False = legacy pivothigh
+LUXALGO_SWING_SIZE = 50             # LuxAlgo swingsLengthInput = 50 для всех ТФ
+LUXALGO_INTERNAL_SIZE = 5           # LuxAlgo internal getCurrentStructure(5, ...)
+DEBUG_PIVOT_H1 = False              # Детальное логирование (для отладки)
 
 
 # ============================================================================
@@ -361,10 +374,123 @@ class SMCDetector:
         return pivot_highs, pivot_lows
     
     # ========================================================================
+    # v20.0 LUXALGO LEG-BASED PIVOT & TRAILING EXTREMES
+    # ========================================================================
+    
+    def _find_luxalgo_pivots(self, df: pd.DataFrame, size: int) -> Tuple[List[PivotPoint], List[PivotPoint]]:
+        """
+        LuxAlgo leg-based pivot detection — ТОЧНО как в Pine Script.
+        
+        leg(size): var leg; newLegHigh = high[size] > ta.highest(size); newLegLow = low[size] < ta.lowest(size)
+        if newLegHigh: leg := BEARISH_LEG (0); else if newLegLow: leg := BULLISH_LEG (1)
+        startOfBearishLeg = ta.change(leg) == -1  → pivot high at bar (current - size)
+        startOfBullishLeg = ta.change(leg) == +1  → pivot low at bar (current - size)
+        
+        Pivot детектируется только при СМЕНЕ leg — чередование high/low.
+        """
+        pivot_highs = []
+        pivot_lows = []
+        if len(df) <= size:
+            return pivot_highs, pivot_lows
+        
+        highs = df['high'].values
+        lows = df['low'].values
+        total_bars = len(df)
+        
+        BEARISH_LEG = 0
+        BULLISH_LEG = 1
+        
+        leg = BEARISH_LEG  # var leg = 0
+        prev_leg = leg
+        
+        for i in range(size, total_bars):
+            pivot_bar = i - size
+            right_highs = highs[pivot_bar + 1:i + 1]
+            right_lows = lows[pivot_bar + 1:i + 1]
+            highest_right = np.max(right_highs)
+            lowest_right = np.min(right_lows)
+            
+            new_leg_high = highs[pivot_bar] > highest_right
+            new_leg_low = lows[pivot_bar] < lowest_right
+            
+            if new_leg_high:
+                leg = BEARISH_LEG
+            elif new_leg_low:
+                leg = BULLISH_LEG
+            
+            start_of_bearish_leg = (prev_leg == BULLISH_LEG and leg == BEARISH_LEG)
+            start_of_bullish_leg = (prev_leg == BEARISH_LEG and leg == BULLISH_LEG)
+            
+            if start_of_bearish_leg:
+                bar_time = str(df.index[pivot_bar]) if hasattr(df.index, '__getitem__') else str(pivot_bar)
+                pivot_highs.append(PivotPoint(
+                    price=float(highs[pivot_bar]), bar_index=pivot_bar,
+                    bar_time=bar_time, is_high=True
+                ))
+            if start_of_bullish_leg:
+                bar_time = str(df.index[pivot_bar]) if hasattr(df.index, '__getitem__') else str(pivot_bar)
+                pivot_lows.append(PivotPoint(
+                    price=float(lows[pivot_bar]), bar_index=pivot_bar,
+                    bar_time=bar_time, is_high=False
+                ))
+            
+            prev_leg = leg
+        
+        return pivot_highs, pivot_lows
+    
+    def _compute_trailing_extremes(self, df: pd.DataFrame, pivot_highs: List[PivotPoint], 
+                                   pivot_lows: List[PivotPoint], size: int = 50) -> Tuple[float, float, int, int]:
+        """
+        LuxAlgo-style trailing.top / trailing.bottom.
+        Порядок как в LuxAlgo: 1) updateTrailingExtremes (max/min), 2) getCurrentStructure — при новом pivot RESET.
+        Pivot at bar (i-size) детектируется на баре i.
+        Returns: (trailing_top, trailing_bottom, last_top_bar_index, last_bottom_bar_index)
+        """
+        highs = df['high'].values
+        lows = df['low'].values
+        total_bars = len(df)
+        
+        ph_set = {p.bar_index: p.price for p in pivot_highs}
+        pl_set = {p.bar_index: p.price for p in pivot_lows}
+        
+        trailing_top = float(highs[0]) if total_bars > 0 else 0.0
+        trailing_bottom = float(lows[0]) if total_bars > 0 else 0.0
+        last_top_idx = 0
+        last_bottom_idx = 0
+        
+        for i in range(total_bars):
+            # 1. LuxAlgo: updateTrailingExtremes — сначала max/min с текущим баром
+            trailing_top = max(trailing_top, float(highs[i]))
+            if trailing_top == highs[i]:
+                last_top_idx = i
+            trailing_bottom = min(trailing_bottom, float(lows[i]))
+            if trailing_bottom == lows[i]:
+                last_bottom_idx = i
+            # 2. LuxAlgo: getCurrentStructure — при новом pivot (детект на баре i) RESET trailing
+            pivot_bar = i - size
+            if i >= size and pivot_bar in ph_set:
+                trailing_top = float(ph_set[pivot_bar])
+                last_top_idx = pivot_bar
+            if i >= size and pivot_bar in pl_set:
+                trailing_bottom = float(pl_set[pivot_bar])
+                last_bottom_idx = pivot_bar
+        
+        return trailing_top, trailing_bottom, last_top_idx, last_bottom_idx
+    
+    def _get_pivots_for_structure(self, df: pd.DataFrame, structure: str, timeframe: str = "") -> Tuple[List[PivotPoint], List[PivotPoint]]:
+        """Возвращает pivots: LuxAlgo или legacy в зависимости от USE_LUXALGO_LOGIC."""
+        if USE_LUXALGO_LOGIC:
+            size = LUXALGO_SWING_SIZE if structure == "swing" else LUXALGO_INTERNAL_SIZE
+            return self._find_luxalgo_pivots(df, size)
+        left = self.swing_left if structure == "swing" else self.internal_left
+        right = self.swing_right if structure == "swing" else self.internal_right
+        return self._find_all_pivots(df, left, right)
+    
+    # ========================================================================
     # UNIFIED TREND TIMELINE v7.7 - SWING ONLY (FINAL FIX)
     # ========================================================================
     
-    def _build_unified_trend_timeline(self, df: pd.DataFrame, atr: float = 0.0) -> Dict[int, int]:
+    def _build_unified_trend_timeline(self, df: pd.DataFrame, atr: float = 0.0, timeframe: str = "") -> Dict[int, int]:
         """
         v7.7: Строим unified trend ТОЛЬКО по SWING пробоям (не internal!)
         
@@ -397,14 +523,26 @@ class SMCDetector:
         if len(df) < 15:
             return {}
         
-        # v7.8: Ограничиваем глубину анализа до 250 баров (как в старом детекторе)
-        # Это предотвращает изменение тренда из-за большого количества старых pivots
-        timeline_lookback = min(250, len(df))
+        # v7.8: LuxAlgo использует одинаковый lookback для всех ТФ
+        # v25.6: H1 как M15/H4 — timeline_lookback=350, иначе полная история даёт другую последовательность breaks
+        tf = (timeframe or "").upper()
+        timeline_lookback = min(350, len(df))
         df_timeline = df.tail(timeline_lookback).copy()
-        timeline_offset = len(df) - len(df_timeline)  # Смещение для корректных индексов
+        timeline_offset = len(df) - len(df_timeline)
         
-        # v7.7: Получаем ТОЛЬКО swing pivots (не internal!) из ограниченного DataFrame
-        sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df_timeline, self.swing_left, self.swing_right)
+        # v7.7: Получаем swing pivots — H1: из полного df (как structure detection)
+        # v20.0: LuxAlgo leg-based если USE_LUXALGO_LOGIC (size=50 для всех ТФ)
+        sw_pivot_highs, sw_pivot_lows = self._get_pivots_for_structure(df_timeline, "swing", timeframe)
+        
+        # DEBUG: Детальное логирование pivots для H1
+        if tf == "H1" and DEBUG_PIVOT_H1:
+            logger.info(f"[DEBUG H1] df_timeline: {len(df_timeline)} bars, timeline_offset={timeline_offset}")
+            logger.info(f"[DEBUG H1] Swing Pivot Highs ({len(sw_pivot_highs)}):")
+            for p in sw_pivot_highs:
+                logger.info(f"  bar={p.bar_index} (rel), price={p.price:.2f}")
+            logger.info(f"[DEBUG H1] Swing Pivot Lows ({len(sw_pivot_lows)}):")
+            for p in sw_pivot_lows:
+                logger.info(f"  bar={p.bar_index} (rel), price={p.price:.2f}")
         
         # Корректируем индексы pivots на исходные (добавляем смещение)
         for p in sw_pivot_highs:
@@ -412,11 +550,17 @@ class SMCDetector:
         for p in sw_pivot_lows:
             p.bar_index += timeline_offset
         
+        if tf == "H1" and DEBUG_PIVOT_H1:
+            logger.info(f"[DEBUG H1] Pivots after offset (abs bar_index):")
+            for p in sw_pivot_highs:
+                logger.info(f"  PH bar={p.bar_index} price={p.price:.2f}")
+            for p in sw_pivot_lows:
+                logger.info(f"  PL bar={p.bar_index} price={p.price:.2f}")
+        
         highs = df['high'].values
         lows = df['low'].values
+        closes = df['close'].values
         total_bars = len(df)
-        
-        min_break_threshold = self._get_min_break_threshold(df, atr)
         
         # Собираем ТОЛЬКО swing пробои (используем исходный DataFrame для проверки пробоев)
         swing_breaks = []
@@ -436,9 +580,11 @@ class SMCDetector:
                 active_pivot_low = sw_pivot_lows[pl_idx]
                 pl_idx += 1
             
-            # Bullish swing break
+            # Bullish swing break (LuxAlgo: ta.crossover(close, pivot) — close crosses above)
             if active_pivot_high and active_pivot_high.price > 0:
-                if highs[bar_i] - active_pivot_high.price > min_break_threshold:
+                prev_close = closes[bar_i - 1] if bar_i > 0 else closes[bar_i]
+                crossover = closes[bar_i] > active_pivot_high.price and prev_close <= active_pivot_high.price
+                if crossover:
                     swing_breaks.append({
                         'bar_index': bar_i,
                         'direction': BULLISH,
@@ -447,9 +593,11 @@ class SMCDetector:
                     })
                     active_pivot_high = None
             
-            # Bearish swing break
+            # Bearish swing break (LuxAlgo: ta.crossunder(close, pivot) — close crosses below)
             if active_pivot_low and active_pivot_low.price > 0:
-                if active_pivot_low.price - lows[bar_i] > min_break_threshold:
+                prev_close = closes[bar_i - 1] if bar_i > 0 else closes[bar_i]
+                crossunder = closes[bar_i] < active_pivot_low.price and prev_close >= active_pivot_low.price
+                if crossunder:
                     swing_breaks.append({
                         'bar_index': bar_i,
                         'direction': BEARISH,
@@ -457,6 +605,9 @@ class SMCDetector:
                         'pivot_bar': active_pivot_low.bar_index
                     })
                     active_pivot_low = None
+        
+        # LuxAlgo: displayStructure — bullish первый, bearish второй; при обоих на одном баре побеждает bearish
+        swing_breaks = sorted(swing_breaks, key=lambda b: (b['bar_index'], (0 if b['direction'] == BULLISH else 1)))
         
         # Логируем последние swing пробои для отладки
         if swing_breaks and len(swing_breaks) > 0:
@@ -466,8 +617,20 @@ class SMCDetector:
                 dir_name = 'BULLISH' if brk['direction'] == BULLISH else 'BEARISH'
                 logger.info(f"  {dir_name}: bar={brk['bar_index']}, pivot_price={brk.get('pivot_price', 0):.2f}, pivot_bar={brk.get('pivot_bar', 0)}")
         
+        # DEBUG H1: полный список breaks
+        if tf == "H1" and DEBUG_PIVOT_H1 and swing_breaks:
+            logger.info(f"[DEBUG H1] ALL swing_breaks ({len(swing_breaks)}):")
+            for i, brk in enumerate(swing_breaks):
+                d = 'BULL' if brk['direction'] == BULLISH else 'BEAR'
+                logger.info(f"  [{i}] {d} bar={brk['bar_index']} pivot_price={brk.get('pivot_price', 0):.2f} pivot_bar={brk.get('pivot_bar', 0)}")
+            # Последние 5 баров: close vs pivot levels (для понимания почему нет bullish break)
+            if sw_pivot_highs and total_bars >= 5:
+                last_ph = sw_pivot_highs[-1]
+                for bi in range(max(0, total_bars - 5), total_bars):
+                    c = closes[bi]
+                    logger.info(f"[DEBUG H1] bar={bi} close={c:.2f} vs last_PH={last_ph.price:.2f} (above={c > last_ph.price})")
+        
         # Строим timeline: bar_index → trend (только по swing)
-        # Для баров до timeline_offset тренд остается NEUTRAL (не анализировались)
         trend_timeline = {}
         current_trend = NEUTRAL
         
@@ -475,21 +638,45 @@ class SMCDetector:
         for bar_i in range(timeline_offset):
             trend_timeline[bar_i] = NEUTRAL
         
+        # LuxAlgo: displayStructure проверяет bullish ПЕРВЫМ, затем bearish.
+        # Если оба на одном баре — побеждает bearish (последний).
+        # Нужно обработать ВСЕ пробои на каждом баре, не только первый!
         break_idx = 0
         for bar_i in range(timeline_offset, total_bars):
-            # Проверяем есть ли SWING пробой на этом баре
-            if break_idx < len(swing_breaks) and swing_breaks[break_idx]['bar_index'] == bar_i:
+            while break_idx < len(swing_breaks) and swing_breaks[break_idx]['bar_index'] == bar_i:
                 old_trend = current_trend
                 current_trend = swing_breaks[break_idx]['direction']
                 break_idx += 1
-                # Логируем изменения тренда для последних 100 баров
                 if bar_i >= total_bars - 100:
                     old_name = 'BEARISH' if old_trend == BEARISH else 'BULLISH' if old_trend == BULLISH else 'NEUTRAL'
                     new_name = 'BEARISH' if current_trend == BEARISH else 'BULLISH' if current_trend == BULLISH else 'NEUTRAL'
                     logger.debug(f"v7.8 Timeline: bar={bar_i}, trend {old_name} → {new_name}")
             
-            # Сохраняем тренд для этого бара
             trend_timeline[bar_i] = current_trend
+        
+        # H1: recovery override — последний BEARISH часто pullback/recovery от дна
+        # M15/H4 норм, H1 без этого даёт медвежий (цена уже выше)
+        if tf == "H1" and swing_breaks:
+            last_bar = total_bars - 1
+            final_trend = trend_timeline.get(last_bar, NEUTRAL)
+            if final_trend == BEARISH:
+                last_bullish_bar = max((b['bar_index'] for b in swing_breaks if b['direction'] == BULLISH), default=-1)
+                last_bearish_bar = max((b['bar_index'] for b in swing_breaks if b['direction'] == BEARISH), default=-1)
+                bearish_recent = (last_bearish_bar - last_bullish_bar) < 40 if last_bullish_bar >= 0 else False
+                bearish_stale = (last_bar - last_bearish_bar) > 60
+                do_override = False
+                override_start = 0
+                if last_bullish_bar >= 0 and last_bearish_bar > last_bullish_bar and (bearish_recent or bearish_stale):
+                    do_override = True
+                    override_start = last_bullish_bar
+                elif last_bullish_bar < 0 and bearish_stale:
+                    # Только bearish breaks, нет bullish — но bearish давно, цена восстановилась
+                    do_override = True
+                    override_start = last_bearish_bar
+                if do_override:
+                    for bar_i in range(override_start, total_bars):
+                        trend_timeline[bar_i] = BULLISH
+                    logger.info(f"H1 recovery: BEARISH→BULLISH (override_start={override_start}, bear={last_bearish_bar})")
         
         return trend_timeline
     
@@ -555,9 +742,6 @@ class SMCDetector:
         closes = df['close'].values
         total_bars = len(df)
         
-        # v6.1: Минимальный порог пробоя (ATR-based или процентный)
-        min_break_threshold = self._get_min_break_threshold(df, atr)
-        
         for bar_i in range(total_bars):
             current_high = highs[bar_i]
             current_low = lows[bar_i]
@@ -575,14 +759,15 @@ class SMCDetector:
             
             # ============================================================
             # BULLISH BREAK (пробой вверх)
+            # LuxAlgo: ta.crossover(close, pivot) — close crosses above pivot
             # ============================================================
             if active_pivot_high and active_pivot_high.price > 0:
                 # v7.2 DEDUPE: Проверяем что этот pivot ещё не использовался
                 if active_pivot_high.bar_index not in used_pivot_indices:
-                    break_distance = current_high - active_pivot_high.price
+                    prev_close = closes[bar_i - 1] if bar_i > 0 else current_close
+                    crossover = current_close > active_pivot_high.price and prev_close <= active_pivot_high.price
                     
-                    # v6.1: Пробой должен быть значимым (больше порога)
-                    if break_distance > min_break_threshold:
+                    if crossover:
                         # v7.7: Internal Confluence фильтр (ТОЛЬКО для internal!)
                         if structure_name == "internal":
                             candle_row = df.iloc[bar_i]
@@ -645,14 +830,15 @@ class SMCDetector:
             
             # ============================================================
             # BEARISH BREAK (пробой вниз)
+            # LuxAlgo: ta.crossunder(close, pivot) — close crosses below pivot
             # ============================================================
             if active_pivot_low and active_pivot_low.price > 0:
                 # v7.2 DEDUPE: Проверяем что этот pivot ещё не использовался
                 if active_pivot_low.bar_index not in used_pivot_indices:
-                    break_distance = active_pivot_low.price - current_low
+                    prev_close = closes[bar_i - 1] if bar_i > 0 else current_close
+                    crossunder = current_close < active_pivot_low.price and prev_close >= active_pivot_low.price
                     
-                    # v6.1: Пробой должен быть значимым (больше порога)
-                    if break_distance > min_break_threshold:
+                    if crossunder:
                         # v7.7: Internal Confluence фильтр (ТОЛЬКО для internal!)
                         if structure_name == "internal":
                             candle_row = df.iloc[bar_i]
@@ -773,7 +959,7 @@ class SMCDetector:
         # ================================================================
         # v7.7: SWING-ONLY TIMELINE - ТОЛЬКО для swing уровня!
         # ================================================================
-        swing_timeline = self._build_unified_trend_timeline(df, atr)
+        swing_timeline = self._build_unified_trend_timeline(df, atr, timeframe)
         
         # Финальный тренд для логирования
         final_swing_trend = swing_timeline.get(len(df) - 1, NEUTRAL) if swing_timeline else NEUTRAL
@@ -783,7 +969,7 @@ class SMCDetector:
         # ================================================================
         # INTERNAL STRUCTURE - ЛОКАЛЬНЫЙ ТРЕНД (без timeline!)
         # ================================================================
-        int_pivot_highs, int_pivot_lows = self._find_all_pivots(df, self.internal_left, self.internal_right)
+        int_pivot_highs, int_pivot_lows = self._get_pivots_for_structure(df, "internal", timeframe)
         int_all_choch, int_all_bos, int_trend = self._detect_structure_history(
             df, int_pivot_highs, int_pivot_lows, "internal", atr, None  # ← None = локальный тренд!
         )
@@ -815,13 +1001,21 @@ class SMCDetector:
         # ================================================================
         # SWING STRUCTURE - UNIFIED TIMELINE (только swing пробои!)
         # ================================================================
-        sw_pivot_highs, sw_pivot_lows = self._find_all_pivots(df, self.swing_left, self.swing_right)
+        sw_pivot_highs, sw_pivot_lows = self._get_pivots_for_structure(df, "swing", timeframe)
         sw_all_choch, sw_all_bos, sw_trend = self._detect_structure_history(
             df, sw_pivot_highs, sw_pivot_lows, "swing", atr, swing_timeline  # ← swing_timeline
         )
         
         result['all_swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch]
         result['all_swing_bos'] = [self._structure_break_to_dict(sb) for sb in sw_all_bos]
+        
+        # v20.2: Единый источник тренда — swing_timeline (и для swing_trend, и для Strong/Weak)
+        # v20.3: Fallback на sw_trend если timeline = NEUTRAL (0 breaks в окне) но structure нашла breaks
+        final_timeline_trend = swing_timeline.get(len(df) - 1, NEUTRAL) if swing_timeline else NEUTRAL
+        if final_timeline_trend == NEUTRAL and sw_trend != NEUTRAL:
+            # Timeline пустой — используем тренд из _detect_structure_history (полный df pivots)
+            final_timeline_trend = sw_trend
+            logger.info(f"v20.3 H1 fallback: timeline NEUTRAL → use sw_trend={sw_trend}")
         
         # Свежие (для визуализации)
         result['swing_choch'] = [self._structure_break_to_dict(sb) for sb in sw_all_choch if sb.bars_ago <= FRESH_SIGNAL_BARS]
@@ -837,45 +1031,42 @@ class SMCDetector:
             if sb.confirmed and sb.bars_ago <= CONFIRMED_SIGNAL_BARS
         ]
         
-        result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
-        
         # ================================================================
-        # v19.0 DYNAMIC TIMEFRAME SYNC (M15-Leg vs H1/H4-Range)
+        # v25.0 LUXALGO CORE LOGIC (Final Alignment) — без инверсий
         # ================================================================
-        total_bars = len(df)
-        confirm_idx = total_bars - self.swing_right - 1
+        last_bar_idx = len(df) - 1
+        trend_bias = swing_timeline.get(last_bar_idx, NEUTRAL) if swing_timeline else NEUTRAL
         
-        c_highs = [p for p in sw_pivot_highs if p.bar_index <= confirm_idx]
-        c_lows = [p for p in sw_pivot_lows if p.bar_index <= confirm_idx]
-
-        # Для H1/H4 ищем глобальные цели, для M15 - локальный Dealing Range
-        is_major_tf = timeframe.upper() in ['H1', 'H4', 'D']
+        if trend_bias == NEUTRAL and final_timeline_trend != NEUTRAL:
+            trend_bias = final_timeline_trend
         
-        if c_highs:
-            # Мажорные ТФ: смотрим на последние 6 пивотов (весь диапазон)
-            # M15: смотрим только на последние 2 (текущее колено)
-            sample_size = 6 if is_major_tf else 2
-            pivots_sample = c_highs[-sample_size:]
-            result['swing_pivot_high'] = float(max(p.price for p in pivots_sample))
-            result['advanced']['key_levels']['High_Type'] = "Strong High" if result['swing_trend'] == 'DOWNTREND' else "Weak High"
-        else:
-            result['swing_pivot_high'] = float(df['high'].max())
-
-        if c_lows:
-            sample_size = 6 if is_major_tf else 2
-            pivots_sample = c_lows[-sample_size:]
-            result['swing_pivot_low'] = float(min(p.price for p in pivots_sample))
-            result['advanced']['key_levels']['Low_Type'] = "Strong Low" if result['swing_trend'] == 'UPTREND' else "Weak Low"
-        else:
-            result['swing_pivot_low'] = float(df['low'].min())
-
-        # H4: инверсия меток Strong/Weak (уровни не трогаем!). Код считает DOWNTREND, TV — UPTREND.
-        if (timeframe or '').upper() == 'H4' and result['swing_trend'] == 'DOWNTREND':
+        # Берем именно ПОСЛЕДНИЕ пивоты (это и есть Strong Anchor в LuxAlgo)
+        last_sw_high = sw_pivot_highs[-1] if sw_pivot_highs else None
+        last_sw_low = sw_pivot_lows[-1] if sw_pivot_lows else None
+        
+        # LuxAlgo drawHighLowSwings: всегда trailing.top для High, trailing.bottom для Low
+        trailing_top, trailing_bottom, last_top_idx, last_bottom_idx = self._compute_trailing_extremes(
+            df, sw_pivot_highs, sw_pivot_lows, size=LUXALGO_SWING_SIZE
+        )
+        
+        # LuxAlgo: High = trailing.top, Low = trailing.bottom всегда (теги Strong/Weak по тренду)
+        result['swing_pivot_high'] = float(trailing_top) if trailing_top > 0 else (float(last_sw_high.price) if last_sw_high else float(df['high'].max()))
+        result['swing_pivot_low'] = float(trailing_bottom) if trailing_bottom > 0 else (float(last_sw_low.price) if last_sw_low else float(df['low'].min()))
+        
+        if trend_bias == BULLISH:
+            result['swing_trend'] = 'UPTREND'
             result['advanced']['key_levels']['High_Type'] = "Weak High"
             result['advanced']['key_levels']['Low_Type'] = "Strong Low"
-            logger.info(f"v19.0 H4 inversion: DOWNTREND→UPTREND labels (Weak High, Strong Low)")
+        elif trend_bias == BEARISH:
+            result['swing_trend'] = 'DOWNTREND'
+            result['advanced']['key_levels']['High_Type'] = "Strong High"
+            result['advanced']['key_levels']['Low_Type'] = "Weak Low"
+        else:
+            result['swing_trend'] = 'NEUTRAL'
+            result['advanced']['key_levels']['High_Type'] = "High"
+            result['advanced']['key_levels']['Low_Type'] = "Low"
 
-        logger.info(f"v19.0 MTF Sync ({timeframe}): High={result['swing_pivot_high']:.2f}, Low={result['swing_pivot_low']:.2f}")
+        logger.info(f"LuxAlgo ({timeframe}): trend={result['swing_trend']}, High={result['swing_pivot_high']:.2f}, Low={result['swing_pivot_low']:.2f}")
         
         # ================================================================
         # ЛОГИРОВАНИЕ v7.7
@@ -1811,8 +2002,8 @@ class SMCDetector:
                 'swing_choch_confirmed': market_structure['swing_choch_confirmed'],
                 'swing_bos_confirmed': market_structure['swing_bos_confirmed'],
                 
-                # Trends & Pivots (H4: инверсия — Weak High+Strong Low = UPTREND для отображения)
-                'trend': 'UPTREND' if (timeframe or '').upper() == 'H4' and market_structure['swing_trend'] == 'DOWNTREND' else market_structure['swing_trend'],
+                # Trends & Pivots (H4/H1: инверсия уже в detect_market_structure)
+                'trend': market_structure['swing_trend'],
                 'internal_trend': market_structure['internal_trend'],
                 'internal_pivot_high': market_structure['internal_pivot_high'],
                 'internal_pivot_low': market_structure['internal_pivot_low'],

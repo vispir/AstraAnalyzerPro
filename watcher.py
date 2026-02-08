@@ -268,7 +268,7 @@ def extract_llm_verdict(parsed):
         'sl': sl, 
         'tp': tp, 
         'confidence': confidence, 
-        'reason': str(reason)[:500],
+        'reason': str(reason)[:4000],
         'low_confidence_override': low_confidence_override,
         'original_action': original_action if low_confidence_override else None,
         'setup_grade': setup_grade,
@@ -282,7 +282,7 @@ def extract_executive_summary(ai_response):
         return parsed['executive_summary']
     
     cleaned = ai_response.replace('```json', '').replace('```', '').strip()
-    return cleaned[:197] + '...' if len(cleaned) > 200 else cleaned
+    return cleaned
 
 
 def format_signal_message_with_verdict(ai_response, verdict):
@@ -392,8 +392,9 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
         return msg
     
     elif verdict and verdict['action'] == 'WAIT':
-        # Форматируем WAIT сигнал с полными данными
-        reason = escape_html(verdict['reason'] or 'Ожидание лучшей возможности')
+        # Форматируем WAIT сигнал с полными данными (полный executive_summary как для BUY/SELL)
+        full_reason = parsed_data.get('executive_summary', '') if parsed_data else ''
+        reason = escape_html(full_reason or verdict.get('reason', '') or 'Ожидание лучшей возможности')
         confidence = verdict.get('confidence', 0)
         low_conf_override = verdict.get('low_confidence_override', False)
         original_action = escape_html(verdict.get('original_action'))

@@ -7,6 +7,7 @@ import logging
 from services.calculator import calculator
 from services.yfinance_service import yfinance_service
 from services.twelvedata_service import twelvedata_service
+from services.oanda_service import oanda_service
 from services.cache_service import cache_service
 from services.news_service import news_service
 from services.chart_service import chart_service
@@ -179,6 +180,7 @@ def clear_cache():
             if prefix == 'candles':
                 yfinance_service.clear_cache()
                 twelvedata_service.clear_cache()
+                oanda_service.clear_cache()
             elif prefix == 'chart_image':
                 chart_service.clear_cache()
             elif prefix in ['calendar', 'geopolitical']:

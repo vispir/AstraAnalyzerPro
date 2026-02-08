@@ -668,7 +668,8 @@ The following images are attached to this request in order:
                         "role": "user",
                         "content": user_content
                     }
-                ]
+                ],
+                "max_tokens": 8192
             }
             
             # Логируем IP адрес перед запросом
@@ -849,7 +850,13 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             # Логируем URL (без ключа)
             logger.debug(f"Gemini API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
             
-            payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+            payload = {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": 8192,
+                    "temperature": 0.7,
+                }
+            }
             logger.info(f"Payload size: {len(full_prompt)} characters")
             
             # Логируем IP адрес перед запросом
@@ -1011,7 +1018,8 @@ Use this data to find the specific High/Low/Close of the trigger candle.
                         "role": "user",
                         "content": user_content
                     }
-                ]
+                ],
+                "max_tokens": 8192
             }
             
             # Логируем IP адрес перед запросом
