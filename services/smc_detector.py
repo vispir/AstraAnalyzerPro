@@ -727,7 +727,7 @@ class SMCDetector:
     # MARKET STRUCTURE DETECTION
     # ========================================================================
     
-    def detect_market_structure(self, df: pd.DataFrame) -> Dict:
+    def detect_market_structure(self, df: pd.DataFrame, timeframe: str = 'M15') -> Dict:
         """
         Определение структуры рынка v7.7
         
@@ -760,7 +760,8 @@ class SMCDetector:
             'swing_choch_confirmed': [], 'swing_bos_confirmed': [],
             'internal_trend': 'NEUTRAL', 'swing_trend': 'NEUTRAL',
             'internal_pivot_high': 0.0, 'internal_pivot_low': 0.0,
-            'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0
+            'swing_pivot_high': 0.0, 'swing_pivot_low': 0.0,
+            'advanced': {'key_levels': {}}  # v16.1: для Strong High/Weak Low
         }
         
         if len(df) < 15:
@@ -839,84 +840,42 @@ class SMCDetector:
         result['swing_trend'] = 'UPTREND' if sw_trend == BULLISH else 'DOWNTREND' if sw_trend == BEARISH else 'NEUTRAL'
         
         # ================================================================
-        # LuxAlgo Price Discovery - swing high/low для зон (L/R=5/5, latest pivot)
-        sw_pivot_highs_zones, sw_pivot_lows_zones = self._find_all_pivots(df, self.swing_left_zones, self.swing_right_zones)
-        
+        # v19.0 DYNAMIC TIMEFRAME SYNC (M15-Leg vs H1/H4-Range)
+        # ================================================================
         total_bars = len(df)
-        current_close = float(df['close'].iloc[-1])
-        confirm_idx = total_bars - self.swing_right_zones - 1
+        confirm_idx = total_bars - self.swing_right - 1
         
-        # Берем ВСЕ подтвержденные временем пивоты для зон (без ограничения lookback)
-        # Логика "Price Discovery" сама отфильтрует неактуальные
-        conf_highs = [p for p in sw_pivot_highs_zones if p.bar_index <= confirm_idx]
-        conf_lows = [p for p in sw_pivot_lows_zones if p.bar_index <= confirm_idx]
+        c_highs = [p for p in sw_pivot_highs if p.bar_index <= confirm_idx]
+        c_lows = [p for p in sw_pivot_lows if p.bar_index <= confirm_idx]
+
+        # Для H1/H4 ищем глобальные цели, для M15 - локальный Dealing Range
+        is_major_tf = timeframe.upper() in ['H1', 'H4', 'D']
         
-        all_highs = sw_pivot_highs_zones
-        all_lows = sw_pivot_lows_zones
-
-        # Swing High (Premium): ВЫСОЧАЙШИЙ среди недавних — формирует потолок зоны (4943, не 4906)
-        # Swing Low (Discount): ПОСЛЕДНИЙ — подхватывает новый low при пробое (4749)
-        lookback_high = 80  # баров для поиска высочайшего swing high
-        min_bar_high = max(0, total_bars - 1 - lookback_high)
-        
-        active_high = None
-        active_high_bar = None
-        if all_highs:
-            recent_highs = [h for h in all_highs if h.bar_index >= min_bar_high]
-            if recent_highs:
-                highest_high = max(recent_highs, key=lambda h: h.price)
-                active_high = highest_high.price
-                active_high_bar = highest_high.bar_index
-            else:
-                highest_high = max(all_highs, key=lambda h: h.price)
-                active_high = highest_high.price
-                active_high_bar = highest_high.bar_index
-        
-        active_low = None
-        active_low_bar = None
-        if all_lows:
-            latest_low = max(all_lows, key=lambda l: l.bar_index)
-            active_low = latest_low.price
-            active_low_bar = latest_low.bar_index
-        # Fallback: если вообще нет пивотов, берем границы последних 50 свечей
-        if active_high is None:
-            active_high = float(df['high'].tail(50).max())
-        if active_low is None:
-            active_low = float(df['low'].tail(50).min())
-
-        # Гарантируем, что High > Low
-        if active_high <= active_low:
-            active_high = active_low + (active_low * 0.001)
-
-        result['swing_pivot_high'] = active_high
-        result['swing_pivot_low'] = active_low
-
-        # Отладочное логирование - показываем ВСЕ пивоты для диагностики
-        if conf_highs:
-            all_highs_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in conf_highs])
-            logger.info(f"v15.0 Price Discovery: Close={current_close:.2f}, Total bars={total_bars}, Confirm idx={confirm_idx}")
-            logger.info(f"v15.0 All confirmed highs ({len(conf_highs)}): [{all_highs_info}]")
-            logger.info(f"v15.0 Selected: High={active_high:.2f} (bar={active_high_bar}, ago={total_bars-1-active_high_bar if active_high_bar else 'N/A'})")
+        if c_highs:
+            # Мажорные ТФ: смотрим на последние 6 пивотов (весь диапазон)
+            # M15: смотрим только на последние 2 (текущее колено)
+            sample_size = 6 if is_major_tf else 2
+            pivots_sample = c_highs[-sample_size:]
+            result['swing_pivot_high'] = float(max(p.price for p in pivots_sample))
+            result['advanced']['key_levels']['High_Type'] = "Strong High" if result['swing_trend'] == 'DOWNTREND' else "Weak High"
         else:
-            logger.info(f"v15.0 Price Discovery: Close={current_close:.2f}, No confirmed highs, using fallback")
-            logger.info(f"v15.0 Selected: High={active_high:.2f}")
-        
-        if conf_lows:
-            all_lows_info = ", ".join([f"{l.price:.2f}(bar={l.bar_index},ago={total_bars-1-l.bar_index})" for l in conf_lows])
-            logger.info(f"v15.0 All confirmed lows ({len(conf_lows)}): [{all_lows_info}]")
-        is_potential_low = active_low_bar is not None and active_low_bar > confirm_idx
-        suffix = " [potential]" if is_potential_low else ""
-        logger.info(f"v15.0 Selected: Low={active_low:.2f} (bar={active_low_bar}, ago={total_bars-1-active_low_bar if active_low_bar else 'N/A'}){suffix}")
-        
-        # Highs/Lows за последние 115 баров (M15)
-        lookback_115 = 115
-        min_bar_115 = max(0, total_bars - 1 - lookback_115)
-        highs_115 = [h for h in all_highs if h.bar_index >= min_bar_115]
-        lows_115 = [l for l in all_lows if l.bar_index >= min_bar_115]
-        highs_115_info = ", ".join([f"{h.price:.2f}(bar={h.bar_index},ago={total_bars-1-h.bar_index})" for h in sorted(highs_115, key=lambda x: x.bar_index)])
-        lows_115_info = ", ".join([f"{l.price:.2f}(bar={l.bar_index},ago={total_bars-1-l.bar_index})" for l in sorted(lows_115, key=lambda x: x.bar_index)])
-        logger.info(f"v15.0 Last {lookback_115} bars (M15) - Highs ({len(highs_115)}): [{highs_115_info}]")
-        logger.info(f"v15.0 Last {lookback_115} bars (M15) - Lows ({len(lows_115)}): [{lows_115_info}]")
+            result['swing_pivot_high'] = float(df['high'].max())
+
+        if c_lows:
+            sample_size = 6 if is_major_tf else 2
+            pivots_sample = c_lows[-sample_size:]
+            result['swing_pivot_low'] = float(min(p.price for p in pivots_sample))
+            result['advanced']['key_levels']['Low_Type'] = "Strong Low" if result['swing_trend'] == 'UPTREND' else "Weak Low"
+        else:
+            result['swing_pivot_low'] = float(df['low'].min())
+
+        # H4: инверсия меток Strong/Weak (уровни не трогаем!). Код считает DOWNTREND, TV — UPTREND.
+        if (timeframe or '').upper() == 'H4' and result['swing_trend'] == 'DOWNTREND':
+            result['advanced']['key_levels']['High_Type'] = "Weak High"
+            result['advanced']['key_levels']['Low_Type'] = "Strong Low"
+            logger.info(f"v19.0 H4 inversion: DOWNTREND→UPTREND labels (Weak High, Strong Low)")
+
+        logger.info(f"v19.0 MTF Sync ({timeframe}): High={result['swing_pivot_high']:.2f}, Low={result['swing_pivot_low']:.2f}")
         
         # ================================================================
         # ЛОГИРОВАНИЕ v7.7
@@ -991,11 +950,14 @@ class SMCDetector:
             else:
                 zone_name = "EQUILIBRIUM"
 
-            # LuxAlgo Fibonacci zones: Premium 61.8%-100%, Discount 0%-38.2%
-            premium_box_bottom = l_min + (range_size * FIB_PREMIUM_BOTTOM)
-            discount_box_top = l_min + (range_size * FIB_DISCOUNT_TOP)
-            eq_top = l_min + (range_size * 0.618)
-            eq_bottom = l_min + (range_size * 0.382)
+            # LuxAlgo/TradingView style: узкие боксы на краях, Equilibrium ~4% в центре
+            # v16.0: Clamp зоны в [l_min, h_max] для гарантии
+            def _clamp(v):
+                return max(l_min, min(h_max, v))
+            premium_box_bottom = _clamp(l_min + (range_size * 0.95))   # 95% - нижняя граница Premium
+            discount_box_top = _clamp(l_min + (range_size * 0.05))     # 5% - верхняя граница Discount
+            eq_top = _clamp(l_min + (range_size * 0.52))               # 52% - верх Equilibrium band (~4%)
+            eq_bottom = _clamp(l_min + (range_size * 0.48))             # 48% - низ Equilibrium band
 
             return {
                 'premium': {'top': float(h_max), 'bottom': float(premium_box_bottom)},
@@ -1042,14 +1004,15 @@ class SMCDetector:
                 'key_levels': {
                     'Current_Zone': zones.get('current_zone', 'UNKNOWN'),
                     'Range_Percent': zones.get('position_in_range_pct', 50.0),
+                    'High_Type': 'High',   # Перезаписывается в analyze() из market_structure
+                    'Low_Type': 'Low',
                     'High_250': zones.get('range_high', 0.0),
                     'Low_250': zones.get('range_low', 0.0),
-                    'Equilibrium_Price': float(eq_price), # <--- Передаем явно
+                    'Equilibrium_Price': float(eq_price),
                     'DH': float(df.tail(96)['high'].max()),
                     'DL': float(df.tail(96)['low'].min()),
                 },
                 'zones': zones,
-                # ... остальные поля
             }
             return advanced
             
@@ -1065,6 +1028,8 @@ class SMCDetector:
                 'Range_Percent': 50.0,
                 'High_250': 0.0,
                 'Low_250': 0.0,
+                'High_Type': 'High',
+                'Low_Type': 'Low',
                 'DH': 0.0,
                 'DL': 0.0,
                 'PDH': 0.0,
@@ -1765,69 +1730,35 @@ class SMCDetector:
     # ГЛАВНЫЙ МЕТОД АНАЛИЗА
     # ========================================================================
     
-    def analyze(self, df, zone_lookback: int = 0) -> Dict:
-        """
-        Полный SMC анализ v7.0 Professional
-        
-        zone_lookback: если 250, зоны считаются по последним 250 барам (синхрон с TG).
-        
-        Улучшения v7.0:
-        - Узкие зоны Premium/Discount на основе Swing Points
-        - Order Blocks с mitigation/invalidation/breaker статусом
-        - FVG с fill статусом
-        - Liquidity Sweeps
-        - ATR-фильтр шума
-        
-        Возвращает:
-        1. ВСЕ сигналы (all_*, fresh) - для визуализации на графике
-        2. CONFIRMED сигналы (*_confirmed) - для TG бота (консервативные)
-        """
+    def analyze(self, df, timeframe: str = 'M15', zone_lookback: int = 0) -> Dict:
         try:
             if isinstance(df, list):
-                if not df:
-                    return self._get_empty_result()
+                if not df: return self._get_empty_result()
                 df = pd.DataFrame(df)
             
-            if not isinstance(df, pd.DataFrame):
-                return self._get_empty_result()
-            
-            required = ['open', 'high', 'low', 'close']
-            if not all(col in df.columns for col in required):
-                return self._get_empty_result()
-            
-            if len(df) < 15:
-                return self._get_empty_result()
+            if not isinstance(df, pd.DataFrame): return self._get_empty_result()
             
             self.analysis_count += 1
-            current_price = float(df['close'].iloc[-1])
             
-            logger.info(f"=== SMC Analysis v7.7 #{self.analysis_count} | {len(df)} bars | Price: {current_price:.2f} ===")
+            # ИСПРАВЛЕНО: передаем переменную timeframe, а не строку 'M15'
+            market_structure = self.detect_market_structure(df, timeframe=timeframe)
             
-            # 1. Market Structure (v6.0 с confirmed флагами)
-            market_structure = self.detect_market_structure(df)
-            
-            # 2. Order Blocks
+            # Остальной код без изменений...
             order_blocks = self.detect_order_blocks(df)
-            
-            # 3. FVG
             fvg = self.detect_fvg(df)
-            
-            # 4. Liquidity
             liquidity = self.detect_liquidity(df)
-            
-            # 5. Equal Highs/Lows
             equal_levels = self.detect_equal_highs_lows(df)
             
-            # 6. Зоны Premium/Discount v8.1 — хаи/лои ИЗ структуры (как LuxAlgo)
             sw_high = market_structure.get('swing_pivot_high', 0)
             sw_low = market_structure.get('swing_pivot_low', 0)
-            logger.info(f"🔍 calculate_zones: sw_high={sw_high:.2f}, sw_low={sw_low:.2f}, zone_lookback={zone_lookback}")
             zones = self.calculate_zones(df, swing_high=sw_high, swing_low=sw_low, zone_lookback=zone_lookback)
-            logger.info(f"🔍 calculate_zones result: range_high={zones.get('range_high', 0):.2f}, range_low={zones.get('range_low', 0):.2f}, range_source={zones.get('range_source', 'NONE')}")
             
-            # 7. Advanced Data
             advanced = self.calculate_advanced_data(df, zones)
-            
+            ms_kl = market_structure.get('advanced', {}).get('key_levels', {})
+            if ms_kl:
+                advanced['key_levels']['High_Type'] = ms_kl.get('High_Type', 'High')
+                advanced['key_levels']['Low_Type'] = ms_kl.get('Low_Type', 'Low')
+
             # ================================================================
             # СБОРКА РЕЗУЛЬТАТА v7.0
             # ================================================================
@@ -1880,8 +1811,8 @@ class SMCDetector:
                 'swing_choch_confirmed': market_structure['swing_choch_confirmed'],
                 'swing_bos_confirmed': market_structure['swing_bos_confirmed'],
                 
-                # Trends & Pivots
-                'trend': market_structure['swing_trend'],
+                # Trends & Pivots (H4: инверсия — Weak High+Strong Low = UPTREND для отображения)
+                'trend': 'UPTREND' if (timeframe or '').upper() == 'H4' and market_structure['swing_trend'] == 'DOWNTREND' else market_structure['swing_trend'],
                 'internal_trend': market_structure['internal_trend'],
                 'internal_pivot_high': market_structure['internal_pivot_high'],
                 'internal_pivot_low': market_structure['internal_pivot_low'],

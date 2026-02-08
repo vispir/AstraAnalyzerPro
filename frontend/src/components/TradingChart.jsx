@@ -124,16 +124,19 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     if (drawSMC) {
     const advancedZones = analysis.advanced?.zones;
     if (advancedZones && advancedZones.range_high > 0 && advancedZones.range_low > 0) {
-      // Используем значения из zones, если они есть, иначе fallback к range
-      const premiumTop = advancedZones.premium?.top ?? advancedZones.range_high;
-      const rangeSize = advancedZones.range_high - advancedZones.range_low;
-      const premiumBottom = advancedZones.premium?.bottom ?? (advancedZones.range_low + rangeSize * 0.618); // LuxAlgo 61.8%
-      const discountTop = advancedZones.discount?.top ?? (advancedZones.range_low + rangeSize * 0.382); // LuxAlgo 38.2%
-      const discountBottom = advancedZones.discount?.bottom ?? advancedZones.range_low;
-      
-      // Equilibrium зона (диапазон между Premium и Discount)
-      const equilibriumTop = advancedZones.equilibrium?.top;
-      const equilibriumBottom = advancedZones.equilibrium?.bottom;
+      const rangeHigh = advancedZones.range_high;
+      const rangeLow = advancedZones.range_low;
+      const rangeSize = rangeHigh - rangeLow;
+      const clamp = (v) => Math.max(rangeLow, Math.min(rangeHigh, v));
+
+      // Зоны в пределах [range_low, range_high]
+      const premiumTop = clamp(advancedZones.premium?.top ?? rangeHigh);
+      const premiumBottom = clamp(advancedZones.premium?.bottom ?? (rangeLow + rangeSize * 0.618));
+      const discountTop = clamp(advancedZones.discount?.top ?? (rangeLow + rangeSize * 0.382));
+      const discountBottom = clamp(advancedZones.discount?.bottom ?? rangeLow);
+
+      const equilibriumTop = clamp(advancedZones.equilibrium?.top ?? (rangeLow + rangeSize * 0.618));
+      const equilibriumBottom = clamp(advancedZones.equilibrium?.bottom ?? (rangeLow + rangeSize * 0.382));
       
       // Конвертируем цены в Y координаты и проверяем валидность
       const premiumTopY = series.priceToCoordinate(premiumTop);
@@ -152,9 +155,15 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillStyle = 'rgba(239, 83, 80, 0.06)';
         ctx.fillRect(0, Math.min(premiumTopY, premiumBottomY), chartRightEdge, premHeight);
         
-        ctx.fillStyle = 'rgba(239, 83, 80, 0.5)';
         ctx.font = '9px Inter, Arial';
-        ctx.fillText('Premium', chartRightEdge - 50, Math.min(premiumTopY, premiumBottomY) + 12);
+        const premText = 'Premium';
+        const premW = ctx.measureText(premText).width;
+        const premX = chartRightEdge - premW - 12;
+        const premY = Math.min(premiumTopY, premiumBottomY) + 4;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(premX - 4, premY - 9, premW + 8, 12);
+        ctx.fillStyle = 'rgba(239, 83, 80, 0.9)';
+        ctx.fillText(premText, premX, premY + 2);
       }
       
       // EQUILIBRIUM ZONE (фиолетовая, посередине между Premium и Discount)
@@ -170,12 +179,23 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillStyle = 'rgba(38, 166, 154, 0.06)';
         ctx.fillRect(0, Math.min(discountTopY, discountBottomY), chartRightEdge, discHeight);
         
-        ctx.fillStyle = 'rgba(38, 166, 154, 0.5)';
         ctx.font = '9px Inter, Arial';
-        ctx.fillText('Discount', chartRightEdge - 50, Math.max(discountTopY, discountBottomY) - 5);
+        const discText = 'Discount';
+        const discW = ctx.measureText(discText).width;
+        const discX = chartRightEdge - discW - 12;
+        const discY = Math.max(discountTopY, discountBottomY) - 18;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(discX - 4, discY - 9, discW + 8, 12);
+        ctx.fillStyle = 'rgba(38, 166, 154, 0.9)';
+        ctx.fillText(discText, discX, discY + 2);
       }
       
-      const drawSwingLabel = (label, price, color, yOffset) => {
+      // v16.0: Приоритет — backend (H4 инверсия), иначе по trend
+      const kl = analysis.advanced?.key_levels;
+      const highLabel = (kl?.High_Type === 'Strong High' || kl?.High_Type === 'Weak High') ? kl.High_Type : (analysis.trend === 'DOWNTREND' ? 'Strong High' : 'Weak High');
+      const lowLabel = (kl?.Low_Type === 'Strong Low' || kl?.Low_Type === 'Weak Low') ? kl.Low_Type : (analysis.trend === 'DOWNTREND' ? 'Weak Low' : 'Strong Low');
+
+      const drawRangeLabel = (label, price, color, yOffset) => {
         const y = series.priceToCoordinate(price);
         if (y === null || y === undefined || y < 0 || y > canvas.height) return;
         ctx.font = '9px Inter, Arial';
@@ -188,10 +208,10 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
         ctx.fillText(label, x, textY);
       };
 
-      drawSwingLabel('Swing High', advancedZones.range_high, 'rgba(239, 83, 80, 0.9)', -6);
-      drawSwingLabel('Swing Low', advancedZones.range_low, 'rgba(38, 166, 154, 0.9)', 12);
+      drawRangeLabel(highLabel, rangeHigh, 'rgba(239, 83, 80, 0.9)', -6);
+      drawRangeLabel(lowLabel, rangeLow, 'rgba(38, 166, 154, 0.9)', 12);
 
-      // Swing High/Low теперь рисуются через PriceLines (см. updateSMCPriceLines)
+      // Диапазон рисуется через PriceLines (см. updateSMCPriceLines)
       // Equilibrium также рисуется как линия через PriceLines для точности, но зона на canvas для визуализации
     }
 
@@ -309,10 +329,7 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
     if (eqTopY != null && eqBottomY != null && eqHeight != null) {
       ctx.fillStyle = 'rgba(156, 39, 176, 0.12)';
       ctx.fillRect(0, eqTopY, chartRightEdge, eqHeight);
-      
-      ctx.fillStyle = 'rgba(156, 39, 176, 0.7)';
-      ctx.font = '9px Inter, Arial';
-      ctx.fillText('Equilibrium', chartRightEdge - 70, (eqTopY + eqHeight / 2));
+      // Метка Equilibrium — рисуем позже, поверх OB/FVG/BOS/EQH/EQL (см. конец SMC блока)
     }
 
     // ============================================================
@@ -484,6 +501,15 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
 
     drawEqualLevels(analysis.eqh || [], SMC_COLORS.EQH, 'EQH');
     drawEqualLevels(analysis.eql || [], SMC_COLORS.EQL, 'EQL');
+
+    // Equilibrium — метка поверх OB, FVG, BOS/CHoCH, EQH/EQL
+    if (eqTopY != null && eqBottomY != null && eqHeight != null) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(chartRightEdge - 78, eqTopY + eqHeight / 2 - 10, 74, 14);
+      ctx.fillStyle = 'rgba(156, 39, 176, 0.95)';
+      ctx.font = '9px Inter, Arial';
+      ctx.fillText('Equilibrium', chartRightEdge - 74, eqTopY + eqHeight / 2 + 2);
+    }
     } // конец if (drawSMC)
 
     // ============================================================
@@ -1112,18 +1138,20 @@ const TradingChart = ({ history, analysis, levels, setLevels, activeMode, setAct
       }
     };
 
-    // Swing High
-    updateLine('rangeHigh', advancedZones.range_high, 'rgba(239, 83, 80, 0.6)', 1, '', false);
-    
-    // Swing Low
-    updateLine('rangeLow', advancedZones.range_low, 'rgba(38, 166, 154, 0.6)', 1, '', false);
+    // v16.0: Приоритет — backend (H4 инверсия), иначе по trend
+    const kl = analysis.advanced?.key_levels;
+    const highLabel = (kl?.High_Type === 'Strong High' || kl?.High_Type === 'Weak High') ? kl.High_Type : (analysis.trend === 'DOWNTREND' ? 'Strong High' : 'Weak High');
+    const lowLabel = (kl?.Low_Type === 'Strong Low' || kl?.Low_Type === 'Weak Low') ? kl.Low_Type : (analysis.trend === 'DOWNTREND' ? 'Weak Low' : 'Strong Low');
+
+    updateLine('rangeHigh', advancedZones.range_high, 'rgba(239, 83, 80, 0.6)', 1, highLabel, false);
+    updateLine('rangeLow', advancedZones.range_low, 'rgba(38, 166, 154, 0.6)', 1, lowLabel, false);
     
     // 2. Equilibrium (Штрих-пунктир 2)
     // Берем цену из key_levels ИЛИ считаем среднее сами
     const eqPrice = keyLevels?.Equilibrium_Price || ((advancedZones.range_high + advancedZones.range_low) / 2);
     
     if (eqPrice > 0) {
-      updateLine('equilibrium', eqPrice, 'rgba(156, 39, 176, 0.8)', 2, 'Equilibrium');
+      updateLine('equilibrium', eqPrice, 'rgba(156, 39, 176, 0.8)', 2, '', false);  // метка на canvas поверх
     }
   }, [smcVisible, analysis]);
 

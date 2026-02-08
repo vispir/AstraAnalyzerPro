@@ -70,7 +70,7 @@ class TradingCalculator:
 
     # --- БЛОК 2: АНАЛИЗ РЫНОЧНЫХ СТРУКТУР ---
 
-    def get_market_analysis(self, candles: List[Dict], zone_lookback: int = 0) -> Dict:
+    def get_market_analysis(self, candles: List[Dict], timeframe: str = 'M15', zone_lookback: int = 0) -> Dict:
         """
         Анализ рынка с использованием SMC детектора.
         Нормализует колонки и запускает полный анализ структур.
@@ -92,7 +92,7 @@ class TradingCalculator:
 
         try:
             # 1. Используем новый SMC детектор для всех структур
-            smc_data = self.smc_detector.analyze(df, zone_lookback=zone_lookback)
+            smc_data = self.smc_detector.analyze(df, timeframe=timeframe, zone_lookback=zone_lookback)
             
             # 2. Считаем индикаторы
             indicators = self._calculate_indicators(df)

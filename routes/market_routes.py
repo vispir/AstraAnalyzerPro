@@ -111,7 +111,7 @@ def get_candles():
 
         if "candles" in result:
             # Анализируем строго этот диапазон
-            result["analysis"] = calculator.get_market_analysis(result["candles"], zone_lookback=calc_limit)
+            result["analysis"] = calculator.get_market_analysis(result["candles"], timeframe=timeframe)
             result["source"] = source
             
         return jsonify(result)
