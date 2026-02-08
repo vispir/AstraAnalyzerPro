@@ -291,7 +291,7 @@ class LLMService:
     "✅ R:R >= 1.0 with defined invalidation\n"
     "\n"
     "# WHEN TO WAIT\n"
-    "❌ Market closed (Sat, Sun before 23:00 UTC, Fri after 22:00 UTC)\n"
+    "❌ Market closed (Sat, Sun before 22:00 UTC, Fri after 22:00 UTC)\n"
     "❌ High-impact news within 30 minutes\n"
     "❌ HTF and LTF in direct conflict\n"
     "❌ Price stuck in equilibrium with no structure break\n"
@@ -457,7 +457,7 @@ If the user idea is good, you can use it as a basis for your trade plan.
             market_status = "OPEN"
             if weekday == 5:  # Saturday
                 market_status = "CLOSED"
-            elif weekday == 6 and hour < 23:  # Sunday before 23:00
+            elif weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
                 market_status = "CLOSED"
             elif weekday == 4 and hour >= 22:  # Friday after 22:00
                 market_status = "CLOSED"
@@ -469,7 +469,7 @@ REPORT GENERATION REQUEST for XAUUSD
 
 <environment>
 Current Time (UTC): {current_time_utc}
-Market Status: {market_status} (Gold market opens Sunday 23:00 UTC, closes Friday 22:00 UTC)
+Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
 Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
@@ -793,7 +793,7 @@ If the user idea is good, you can use it as a basis for your trade plan.
             market_status = "OPEN"
             if weekday == 5:  # Saturday
                 market_status = "CLOSED"
-            elif weekday == 6 and hour < 23:  # Sunday before 23:00
+            elif weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
                 market_status = "CLOSED"
             elif weekday == 4 and hour >= 22:  # Friday after 22:00
                 market_status = "CLOSED"
@@ -803,7 +803,7 @@ REPORT GENERATION REQUEST for XAUUSD
 
 <environment>
 Current Time (UTC): {time_str}
-Market Status: {market_status} (Gold market opens Sunday 23:00 UTC, closes Friday 22:00 UTC)
+Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
 Active Session: {session_info['description']}
 Session Details: {json.dumps(session_info, indent=2)}
 Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
