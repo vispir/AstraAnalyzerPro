@@ -294,22 +294,60 @@ class TelegramService:
     
     def _handle_callback_query(self, call):
         """Обработка нажатий на inline кнопки"""
-        # Отвечаем на callback чтобы убрать "крутилку"
-        self.bot.answer_callback_query(call.id)
-        
-        # Маршрутизация по callback_data
-        if call.data == "price":
-            self._cmd_price(call.message)
-        elif call.data == "trend":
-            self._cmd_trend(call.message)
-        elif call.data == "status":
-            self._cmd_status(call.message)
-        elif call.data == "help":
-            self._cmd_help(call.message)
-        elif call.data == "approve_login":
-            self._handle_approve_login(call)
-        elif call.data == "deny_login":
-            self._handle_deny_login(call)
+        try:
+            logger.info(f"🔘 Callback query received: data={call.data}, from_user={call.from_user.id}")
+            
+            # Отвечаем на callback чтобы убрать "крутилку"
+            self.bot.answer_callback_query(call.id)
+            
+            # Проверяем что call.message существует
+            if not call.message:
+                logger.error(f"❌ call.message is None for callback {call.data}")
+                chat_id = call.from_user.id
+                self.bot.send_message(
+                    chat_id,
+                    "❌ Ошибка: сообщение не найдено. Попробуйте использовать команды напрямую.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Маршрутизация по callback_data
+            if call.data == "price":
+                logger.debug("📊 Handling price callback")
+                self._cmd_price(call.message)
+            elif call.data == "trend":
+                logger.debug("📈 Handling trend callback")
+                self._cmd_trend(call.message)
+            elif call.data == "status":
+                logger.debug("🛡️ Handling status callback")
+                self._cmd_status(call.message)
+            elif call.data == "help":
+                logger.debug("❓ Handling help callback")
+                self._cmd_help(call.message)
+            elif call.data == "approve_login":
+                self._handle_approve_login(call)
+            elif call.data == "deny_login":
+                self._handle_deny_login(call)
+            else:
+                logger.warning(f"⚠️ Unknown callback_data: {call.data}")
+                self.bot.send_message(
+                    call.message.chat.id,
+                    f"❓ Неизвестная команда: {call.data}",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки callback_query: {e}", exc_info=True)
+            try:
+                # Пытаемся отправить сообщение об ошибке
+                chat_id = call.message.chat.id if call.message else call.from_user.id
+                self.bot.send_message(
+                    chat_id,
+                    "❌ Произошла ошибка при обработке запроса. Попробуйте позже или используйте команды напрямую.",
+                    parse_mode='HTML'
+                )
+            except Exception as e2:
+                logger.error(f"❌ Не удалось отправить сообщение об ошибке: {e2}")
     
     def _handle_approve_login(self, call):
         """Обработка подтверждения входа"""
