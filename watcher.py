@@ -39,12 +39,14 @@ from services.telegram_service import telegram_service
 # КОНСТАНТЫ v7.5.2 SMART COOLDOWN
 # ============================================================================
 
-SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
-WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
+SIGNAL_COOLDOWN_HOURS = 0.5     # 30 минут после BUY/SELL
+WAIT_COOLDOWN_HOURS = 0.25     # 15 минут после WAIT — быстрее переоценка и новый вход
 # Менеджер: после N рекомендаций LLM «закрыть сделку» (CLOSE_ALL) — авто-закрытие по причине «слишком рискованно»
-MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER = 5
+MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER = 3
 # Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
 MANAGER_MIN_TRADE_AGE_MINUTES = 15
+# Минимальный интервал (мин) между вызовами LLM по одной сделке — защита от спама по квоте API
+MANAGER_LLM_COOLDOWN_MINUTES = 10
 FRESH_SIGNAL_BARS = 25
 LOOKBACK_BARS = 600  # Увеличено до 600 для правильного Price Discovery (нужно найти пивоты до 331 баров назад)
 EXTREME_DISCOUNT_THRESHOLD = 15.0
@@ -72,8 +74,10 @@ except ImportError as e:
 
 logger = logging.getLogger("AstraWatcher")
 
-# Менеджер: счётчик рекомендаций CLOSE_ALL по trade_id (при 5 — авто-закрытие сделки)
+# Менеджер: счётчик рекомендаций CLOSE_ALL по trade_id (при N — авто-закрытие, см. MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER)
 _manager_close_all_count = {}
+# Менеджер: время последнего вызова LLM по trade_id (кулдаун, чтобы не спамить API)
+_manager_llm_last_call_ts = {}
 
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -1667,6 +1671,8 @@ def run_trade_manager_cycle():
             f"(PnL={result_pnl:.2f})."
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_sl')
+        _manager_close_all_count.pop(trade_id, None)
+        _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_sl',
             'reason': f'Цена достигла SL. Сделка закрыта. PnL={result_pnl:.2f}',
@@ -1706,6 +1712,8 @@ def run_trade_manager_cycle():
             f"(PnL={result_pnl:.2f})."
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_tp')
+        _manager_close_all_count.pop(trade_id, None)
+        _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_tp',
             'reason': f'Цена достигла TP. Сделка закрыта в плюс. PnL={result_pnl:.2f}',
@@ -1819,6 +1827,8 @@ def run_trade_manager_cycle():
             f"PnL={result_pnl:.2f}."
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
+        _manager_close_all_count.pop(trade_id, None)
+        _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_manager_news',
             'reason': (
@@ -1870,6 +1880,17 @@ def run_trade_manager_cycle():
         )
         return
 
+    # Кулдаун вызовов LLM по одной сделке — не чаще чем раз в N минут (защита квоты API)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    last_llm_ts = _manager_llm_last_call_ts.get(trade_id, 0)
+    cooldown_sec = MANAGER_LLM_COOLDOWN_MINUTES * 60
+    if last_llm_ts and (now_ts - last_llm_ts) < cooldown_sec:
+        logger.info(
+            f"🤖 Manager: кулдаун LLM для id={trade_id} "
+            f"(прошло {(now_ts - last_llm_ts) // 60} мин < {MANAGER_LLM_COOLDOWN_MINUTES} мин). Пропускаем вызов."
+        )
+        return
+
     # ------------------------------------------------------------------
     # 5. Вызов LLM Manager-агента
     # ------------------------------------------------------------------
@@ -1915,6 +1936,7 @@ def run_trade_manager_cycle():
         logger.warning("⚠️ Manager: пустой ответ от LLM (manage_active_trade).")
         return
 
+    _manager_llm_last_call_ts[trade_id] = now_ts
     parsed = parse_llm_response(ai_response)
     # Поддерживаем как 'manager_action', так и просто 'action'
     mgr_action = (parsed.get('manager_action') or parsed.get('action') or '').upper()
@@ -1924,7 +1946,7 @@ def run_trade_manager_cycle():
 
     # Реакция на решение LLM:
     # - MOVE_SL_BE: реально двигаем SL в BE (если ещё не там)
-    # - CLOSE_ALL: уведомление в TG каждый раз; после 5-й рекомендации — авто-закрытие (слишком рискованно)
+    # - CLOSE_ALL: уведомление в TG каждый раз; после N-й рекомендации — авто-закрытие (MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER)
     # - CLOSE_50: только рекомендация через Telegram
     # - HOLD: ничего не делаем
 
@@ -1947,12 +1969,12 @@ def run_trade_manager_cycle():
 
     elif mgr_action == 'CLOSE_ALL':
         # Считаем рекомендации «закрыть сделку». Каждый раз шлём уведомление в TG.
-        # После 5-й рекомендации — закрываем сделку автоматически (причина: слишком рискованно), просыпается охотник.
+        # После N-й рекомендации — закрываем сделку автоматически (причина: слишком рискованно), просыпается охотник.
         _manager_close_all_count[trade_id] = _manager_close_all_count.get(trade_id, 0) + 1
         count = _manager_close_all_count[trade_id]
 
         if count >= MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER:
-            # Авто-закрытие: слишком рискованно (5 рекомендаций на закрытие)
+            # Авто-закрытие: слишком рискованно (N рекомендаций на закрытие)
             result_pnl = (current_price - entry_price) if signal_type == 'BUY' else (entry_price - current_price)
             db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
             _manager_close_all_count.pop(trade_id, None)
@@ -1976,7 +1998,7 @@ def run_trade_manager_cycle():
                 telegram_service.broadcast_deals_only(user_ids, msg)
             logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по {count}-й рекомендации CLOSE_ALL (слишком рискованно).")
         else:
-            # Только уведомление (1–4-я рекомендация)
+            # Только уведомление (1-я и 2-я рекомендация при N=3)
             msg = (
                 f"⚠️ ASTRA Manager: LLM рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью ({count}/{MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER}).\n"
                 f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"

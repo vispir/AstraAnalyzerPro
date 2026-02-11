@@ -14,6 +14,7 @@ import io
 from config.settings import (
     OPENROUTER_API_KEY,
     GEMINI_API_KEY,
+    GEMINI_API_KEY_MANAGER,
     AI_GATEWAY_URL,
     AI_GATEWAY_KEY
 )
@@ -359,6 +360,7 @@ class LLMService:
         self, 
         openrouter_key: Optional[str] = None, 
         gemini_key: Optional[str] = None,
+        gemini_manager_key: Optional[str] = None,
         gateway_url: Optional[str] = None,
         gateway_key: Optional[str] = None
     ):
@@ -367,12 +369,14 @@ class LLMService:
         
         Args:
             openrouter_key: OpenRouter API ключ
-            gemini_key: Gemini API ключ
+            gemini_key: Gemini API ключ (анализ, сигналы)
+            gemini_manager_key: Отдельный Gemini ключ для менеджера сделок (опционально)
             gateway_url: URL для AI Gateway
             gateway_key: API ключ для AI Gateway (опционально)
         """
         self.openrouter_key = openrouter_key
         self.gemini_key = gemini_key
+        self.gemini_manager_key = gemini_manager_key or gemini_key  # fallback на основной ключ
         self.gateway_url = gateway_url
         self.gateway_key = gateway_key
         self.session = TradingSession()
@@ -382,6 +386,8 @@ class LLMService:
             logger.info("LLM Service: OpenRouter API key configured")
         if self.gemini_key:
             logger.info("LLM Service: Gemini API key configured")
+        if self.gemini_manager_key and self.gemini_manager_key != self.gemini_key:
+            logger.info("LLM Service: Gemini Manager API key configured (separate from main)")
         if self.gateway_url:
             logger.info(f"LLM Service: AI Gateway configured ({self.gateway_url})")
         if not self.openrouter_key and not self.gemini_key and not self.gateway_url:
@@ -1154,7 +1160,7 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             }
             return json.dumps(error_response, ensure_ascii=False)
 
-    def manage_active_trade(self, trade_context: Dict, technical_context: Dict, triggers: Dict) -> str:
+    def manage_active_trade(self, trade_context: Dict, technical_context: Dict, triggers: Dict) -> Optional[str]:
         """
         Менеджер-агент для управления уже ОТКРЫТОЙ сделкой.
 
@@ -1165,10 +1171,11 @@ Use this data to find the specific High/Low/Close of the trigger candle.
         }
         """
         try:
-            if not self.gemini_key:
+            manager_key = self.gemini_manager_key or self.gemini_key
+            if not manager_key:
                 return json.dumps({
                     "manager_action": "HOLD",
-                    "reason": "GEMINI_API_KEY not configured, fallback to HOLD."
+                    "reason": "GEMINI_API_KEY / GEMINI_API_KEY_MANAGER not configured, fallback to HOLD."
                 }, ensure_ascii=False)
 
             current_time = datetime.now(timezone.utc)
@@ -1264,7 +1271,7 @@ Example:
             full_prompt = self.SYSTEM_PROMPT + "\n\n" + manager_prompt
 
             logger.info("Sending trade management request to Gemini (Manager Agent).")
-            url = f"{self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
+            url = f"{self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent?key={manager_key}"
             logger.debug(f"Gemini Manager API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
 
             payload = {
@@ -1280,6 +1287,12 @@ Example:
                 logger.info(f"Manager Agent external IP: {current_ip}")
 
             response = requests.post(url, json=payload, timeout=120)
+            if response.status_code == 429:
+                logger.warning(
+                    "Manager Agent: 429 Too Many Requests from Gemini API. "
+                    "Skipping verdict this cycle (no fake HOLD)."
+                )
+                return None
             response.raise_for_status()
             result = response.json()
 
@@ -1300,6 +1313,16 @@ Example:
                 "reason": "Unexpected Gemini response format, defaulting to HOLD."
             }, ensure_ascii=False)
 
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                logger.warning("Manager Agent: 429 from Gemini (HTTPError). Skipping verdict this cycle.")
+                return None
+            logger.error(f"Error in manage_active_trade: {e}", exc_info=True)
+            fallback = {
+                "manager_action": "HOLD",
+                "reason": f"Ошибка при анализе менеджера сделки: {str(e)}"
+            }
+            return json.dumps(fallback, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error in manage_active_trade: {e}", exc_info=True)
             fallback = {
@@ -1312,6 +1335,7 @@ Example:
 llm_service = LLMService(
     openrouter_key=OPENROUTER_API_KEY, 
     gemini_key=GEMINI_API_KEY,
+    gemini_manager_key=GEMINI_API_KEY_MANAGER,
     gateway_url=AI_GATEWAY_URL,
     gateway_key=AI_GATEWAY_KEY
 )
