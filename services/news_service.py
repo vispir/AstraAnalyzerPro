@@ -10,8 +10,10 @@ from typing import List, Dict, Optional
 try:
     import investpy
     INVESTPY_AVAILABLE = True
-except ImportError:
+    _investpy_import_error = None
+except ImportError as e:
     INVESTPY_AVAILABLE = False
+    _investpy_import_error = str(e)
 
 try:
     from gnews import GNews
@@ -22,6 +24,9 @@ except ImportError:
 from services.cache_service import cache_service
 
 logger = logging.getLogger(__name__)
+
+# Логируем отсутствие investpy только один раз за процесс
+_investpy_warned = False
 
 
 class NewsService:
@@ -55,7 +60,13 @@ class NewsService:
             Список событий
         """
         if not INVESTPY_AVAILABLE:
-            logger.error("investpy library is not installed")
+            global _investpy_warned
+            if not _investpy_warned:
+                _investpy_warned = True
+                logger.info(
+                    "Economic calendar unavailable: investpy not installed. "
+                    "Install with: pip install investpy>=1.0.8"
+                )
             return []
         
         # Проверяем кэш
