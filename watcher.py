@@ -727,7 +727,7 @@ def run_analysis_cycle():
     # GUARD 0: Активная позиция (простая проверка по последнему BUY/SELL)
     # ------------------------------------------------------------------------
     try:
-        last_trade = db_service.get_last_trade_signal(symbol="XAUUSD")
+        last_trade = db_service.get_last_trade_signal(symbol="XAU_USD")
     except Exception as e:
         last_trade = None
         logger.error(f"Ошибка проверки активной сделки: {e}")
@@ -1531,7 +1531,7 @@ def run_trade_manager_cycle():
 
     # 1. Проверяем, есть ли вообще торговый сигнал BUY/SELL, который ещё не закрыт
     try:
-        trade = db_service.get_last_trade_signal(symbol="XAUUSD")
+        trade = db_service.get_last_trade_signal(symbol="XAU_USD")
     except Exception as e:
         logger.error(f"❌ Manager: ошибка получения последнего торгового сигнала: {e}")
         return
