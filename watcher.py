@@ -1524,6 +1524,11 @@ def run_trade_manager_cycle():
     """
     logger.info("📡 [TRIGGER] Trade Manager cycle v1.0 запущен")
 
+    # 0. Не работаем в выходные и в ежедневную паузу (22:00–23:00 UTC = 02:00–03:00 UTC+4)
+    if not is_market_active():
+        logger.info("👀 Manager: рынок закрыт (выходные или пауза 22:00–23:00 UTC), пропуск цикла.")
+        return
+
     # 1. Проверяем, есть ли вообще торговый сигнал BUY/SELL, который ещё не закрыт
     try:
         trade = db_service.get_last_trade_signal(symbol="XAUUSD")
