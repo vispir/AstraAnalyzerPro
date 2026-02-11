@@ -149,11 +149,20 @@ class NewsService:
             
         except json.JSONDecodeError as e:
             # investpy: Investing.com часто возвращает пустой/HTML вместо JSON
-            logger.warning(
-                f"investpy returned invalid response (Investing.com may have changed API): {e}. "
-                "Calendar data unavailable for this request."
+            logger.info(
+                "Economic calendar temporarily unavailable (Investing.com returned invalid/empty response). "
+                "Using empty calendar for this request."
             )
             return []
+        except ValueError as e:
+            # Некоторые окружения/библиотеки пробрасывают ошибку парсинга JSON как ValueError
+            if "Expecting value" in str(e) or ("column" in str(e) and "char" in str(e)):
+                logger.info(
+                    "Economic calendar temporarily unavailable (Investing.com returned invalid/empty response). "
+                    "Using empty calendar for this request."
+                )
+                return []
+            raise
         except Exception as e:
             logger.warning(f"Error fetching calendar from investpy: {str(e)}")
             return []

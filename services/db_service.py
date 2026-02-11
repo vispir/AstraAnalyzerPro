@@ -494,6 +494,36 @@ class DBService:
         
         return datetime(2020, 1, 1, tzinfo=timezone.utc)
 
+    def get_last_trade_signal(self, symbol: str = None):
+        """
+        Получает последний ТОРГОВЫЙ сигнал (BUY/SELL), включая все поля.
+        Используется для логики активной сделки (Manager / Hunter guard).
+        """
+        if not self.url:
+            return None
+        
+        # Фильтруем только BUY и SELL, исключая WAIT
+        base_url = f"{self.url}/rest/v1/signals?select=*&signal_type=in.(BUY,SELL)&order=timestamp.desc&limit=1"
+        if symbol:
+            target_url = base_url + f"&symbol=eq.{symbol}"
+        else:
+            target_url = base_url
+        
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения последнего торгового сигнала (полные данные): {e}")
+            return None
+
     def get_signals_history(self, limit=10, signal_type=None):
         """
         Получает историю сигналов
@@ -573,6 +603,40 @@ class DBService:
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка обновления результата сигнала: {e}")
+            return False
+
+    def update_signal_sl_and_status(self, signal_id, new_sl_price, status: str = None):
+        """
+        Обновляет Stop Loss и, опционально, статус сигнала.
+        Используется Manager-агентом (перевод в безубыток, пометка как BE_SET и т.п.).
+        """
+        if not self.url:
+            return False
+        
+        target_url = f"{self.url}/rest/v1/signals?id=eq.{signal_id}"
+        
+        payload = {
+            'stop_loss': new_sl_price,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        if status:
+            payload['status'] = status
+        
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"✅ SL сигнала {signal_id} обновлён до {new_sl_price} (status={status})")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления SL сигнала {signal_id}: {e}")
             return False
 
 # Создаем экземпляр сервиса

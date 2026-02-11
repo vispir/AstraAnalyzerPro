@@ -456,7 +456,10 @@ def format_debug_report(status_data):
         'smc_sweet_spot': '🎯',  # v8.0: Идеальный SMC сетап
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
         'impulse_no_confirmation': '⚠️',  # v7.5.2: Impulse/Reversal без internal confirmed
-        'low_confidence_wait': '📉'  # v7.6: Низкая уверенность (< 50%)
+        'low_confidence_wait': '📉',  # v7.6: Низкая уверенность (< 50%)
+        'active_trade': '🛑',  # Manager: есть активная сделка
+        'trade_closed_sl': '🛑', 'trade_closed_tp': '✅', 'trade_closed_manager_news': '⚠️',
+        'move_sl_be': '🔒'
     }
     
     status_texts = {
@@ -476,7 +479,12 @@ def format_debug_report(status_data):
         'smc_sweet_spot': '🎯 SMC SWEET SPOT: Идеальный сетап',  # v8.0
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
         'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.2
-        'low_confidence_wait': '📉 LOW CONFIDENCE: Сигнал отклонён (< 50%)'  # v7.6
+        'low_confidence_wait': '📉 LOW CONFIDENCE: Сигнал отклонён (< 50%)',  # v7.6
+        'active_trade': 'Manager: активная сделка, охотник отключён',
+        'trade_closed_sl': 'Manager: Сделка закрыта по SL',
+        'trade_closed_tp': 'Manager: Сделка закрыта по TP',
+        'trade_closed_manager_news': 'Manager: Сделка закрыта перед новостями',
+        'move_sl_be': 'Manager: SL переведён в безубыток'
     }
     
     status = status_data.get('status', 'unknown')
@@ -557,6 +565,14 @@ def format_debug_report(status_data):
     
     if 'near_structures' in status_data:
         msg += f"<b>🎯 Уровни рядом:</b>\n{escape_html(status_data['near_structures'])}\n\n"
+
+    # Блок ближайших новостей (используется, в т.ч. при news_block)
+    upcoming_news = status_data.get('upcoming_news') or []
+    if upcoming_news:
+        msg += "<b>📰 Ближайшие важные новости (до 1 часа):</b>\n"
+        for item in upcoming_news:
+            msg += f"└ {escape_html(str(item))}\n"
+        msg += "\n"
     
     if 'reason' in status_data:
         msg += f"<b>💡 Детали:</b>\n<i>{escape_html(status_data['reason'])}</i>\n\n"
@@ -707,6 +723,32 @@ def run_analysis_cycle():
     # ФАЗА 1: ТЕХНИЧЕСКАЯ ПОДГОТОВКА
     # ========================================================================
     
+    # ------------------------------------------------------------------------
+    # GUARD 0: Активная позиция (простая проверка по последнему BUY/SELL)
+    # ------------------------------------------------------------------------
+    try:
+        last_trade = db_service.get_last_trade_signal(symbol="XAUUSD")
+    except Exception as e:
+        last_trade = None
+        logger.error(f"Ошибка проверки активной сделки: {e}")
+    
+    # Если последний торговый сигнал BUY/SELL ещё не помечен как закрытый,
+    # считаем что сделка активна и Охотник новые входы не ищет.
+    if last_trade:
+        status = (last_trade.get('status') or '').lower()
+        close_ts = last_trade.get('close_timestamp')
+        if status != 'closed' and not close_ts:
+            logger.info(
+                f"🛑 Active trade detected (id={last_trade.get('id')}, "
+                f"type={last_trade.get('signal_type')}, entry={last_trade.get('entry_price')}). "
+                f"Hunter is disabled until this trade is closed."
+            )
+            send_debug_notification({
+                'status': 'active_trade',
+                'reason': 'Обнаружена активная сделка BUY/SELL. Охотник пропускает поиск нового входа.'
+            })
+            return
+    
     if not is_market_active():
         now_utc = datetime.now(timezone.utc)
         weekday = now_utc.weekday()
@@ -727,9 +769,38 @@ def run_analysis_cycle():
         return
     
     if is_news_blockactive():
+        # При блокировке по новостям дополнительно собираем список ближайших важных событий
+        upcoming_descriptions = []
+        if news_service:
+            try:
+                upcoming_events = news_service.get_upcoming_news(
+                    hours=1,
+                    currencies=['USD'],
+                    impact=['High']
+                )
+                now_ts = int(datetime.now().timestamp())
+                for ev in upcoming_events:
+                    ts = ev.get('timestamp')
+                    if not ts or ts <= now_ts:
+                        continue
+                    minutes_left = int((ts - now_ts) / 60)
+                    title = (ev.get('title') or '').strip() or 'High impact event'
+                    currency = (ev.get('currency') or '').upper()
+                    impact = ev.get('impact') or 'High'
+                    # Время локально по серверу (для простоты)
+                    time_str = datetime.fromtimestamp(ts).strftime('%H:%M')
+                    upcoming_descriptions.append(
+                        f"{minutes_left} мин ({time_str}) — {title} [{currency} / {impact}]"
+                    )
+                # Ограничиваемся 5 ближайшими событиями
+                upcoming_descriptions = upcoming_descriptions[:5]
+            except Exception as e:
+                logger.error(f"Ошибка получения списка ближайших новостей: {e}")
+
         send_debug_notification({
             'status': 'news_block',
-            'reason': 'Важные новости USD'
+            'reason': 'Важные новости USD',
+            'upcoming_news': upcoming_descriptions
         })
         return
     
@@ -1188,7 +1259,66 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    logger.info(f"✅ CONFIRMED SIGNALS: {confirmed_count} | Calling LLM...")
+    logger.info(f"✅ CONFIRMED SIGNALS: {confirmed_count} | Preparing to call LLM...")
+
+    # ------------------------------------------------------------------------
+    # GUARD 1: Память охотника — избегаем повторного LLM вызова,
+    # если рынок почти не изменился с последнего анализа и там уже был WAIT.
+    # ------------------------------------------------------------------------
+    try:
+        last_signal = db_service.get_last_signal()
+    except Exception as e:
+        last_signal = None
+        logger.error(f"Ошибка получения последнего сигнала для памяти LLM: {e}")
+
+    if last_signal:
+        try:
+            last_action = (last_signal.get('signal_type') or '').upper()
+            last_price = safe_float(last_signal.get('current_price'), 0.0)
+            last_zone = last_signal.get('zone')
+            last_trend = last_signal.get('trend') or last_signal.get('swing_trend')
+            last_ts_raw = last_signal.get('timestamp')
+            
+            # Пытаемся распарсить timestamp, но не падаем если формат другой
+            last_ts = None
+            if last_ts_raw:
+                try:
+                    last_ts = datetime.fromisoformat(str(last_ts_raw).replace('Z', '+00:00'))
+                except Exception:
+                    last_ts = None
+            
+            # Считаем дельту цены и времени
+            price_delta = abs(current_price - last_price) if last_price > 0 else None
+            price_threshold = current_price * 0.001  # ~0.1% движения
+            
+            time_ok = True
+            if last_ts:
+                minutes_ago = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60.0
+                # Если анализ был очень давно (> 120 минут), лучше не полагаться на старый контекст
+                time_ok = minutes_ago <= 120
+            
+            if (
+                last_action == 'WAIT'
+                and time_ok
+                and price_delta is not None
+                and price_delta < price_threshold
+                and last_zone == current_zone
+                and (last_trend or '').upper() == (swing_trend or '').upper()
+            ):
+                reason = (
+                    f"Рынок мало изменился с последнего WAIT сигнала: "
+                    f"Δprice={price_delta:.2f} (< {price_threshold:.2f}), "
+                    f"zone: {last_zone} → {current_zone}, "
+                    f"trend: {last_trend} → {swing_trend}. "
+                    f"Пропускаем вызов LLM, чтобы не дублировать предыдущий вердикт."
+                )
+                logger.info(f"🧠 Hunter memory: skipping LLM call. {reason}")
+                status_data['status'] = 'hunter_memory_skip'
+                status_data['reason'] = reason
+                send_debug_notification(status_data)
+                return
+        except Exception as e:
+            logger.error(f"Ошибка логики памяти LLM (hunter guard): {e}")
     
     # ========================================================================
     # ФАЗА 3: ВЫЗОВ LLM
@@ -1375,3 +1505,445 @@ def start_watcher():
 if __name__ == "__main__":
     logger.info("🧪 Ручной запуск анализа v8.0...")
     run_analysis_cycle()
+
+
+# ============================================================================
+# TRADE MANAGER v1.0 — Управление активной сделкой (без открытия новых)
+# ============================================================================
+
+def run_trade_manager_cycle():
+    """
+    Astra Trade Manager v1.0
+
+    Задача:
+    - Управлять ТЕКУЩЕЙ активной сделкой (BUY/SELL):
+      - жёсткие правила: стоп, перевод в безубыток;
+      - при особых триггерах — запросить LLM для рекомендации (HOLD / MOVE_SL_BE / CLOSE_50 / CLOSE_ALL).
+
+    Триггер: вызывать этот цикл отдельно (например, cron раз в 1–2 минуты).
+    """
+    logger.info("📡 [TRIGGER] Trade Manager cycle v1.0 запущен")
+
+    # 1. Проверяем, есть ли вообще торговый сигнал BUY/SELL, который ещё не закрыт
+    try:
+        trade = db_service.get_last_trade_signal(symbol="XAUUSD")
+    except Exception as e:
+        logger.error(f"❌ Manager: ошибка получения последнего торгового сигнала: {e}")
+        return
+
+    if not trade:
+        logger.info("👀 Manager: активных сделок нет (последний торговый сигнал не найден).")
+        return
+
+    orig_status = trade.get('status') or ''
+    status = orig_status.lower()
+    close_ts = trade.get('close_timestamp')
+    if status == 'closed' or close_ts:
+        logger.info(f"👀 Manager: последний сигнал id={trade.get('id')} уже закрыт (status={status}).")
+        return
+
+    signal_type = (trade.get('signal_type') or '').upper()
+    if signal_type not in ('BUY', 'SELL'):
+        logger.info(f"👀 Manager: последний сигнал не торговый (type={signal_type}), выходим.")
+        return
+
+    trade_id = trade.get('id')
+    entry_price = safe_float(trade.get('entry_price'), 0.0)
+    stop_loss = safe_float(trade.get('stop_loss'), 0.0)
+    take_profit = safe_float(trade.get('take_profit'), 0.0)
+
+    if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
+        logger.warning(
+            f"⚠️ Manager: у сигнала id={trade_id} не заданы entry/sl/tp корректно "
+            f"(entry={entry_price}, sl={stop_loss}, tp={take_profit}). Пропускаем."
+        )
+        return
+
+    # 2. Получаем текущую цену по M5 (более частый менеджмент)
+    try:
+        data_m5 = oanda_service.get_candles(timeframe='M5', limit=20)
+    except Exception as e:
+        logger.error(f"❌ Manager: ошибка получения свечей M5: {e}")
+        return
+
+    if "error" in data_m5:
+        logger.error(f"❌ Manager: OANDA ошибка M5: {data_m5.get('error')}")
+        return
+
+    candles_m5 = data_m5.get('candles') or []
+    if not candles_m5:
+        logger.warning("⚠️ Manager: пустой массив свечей M5, выходим.")
+        return
+
+    current_price = safe_float(candles_m5[-1].get('close'), 0.0)
+    logger.info(
+        f"💼 Manager: активная сделка id={trade_id}, type={signal_type}, "
+        f"entry={entry_price:.2f}, sl={stop_loss:.2f}, tp={take_profit:.2f}, "
+        f"current={current_price:.2f}"
+    )
+
+    # 2.1. Дополнительный SMC-контекст по M5 (для LLM и триггеров)
+    analysis_m5 = None
+    smc_trend_m5 = 'NEUTRAL'
+    smc_zone_m5 = 'UNKNOWN'
+    has_opposite_ob = False
+    has_opposite_choch = False
+    try:
+        if smc_detector:
+            analysis_m5 = smc_detector.analyze(candles_m5)
+            smc_trend_m5 = analysis_m5.get('trend', 'NEUTRAL')
+            adv_m5 = analysis_m5.get('advanced', {})
+            kl_m5 = adv_m5.get('key_levels', {})
+            smc_zone_m5 = kl_m5.get('Current_Zone', 'UNKNOWN')
+
+            # Проверка OB против позиции
+            all_obs_m5 = analysis_m5.get('order_blocks', [])
+            for ob in all_obs_m5 or []:
+                ob_type = (ob.get('type') or '').upper()
+                ob_top = safe_float(ob.get('top'), 0.0)
+                ob_bottom = safe_float(ob.get('bottom'), 0.0)
+                ob_status = ob.get('status', 'active')
+                if ob_status not in ('active', 'mitigated'):
+                    continue
+                if signal_type == 'BUY':
+                    # Против BUY считаем важным BEAR_OB над текущей ценой
+                    if ob_type == 'BEAR_OB' and ob_bottom >= current_price:
+                        has_opposite_ob = True
+                        break
+                else:
+                    # Против SELL считаем важным BULL_OB под текущей ценой
+                    if ob_type == 'BULL_OB' and ob_top <= current_price:
+                        has_opposite_ob = True
+                        break
+
+            # Проверка CHoCH против позиции
+            chochs_m5 = (analysis_m5.get('internal_choch_confirmed', []) or []) + \
+                        (analysis_m5.get('swing_choch_confirmed', []) or [])
+            opp_tag = 'BEARISH' if signal_type == 'BUY' else 'BULLISH'
+            for ch in chochs_m5:
+                ch_type = ch.get('type') or ''
+                if opp_tag in ch_type:
+                    has_opposite_choch = True
+                    break
+
+            if has_opposite_ob or has_opposite_choch:
+                logger.info(
+                    f"⚠️ Manager SMC M5: opposite structure detected "
+                    f"(OB={has_opposite_ob}, CHoCH={has_opposite_choch}), trend={smc_trend_m5}, zone={smc_zone_m5}"
+                )
+    except Exception as e:
+        logger.error(f"❌ Manager: ошибка SMC-анализа M5: {e}")
+
+    # ------------------------------------------------------------------
+    # 3. HARD-CODED CHECKS — Stop Loss и перевод в безубыток
+    # ------------------------------------------------------------------
+
+    # 3.1. Стоп-лосс сработал (или цена пересекла SL) → закрываем сделку
+    hit_stop = False
+    if signal_type == 'BUY' and current_price <= stop_loss:
+        hit_stop = True
+    elif signal_type == 'SELL' and current_price >= stop_loss:
+        hit_stop = True
+
+    if hit_stop:
+        if signal_type == 'BUY':
+            result_pnl = current_price - entry_price
+        else:
+            result_pnl = entry_price - current_price
+
+        logger.warning(
+            f"🛑 Manager: цена достигла SL. Закрываем сделку id={trade_id} по цене {current_price:.2f} "
+            f"(PnL={result_pnl:.2f})."
+        )
+        db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_sl')
+        send_debug_notification({
+            'status': 'trade_closed_sl',
+            'reason': f'Цена достигла SL. Сделка закрыта. PnL={result_pnl:.2f}',
+            'trade_id': trade_id,
+            'entry': entry_price,
+            'sl': stop_loss,
+            'tp': take_profit,
+            'current_price': current_price,
+            'signal_type': signal_type
+        })
+        user_ids_sl = db_service.get_all_active_users()
+        if user_ids_sl:
+            msg_sl = (
+                f"🛑 <b>Сделка закрыта: Stop Loss</b>\n"
+                f"id={trade_id} | {signal_type} | entry={entry_price:.2f} → close={current_price:.2f}\n"
+                f"PnL={result_pnl:.2f}\n"
+                f"Данные сохранены в БД для анализа и обучения моделей."
+            )
+            telegram_service.broadcast_deals_only(user_ids_sl, msg_sl)
+        return
+
+    # 3.1b. Take Profit достигнут → закрываем с профитом, статус closed_tp
+    hit_tp = False
+    if signal_type == 'BUY' and current_price >= take_profit:
+        hit_tp = True
+    elif signal_type == 'SELL' and current_price <= take_profit:
+        hit_tp = True
+
+    if hit_tp:
+        if signal_type == 'BUY':
+            result_pnl = current_price - entry_price
+        else:
+            result_pnl = entry_price - current_price
+
+        logger.info(
+            f"✅ Manager: цена достигла TP. Закрываем сделку id={trade_id} по цене {current_price:.2f} "
+            f"(PnL={result_pnl:.2f})."
+        )
+        db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_tp')
+        send_debug_notification({
+            'status': 'trade_closed_tp',
+            'reason': f'Цена достигла TP. Сделка закрыта в плюс. PnL={result_pnl:.2f}',
+            'trade_id': trade_id,
+            'entry': entry_price,
+            'sl': stop_loss,
+            'tp': take_profit,
+            'current_price': current_price,
+            'signal_type': signal_type
+        })
+        user_ids_tp = db_service.get_all_active_users()
+        if user_ids_tp:
+            msg_tp = (
+                f"✅ <b>Сделка закрыта: Take Profit</b>\n"
+                f"id={trade_id} | {signal_type} | entry={entry_price:.2f} → close={current_price:.2f}\n"
+                f"PnL=+{result_pnl:.2f}\n"
+                f"Данные сохранены в БД для анализа и обучения моделей."
+            )
+            telegram_service.broadcast_deals_only(user_ids_tp, msg_tp)
+        return
+
+    # 3.2. Цена прошла >= 70% пути до TP → двигаем SL в безубыток (если ещё не в BE)
+    if signal_type == 'BUY':
+        total_path = take_profit - entry_price
+        progressed = current_price - entry_price
+    else:
+        total_path = entry_price - take_profit
+        progressed = entry_price - current_price
+
+    if total_path > 0:
+        progress_ratio = progressed / total_path
+    else:
+        progress_ratio = 0.0
+
+    # Проверяем, что SL ещё не в безубытке (допускаем небольшое отклонение)
+    be_threshold = entry_price * 0.0005  # ~0.05% от цены
+    sl_is_be = abs(stop_loss - entry_price) <= be_threshold
+
+    if progress_ratio >= 0.7 and not sl_is_be:
+        new_sl = entry_price
+        logger.info(
+            f"🔒 Manager: цена прошла {progress_ratio*100:.1f}% пути до TP. "
+            f"Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
+        )
+        db_service.update_signal_sl_and_status(trade_id, new_sl, status='be_set')
+        send_debug_notification({
+            'status': 'move_sl_be',
+            'reason': (
+                f'Цена прошла {progress_ratio*100:.1f}% до TP. SL переведён в безубыток.'
+            ),
+            'trade_id': trade_id,
+            'entry': entry_price,
+            'old_sl': stop_loss,
+            'new_sl': new_sl,
+            'tp': take_profit,
+            'current_price': current_price,
+            'signal_type': signal_type
+        })
+        # После перевода в BE продолжаем менеджмент (вдруг есть LLM-триггеры)
+
+    # ------------------------------------------------------------------
+    # 4. LLM TRIGGERS — когда вообще имеет смысл спрашивать ИИ
+    # ------------------------------------------------------------------
+
+    # 4.1. Цена "застряла" 3 свечи M5 против нас (простая эвристика)
+    stuck_against = False
+    if len(candles_m5) >= 4:  # 1 текущая + 3 предыдущих
+        last_closes = [safe_float(c.get('close'), 0.0) for c in candles_m5[-4:-1]]
+        max_close = max(last_closes)
+        min_close = min(last_closes)
+        range_size = max_close - min_close
+
+        small_range = current_price * 0.001  # ~0.1% диапазона
+
+        if signal_type == 'BUY':
+            # Консолидация ниже входа и без прогресса вверх
+            if all(c <= entry_price for c in last_closes) and range_size < small_range:
+                stuck_against = True
+        else:
+            # Консолидация выше входа и без прогресса вниз
+            if all(c >= entry_price for c in last_closes) and range_size < small_range:
+                stuck_against = True
+
+    # 4.2. Приближение новостей (High-impact USD в ближайшие 5 минут)
+    news_soon = False
+    try:
+        if news_service:
+            upcoming_news = news_service.get_upcoming_news(hours=1, currencies=['USD'], impact=['High'])
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            for event in upcoming_news:
+                ts = event.get('timestamp')
+                if ts and 0 < (ts - now_ts) <= 5 * 60:
+                    news_soon = True
+                    break
+    except Exception as e:
+        logger.error(f"❌ Manager: ошибка проверки новостей: {e}")
+
+    # 4.3. Противоположная структура SMC на M5 (OB/CHoCH против позиции)
+    opposite_structure_trigger = has_opposite_ob or has_opposite_choch
+
+    # 4.4. Авто-закрытие перед новостями при большом профите
+    if news_soon and progress_ratio >= 0.9:
+        if signal_type == 'BUY':
+            result_pnl = current_price - entry_price
+        else:
+            result_pnl = entry_price - current_price
+
+        logger.warning(
+            f"🛑 Manager: крупные новости и сделка почти у TP "
+            f"(progress={progress_ratio*100:.1f}%). Закрываем id={trade_id} по {current_price:.2f}, "
+            f"PnL={result_pnl:.2f}."
+        )
+        db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
+        send_debug_notification({
+            'status': 'trade_closed_manager_news',
+            'reason': (
+                f'High-impact новости в ближайшие минуты, а цена прошла {progress_ratio*100:.1f}% '
+                f'пути до TP. Сделка закрыта менеджером.'
+            ),
+            'trade_id': trade_id,
+            'entry': entry_price,
+            'sl': stop_loss,
+            'tp': take_profit,
+            'current_price': current_price,
+            'signal_type': signal_type
+        })
+        user_ids_news = db_service.get_all_active_users()
+        if user_ids_news:
+            msg_news = (
+                f"⚠️ ASTRA Manager: сделка id={trade_id} закрыта перед важными новостями.\n"
+                f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, "
+                f"PnL={result_pnl:.2f}\n"
+                f"Причина: крупные новости и высокий прогресс к TP."
+            )
+            telegram_service.broadcast_deals_only(user_ids_news, msg_news)
+        return
+
+    # Если нет ни одного триггера — менеджер ограничивается жёсткими правилами
+    if not (stuck_against or news_soon or opposite_structure_trigger):
+        logger.info("🤖 Manager: LLM не вызываем — нет триггеров (stuck/news/structure).")
+        return
+
+    # ------------------------------------------------------------------
+    # 5. Вызов LLM Manager-агента
+    # ------------------------------------------------------------------
+    trade_context = {
+        'id': trade_id,
+        'signal_type': signal_type,
+        'entry_price': entry_price,
+        'stop_loss': stop_loss,
+        'take_profit': take_profit,
+        'current_price': current_price,
+        'progress_ratio': progress_ratio,
+    }
+
+    triggers = {
+        'stuck_against': stuck_against,
+        'news_soon': news_soon,
+        'opposite_structure': opposite_structure_trigger,
+    }
+
+    # Технический контекст для LLM (последние свечи M5 + SMC-контекст)
+    technical_context = {
+        'timeframe': 'M5',
+        'candles': candles_m5[-20:],  # последние 20 свечей
+        'smc_m5': {
+            'trend': smc_trend_m5,
+            'zone': smc_zone_m5,
+            'has_opposite_ob': has_opposite_ob,
+            'has_opposite_choch': has_opposite_choch
+        }
+    }
+
+    try:
+        ai_response = llm_service.manage_active_trade(
+            trade_context=trade_context,
+            technical_context=technical_context,
+            triggers=triggers
+        )
+    except Exception as e:
+        logger.error(f"❌ Manager: ошибка вызова LLM manage_active_trade: {e}")
+        return
+
+    if not ai_response:
+        logger.warning("⚠️ Manager: пустой ответ от LLM (manage_active_trade).")
+        return
+
+    parsed = parse_llm_response(ai_response)
+    # Поддерживаем как 'manager_action', так и просто 'action'
+    mgr_action = (parsed.get('manager_action') or parsed.get('action') or '').upper()
+    mgr_reason = parsed.get('reason') or parsed.get('executive_summary') or ''
+
+    logger.info(f"🤖 Manager LLM Verdict: action={mgr_action}, reason={mgr_reason}")
+
+    # Реакция на решение LLM — на первом этапе делаем консервативно:
+    # - MOVE_SL_BE: реально двигаем SL в BE (если ещё не там)
+    # - CLOSE_ALL: пока только уведомляем, БЕЗ автоматического закрытия сделки
+    # - CLOSE_50: только рекомендация через Telegram
+    # - HOLD: ничего не делаем
+
+    # ВАЖНО: уведомления от Manager отправляем ТОЛЬКО в Astra Signal Bot
+    # (второй бот, который отвечает за торговые сигналы), поэтому
+    # используем broadcast_deals_only, а не основной broadcast_signal.
+    user_ids = db_service.get_all_active_users()
+
+    if mgr_action == 'MOVE_SL_BE' and not sl_is_be:
+        new_sl = entry_price
+        db_service.update_signal_sl_and_status(trade_id, new_sl, status='be_set')
+        msg = (
+            f"🛡 ASTRA Manager: LLM рекомендует перевести SL в BE.\n"
+            f"Сделка id={trade_id}, type={signal_type}\n"
+            f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
+            f"Причина: {mgr_reason}"
+        )
+        if user_ids:
+            telegram_service.broadcast_deals_only(user_ids, msg)
+
+    elif mgr_action == 'CLOSE_ALL':
+        # Эскалация предупреждений: первое CLOSE_ALL помечаем в статусе,
+        # повторные — усиливаем текст уведомления.
+        if status != 'close_all_suggested':
+            db_service.update_signal_sl_and_status(trade_id, stop_loss, status='close_all_suggested')
+            msg = (
+                f"⚠️ ASTRA Manager: LLM впервые рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью.\n"
+                f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
+                f"Причина: {mgr_reason}\n\n"
+                f"Статус сделки помечен как 'close_all_suggested'. Авто-закрытие пока НЕ выполняется."
+            )
+        else:
+            msg = (
+                f"🚨 ASTRA Manager: повторная рекомендация ЗАКРЫТЬ сделку id={trade_id} полностью!\n"
+                f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
+                f"Причина: {mgr_reason}\n\n"
+                f"⚠️ Это уже не первое предупреждение. Авто-закрытие по-прежнему НЕ выполняется, "
+                f"требуется ручное решение."
+            )
+        if user_ids:
+            telegram_service.broadcast_deals_only(user_ids, msg)
+
+    elif mgr_action == 'CLOSE_50':
+        msg = (
+            f"ℹ️ ASTRA Manager: LLM рекомендует частично закрыть (50%) сделку id={trade_id}.\n"
+            f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
+            f"Причина: {mgr_reason}\n\n"
+            f"⚠️ Это только рекомендация, авто-частичное закрытие не выполняется."
+        )
+        if user_ids:
+            telegram_service.broadcast_deals_only(user_ids, msg)
+
+    else:
+        # HOLD или неизвестное действие — просто логируем и, опционально, уведомляем
+        logger.info(f"🤝 Manager: действие LLM — HOLD/NO_ACTION (action={mgr_action}).")

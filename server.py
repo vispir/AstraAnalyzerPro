@@ -74,7 +74,7 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
-# --- ЭНДПОИНТ ДЛЯ VERCEL CRON ---
+# --- ЭНДПОИНТЫ ДЛЯ CRON ---
 @app.route('/api/cron/watcher', methods=['GET'])
 def trigger_watcher():
     auth_header = request.headers.get('Authorization')
@@ -84,12 +84,37 @@ def trigger_watcher():
         return jsonify({"success": False, "error": "Unauthorized"}), 401
     
     if run_analysis_cycle:
-        logger.info("⏰ Cron Trigger: Starting analysis cycle...")
+        logger.info("⏰ Cron Trigger: Starting analysis cycle (Watcher)...")
         # Вызываем функцию анализа напрямую
         run_analysis_cycle() 
         return jsonify({"success": True, "message": "Analysis complete"}), 200
     
     return jsonify({"success": False, "error": "Watcher service not available"}), 500
+
+
+@app.route('/api/cron/manager', methods=['GET'])
+def trigger_manager():
+    """
+    Cron endpoint для Trade Manager (управление активной сделкой).
+    Рекомендуется вызывать чаще, чем watcher (например, раз в 1–2 минуты).
+    """
+    auth_header = request.headers.get('Authorization')
+    cron_secret = os.getenv('CRON_SECRET')
+    
+    if cron_secret and auth_header != f"Bearer {cron_secret}":
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    
+    if run_analysis_cycle:
+        logger.info("⏰ Cron Trigger: Starting trade manager cycle...")
+        try:
+            from watcher import run_trade_manager_cycle
+            run_trade_manager_cycle()
+        except Exception as e:
+            logger.error(f"❌ Error in trade manager cycle: {e}", exc_info=True)
+            return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": True, "message": "Trade manager cycle complete"}), 200
+    
+    return jsonify({"success": False, "error": "Watcher/Manager service not available"}), 500
 
 # --- TELEGRAM WEBHOOK ENDPOINT ---
 @app.route('/api/tg/webhook', methods=['POST', 'GET'])
@@ -185,6 +210,7 @@ def index():
             "market": "/api/market/candles",
             "analysis": "/api/analysis/calculate",
             "cron_trigger": "/api/cron/watcher",
+            "manager_cron": "/api/cron/manager",
             "tg_webhook": "/api/tg/webhook"
         }
     })

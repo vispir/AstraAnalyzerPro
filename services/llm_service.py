@@ -1154,6 +1154,160 @@ Use this data to find the specific High/Low/Close of the trigger candle.
             }
             return json.dumps(error_response, ensure_ascii=False)
 
+    def manage_active_trade(self, trade_context: Dict, technical_context: Dict, triggers: Dict) -> str:
+        """
+        Менеджер-агент для управления уже ОТКРЫТОЙ сделкой.
+
+        Ожидаемый JSON-ответ от модели:
+        {
+          "manager_action": "HOLD" | "MOVE_SL_BE" | "CLOSE_50" | "CLOSE_ALL",
+          "reason": "текстовое объяснение"
+        }
+        """
+        try:
+            if not self.gemini_key:
+                return json.dumps({
+                    "manager_action": "HOLD",
+                    "reason": "GEMINI_API_KEY not configured, fallback to HOLD."
+                }, ensure_ascii=False)
+
+            current_time = datetime.now(timezone.utc)
+            time_str = current_time.strftime("%Y-%m-%d %H:%M UTC")
+
+            # Определяем статус рынка (как в _analyze_with_gemini)
+            weekday = current_time.weekday()  # 0=Monday, 6=Sunday
+            hour = current_time.hour
+            market_status = "OPEN"
+            if weekday == 5:
+                market_status = "CLOSED"
+            elif weekday == 6 and hour < 22:
+                market_status = "CLOSED"
+            elif weekday == 4 and hour >= 22:
+                market_status = "CLOSED"
+
+            # Сессия
+            session_info = self.session.get_current_session(current_time)
+
+            # Собираем человекочитаемый контекст сделки
+            direction = trade_context.get('signal_type')
+            entry = trade_context.get('entry_price')
+            sl = trade_context.get('stop_loss')
+            tp = trade_context.get('take_profit')
+            current_price = trade_context.get('current_price')
+            progress_pct = (trade_context.get('progress_ratio') or 0.0) * 100.0
+
+            # Описание триггеров
+            trigger_desc = []
+            if triggers.get('stuck_against'):
+                trigger_desc.append("Price is consolidating against the position on M5.")
+            if triggers.get('news_soon'):
+                trigger_desc.append("High-impact USD news within 5 minutes.")
+            if triggers.get('opposite_structure'):
+                trigger_desc.append("Opposite SMC structure detected on M5.")
+
+            triggers_text = "\n".join(f"- {t}" for t in trigger_desc) if trigger_desc else "None detected."
+
+            manager_prompt = f"""
+TRADE MANAGEMENT REQUEST for XAUUSD
+
+<environment>
+Current Time (UTC): {time_str}
+Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
+Active Session: {session_info['description']}
+Session Details: {json.dumps(session_info, indent=2)}
+</environment>
+
+<active_trade>
+Direction: {direction}
+Entry Price: {entry}
+Stop Loss: {sl}
+Take Profit: {tp}
+Current Price: {current_price}
+Progress To TP: {progress_pct:.1f}%
+</active_trade>
+
+<manager_triggers>
+The following management triggers are currently active:
+{triggers_text}
+</manager_triggers>
+
+<technical_context_m5>
+This JSON contains the last M5 candles and basic context:
+{json.dumps(technical_context, indent=2)}
+</technical_context_m5>
+
+<task>
+You are NOT allowed to open new trades.
+You ONLY manage the existing position described above.
+
+Based on the active trade, triggers and M5 context:
+Decide ONE of the following management actions:
+1) HOLD         → keep position and all levels unchanged
+2) MOVE_SL_BE   → move Stop Loss to BreakEven (entry price)
+3) CLOSE_50     → close 50% of the position size
+4) CLOSE_ALL    → close the full position now
+
+CRITICAL:
+- You MUST respond in STRICT JSON.
+- Top-level fields:
+  - manager_action: one of "HOLD", "MOVE_SL_BE", "CLOSE_50", "CLOSE_ALL"
+  - reason: short explanation in Russian language.
+
+Example:
+{{
+  "manager_action": "HOLD",
+  "reason": "Цена откатила, но структура тренда вверх сохраняется, TP реалистичен."
+}}
+</task>
+"""
+
+            full_prompt = self.SYSTEM_PROMPT + "\n\n" + manager_prompt
+
+            logger.info("Sending trade management request to Gemini (Manager Agent).")
+            url = f"{self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
+            logger.debug(f"Gemini Manager API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
+
+            payload = {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": 2048,
+                    "temperature": 0.4,
+                }
+            }
+
+            current_ip = get_current_ip()
+            if current_ip:
+                logger.info(f"Manager Agent external IP: {current_ip}")
+
+            response = requests.post(url, json=payload, timeout=120)
+            response.raise_for_status()
+            result = response.json()
+
+            if (
+                'candidates' in result and
+                result['candidates'] and
+                'content' in result['candidates'][0] and
+                'parts' in result['candidates'][0]['content'] and
+                result['candidates'][0]['content']['parts']
+            ):
+                assistant_message = result['candidates'][0]['content']['parts'][0].get('text', '')
+                logger.info("Manager Agent: successfully received response from Gemini.")
+                return assistant_message
+
+            logger.error(f"Manager Agent: unexpected Gemini response format: {result}")
+            return json.dumps({
+                "manager_action": "HOLD",
+                "reason": "Unexpected Gemini response format, defaulting to HOLD."
+            }, ensure_ascii=False)
+
+        except Exception as e:
+            logger.error(f"Error in manage_active_trade: {e}", exc_info=True)
+            fallback = {
+                "manager_action": "HOLD",
+                "reason": f"Ошибка при анализе менеджера сделки: {str(e)}"
+            }
+            return json.dumps(fallback, ensure_ascii=False)
+
 # Синглтон инстанс
 llm_service = LLMService(
     openrouter_key=OPENROUTER_API_KEY, 
