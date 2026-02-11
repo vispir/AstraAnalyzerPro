@@ -43,6 +43,8 @@ SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
 WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
 # Менеджер: не слать повторные CLOSE_ALL в Telegram чаще чем раз в N минут (антиспам при консолидации)
 MANAGER_CLOSE_ALL_NOTIFY_COOLDOWN_MIN = 30
+# Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
+MANAGER_MIN_TRADE_AGE_MINUTES = 15
 FRESH_SIGNAL_BARS = 25
 LOOKBACK_BARS = 600  # Увеличено до 600 для правильного Price Discovery (нужно найти пивоты до 331 баров назад)
 EXTREME_DISCOUNT_THRESHOLD = 15.0
@@ -1844,6 +1846,28 @@ def run_trade_manager_cycle():
     # Если нет ни одного триггера — менеджер ограничивается жёсткими правилами
     if not (stuck_against or news_soon or opposite_structure_trigger):
         logger.info("🤖 Manager: LLM не вызываем — нет триггеров (stuck/news/structure).")
+        return
+
+    # Сделка не должна быть "свежей": не спрашиваем LLM сразу после входа (шум M5, ложные BE/CLOSE_50)
+    trade_created = trade.get('created_at') or trade.get('timestamp') or ''
+    trade_age_minutes = None
+    try:
+        if trade_created:
+            # Supabase: "2026-02-11 17:12:25.271836+00" или ISO с T
+            ts_str = str(trade_created).strip().replace(' ', 'T').replace('Z', '+00:00')
+            if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
+                ts_str = ts_str + ':00'
+            created_dt = datetime.fromisoformat(ts_str)
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            trade_age_minutes = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60.0
+    except Exception as e:
+        logger.debug(f"Manager: не удалось вычислить возраст сделки: {e}")
+    if trade_age_minutes is not None and trade_age_minutes < MANAGER_MIN_TRADE_AGE_MINUTES:
+        logger.info(
+            f"🤖 Manager: сделка id={trade_id} свежая ({trade_age_minutes:.0f} мин < {MANAGER_MIN_TRADE_AGE_MINUTES} мин), "
+            "LLM не вызываем — даём сделке время развиться."
+        )
         return
 
     # ------------------------------------------------------------------
