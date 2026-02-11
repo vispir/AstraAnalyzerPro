@@ -41,8 +41,8 @@ from services.telegram_service import telegram_service
 
 SIGNAL_COOLDOWN_HOURS = 2       # После BUY/SELL
 WAIT_COOLDOWN_HOURS = 0.5       # v7.5.2: 30 минут после WAIT (было 1 час)
-# Менеджер: не слать повторные CLOSE_ALL в Telegram чаще чем раз в N минут (антиспам при консолидации)
-MANAGER_CLOSE_ALL_NOTIFY_COOLDOWN_MIN = 30
+# Менеджер: после N рекомендаций LLM «закрыть сделку» (CLOSE_ALL) — авто-закрытие по причине «слишком рискованно»
+MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER = 5
 # Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
 MANAGER_MIN_TRADE_AGE_MINUTES = 15
 FRESH_SIGNAL_BARS = 25
@@ -72,8 +72,8 @@ except ImportError as e:
 
 logger = logging.getLogger("AstraWatcher")
 
-# Менеджер: время последней отправки CLOSE_ALL в TG по trade_id (антиспам)
-_manager_close_all_last_sent = {}
+# Менеджер: счётчик рекомендаций CLOSE_ALL по trade_id (при 5 — авто-закрытие сделки)
+_manager_close_all_count = {}
 
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -1922,9 +1922,9 @@ def run_trade_manager_cycle():
 
     logger.info(f"🤖 Manager LLM Verdict: action={mgr_action}, reason={mgr_reason}")
 
-    # Реакция на решение LLM — на первом этапе делаем консервативно:
+    # Реакция на решение LLM:
     # - MOVE_SL_BE: реально двигаем SL в BE (если ещё не там)
-    # - CLOSE_ALL: пока только уведомляем, БЕЗ автоматического закрытия сделки
+    # - CLOSE_ALL: уведомление в TG каждый раз; после 5-й рекомендации — авто-закрытие (слишком рискованно)
     # - CLOSE_50: только рекомендация через Telegram
     # - HOLD: ничего не делаем
 
@@ -1946,40 +1946,45 @@ def run_trade_manager_cycle():
             telegram_service.broadcast_deals_only(user_ids, msg)
 
     elif mgr_action == 'CLOSE_ALL':
-        # Эскалация: первое CLOSE_ALL — одно сообщение, повторные — не чаще раз в N минут (антиспам при консолидации).
-        # Сделку в БД не закрываем: пусть доходит до SL/TP или ручного закрытия.
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-        cooldown_sec = MANAGER_CLOSE_ALL_NOTIFY_COOLDOWN_MIN * 60
-        last_sent = _manager_close_all_last_sent.get(trade_id, 0)
+        # Считаем рекомендации «закрыть сделку». Каждый раз шлём уведомление в TG.
+        # После 5-й рекомендации — закрываем сделку автоматически (причина: слишком рискованно), просыпается охотник.
+        _manager_close_all_count[trade_id] = _manager_close_all_count.get(trade_id, 0) + 1
+        count = _manager_close_all_count[trade_id]
 
-        if status != 'close_all_suggested':
-            db_service.update_signal_sl_and_status(trade_id, stop_loss, status='close_all_suggested')
+        if count >= MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER:
+            # Авто-закрытие: слишком рискованно (5 рекомендаций на закрытие)
+            result_pnl = (current_price - entry_price) if signal_type == 'BUY' else (entry_price - current_price)
+            db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
+            _manager_close_all_count.pop(trade_id, None)
+            send_debug_notification({
+                'status': 'trade_closed_manager_risky',
+                'reason': f'Слишком рискованно: {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие. PnL={result_pnl:.2f}',
+                'trade_id': trade_id,
+                'entry': entry_price,
+                'sl': stop_loss,
+                'tp': take_profit,
+                'current_price': current_price,
+                'signal_type': signal_type
+            })
             msg = (
-                f"⚠️ ASTRA Manager: LLM впервые рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью.\n"
-                f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
-                f"Причина: {mgr_reason}\n\n"
-                f"Статус сделки помечен как 'close_all_suggested'. Авто-закрытие пока НЕ выполняется."
+                f"🔴 ASTRA Manager: сделка id={trade_id} закрыта автоматически.\n"
+                f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
+                f"Причина: слишком рискованно ({MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие).\n"
+                f"Охотник снова ищет новую сделку."
             )
             if user_ids:
                 telegram_service.broadcast_deals_only(user_ids, msg)
-            _manager_close_all_last_sent[trade_id] = now_ts
+            logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по {count}-й рекомендации CLOSE_ALL (слишком рискованно).")
         else:
-            if now_ts - last_sent < cooldown_sec:
-                logger.info(
-                    f"🤖 Manager: CLOSE_ALL повторно для id={trade_id}, "
-                    f"кулдаун {MANAGER_CLOSE_ALL_NOTIFY_COOLDOWN_MIN} мин — уведомление не отправляем."
-                )
-            else:
-                msg = (
-                    f"🚨 ASTRA Manager: повторная рекомендация ЗАКРЫТЬ сделку id={trade_id} полностью!\n"
-                    f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
-                    f"Причина: {mgr_reason}\n\n"
-                    f"⚠️ Это уже не первое предупреждение. Авто-закрытие по-прежнему НЕ выполняется, "
-                    f"требуется ручное решение. Следующее напоминание не раньше чем через {MANAGER_CLOSE_ALL_NOTIFY_COOLDOWN_MIN} мин."
-                )
-                if user_ids:
-                    telegram_service.broadcast_deals_only(user_ids, msg)
-                _manager_close_all_last_sent[trade_id] = now_ts
+            # Только уведомление (1–4-я рекомендация)
+            msg = (
+                f"⚠️ ASTRA Manager: LLM рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью ({count}/{MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER}).\n"
+                f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
+                f"Причина: {mgr_reason}\n\n"
+                f"После {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций сделка будет закрыта автоматически."
+            )
+            if user_ids:
+                telegram_service.broadcast_deals_only(user_ids, msg)
 
     elif mgr_action == 'CLOSE_50':
         msg = (
