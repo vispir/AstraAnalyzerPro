@@ -831,17 +831,32 @@ Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
 IMPORTANT: Use these exact values for Targets (TP) and Structural Stops (SL).
 {json.dumps(computed_levels, indent=2)}
 </computed_levels>
-
+"""
+            # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
+            htf_block = ""
+            htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
+            if htf_context:
+                htf_block = f"""
+<htf_context>
+Higher Timeframe bias for Step 1 (H4 → H1). Use this FIRST to determine dominant trend and zones before looking at M15 entry.
+- H4: macro trend and zone (premium/discount).
+- H1: intermediate structure and last confirmed BOS/CHoCH.
+Do NOT take M15 entries against strong HTF trend unless there is clear reversal confirmation.
+{json.dumps(htf_context, indent=2)}
+</htf_context>
+"""
+            user_prompt_text += htf_block + f"""
 <raw_technical_data>
-Contains OHLCV arrays and Algo-Levels for M15, H1, H4. 
-Use this data to find the specific High/Low/Close of the trigger candle.
+M15 execution data: OHLCV candles, Order Blocks, FVG, Liquidity, BOS/CHoCH (including confirmed).
+Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
 {json.dumps(technical_data, indent=2)}
 </raw_technical_data>
 
 <task>
-1. Synthesize the News, Data, and Technical Analysis.
-2. Validate the setup using the "Decision Protocol" from System Instructions.
-3. Output the STRICT JSON decision with the required fields.
+1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
+2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
+3. Validate the setup using the "Decision Protocol" from System Instructions.
+4. Output the STRICT JSON decision with the required fields.
 </task>
 """
             
@@ -1214,6 +1229,19 @@ Use this data to find the specific High/Low/Close of the trigger candle.
 
             triggers_text = "\n".join(f"- {t}" for t in trigger_desc) if trigger_desc else "None detected."
 
+            # HTF (H4, H1) контекст для менеджера — если передан, добавляем в промпт
+            htf_block = ""
+            htf_context = technical_context.get("htf_context") if isinstance(technical_context, dict) else None
+            if htf_context:
+                htf_block = f"""
+<htf_context>
+Higher timeframe bias (H4 → H1). Use for context: if HTF trend and zone still support the position, do not overreact to M5 noise or local pullbacks.
+{json.dumps(htf_context, indent=2)}
+</htf_context>
+"""
+            # M5 контекст без htf_context в выводе (он уже в отдельном блоке)
+            technical_m5_for_prompt = {k: v for k, v in technical_context.items() if k != "htf_context"} if isinstance(technical_context, dict) else technical_context
+
             manager_prompt = f"""
 TRADE MANAGEMENT REQUEST for XAUUSD
 
@@ -1237,17 +1265,17 @@ Progress To TP: {progress_pct:.1f}%
 The following management triggers are currently active:
 {triggers_text}
 </manager_triggers>
-
+{htf_block}
 <technical_context_m5>
-This JSON contains the last M5 candles and basic context:
-{json.dumps(technical_context, indent=2)}
+Last M5 candles and SMC context (use for entry-level structure and triggers):
+{json.dumps(technical_m5_for_prompt, indent=2)}
 </technical_context_m5>
 
 <task>
 You are NOT allowed to open new trades.
 You ONLY manage the existing position described above.
 
-Based on the active trade, triggers and M5 context:
+Use <htf_context> if present for bias (H4/H1 trend and zone). Do not close the position only because of M5 noise if HTF trend and zone still support the position. Then consider M5 triggers and candles.
 Decide ONE of the following management actions:
 1) HOLD         → keep position and all levels unchanged
 2) MOVE_SL_BE   → move Stop Loss to BreakEven (entry price)

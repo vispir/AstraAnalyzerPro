@@ -1307,8 +1307,15 @@ def run_analysis_cycle():
                 # Если анализ был очень давно (> 120 минут), лучше не полагаться на старый контекст
                 time_ok = minutes_ago <= 120
             
+            # Последний WAIT из-за ошибки API (Gemini не дал ответ) — не считаем вердиктом, не пропускаем LLM
+            last_reason = (last_signal.get('llm_reason') or '') + (last_signal.get('llm_full_response') or '')
+            last_was_error_fallback = (
+                'не смог сформировать' in last_reason or 'Ошибка анализа' in last_reason
+            )
+            
             if (
                 last_action == 'WAIT'
+                and not last_was_error_fallback
                 and time_ok
                 and price_delta is not None
                 and price_delta < price_threshold
@@ -1366,6 +1373,52 @@ def run_analysis_cycle():
     logger.info("=" * 60)
     
     # ========================================================================
+    # HTF контекст (H4, H1) для LLM — компактный summary без сырых свечей
+    # ========================================================================
+    htf_context = {}
+    for tf_name, tf_key, bar_limit in [('H4', 'H4', 80), ('H1', 'H1', 120)]:
+        try:
+            tf_data = oanda_service.get_candles(timeframe=tf_key, limit=bar_limit)
+            if 'error' in tf_data or not tf_data.get('candles'):
+                continue
+            tf_candles = tf_data.get('candles', [])
+            tf_analysis = smc_detector.analyze(tf_candles, timeframe=tf_key)
+            adv = tf_analysis.get('advanced', {}) or {}
+            kl = adv.get('key_levels', {}) or {}
+            zones = adv.get('zones', {}) or {}
+            zone_name = kl.get('Current_Zone') or zones.get('current_zone', 'UNKNOWN')
+            sw_bos = tf_analysis.get('swing_bos_confirmed') or []
+            sw_choch = tf_analysis.get('swing_choch_confirmed') or []
+            last_bos = sw_bos[-1] if sw_bos else {}
+            last_choch = sw_choch[-1] if sw_choch else {}
+            # Цены для JSON (избегаем numpy)
+            ph = tf_analysis.get('swing_pivot_high')
+            pl = tf_analysis.get('swing_pivot_low')
+            if ph is not None and (isinstance(ph, float) and (ph != ph or abs(ph) == float('inf'))):
+                ph = None
+            if pl is not None and (isinstance(pl, float) and (pl != pl or abs(pl) == float('inf'))):
+                pl = None
+            htf_context[tf_name] = {
+                'trend': tf_analysis.get('trend', 'NEUTRAL'),
+                'zone': zone_name,
+                'key_levels': {
+                    'Current_Zone': zone_name,
+                    'High_Type': kl.get('High_Type', ''),
+                    'Low_Type': kl.get('Low_Type', ''),
+                    'swing_pivot_high': float(ph) if ph is not None else None,
+                    'swing_pivot_low': float(pl) if pl is not None else None,
+                },
+                'swing_bos_confirmed_count': len(sw_bos),
+                'swing_choch_confirmed_count': len(sw_choch),
+                'last_swing_bos': {'type': last_bos.get('type'), 'price': last_bos.get('price'), 'bars_ago': last_bos.get('bars_ago')} if last_bos else None,
+                'last_swing_choch': {'type': last_choch.get('type'), 'price': last_choch.get('price'), 'bars_ago': last_choch.get('bars_ago')} if last_choch else None,
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ HTF контекст {tf_name} не собран: {e}")
+    if htf_context:
+        logger.info(f"✓ HTF контекст для LLM: {list(htf_context.keys())}")
+
+    # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
     # ========================================================================
     logger.info("📊 Подготавливаем оптимизированные данные M15 для LLM...")
@@ -1401,6 +1454,8 @@ def run_analysis_cycle():
         'impulse_context': analysis.get('impulse_context', {}),
         'impulse': analysis.get('impulse', {}),
     }
+    if htf_context:
+        analysis_light['htf_context'] = htf_context
     
     # Добавляем свечи
     if 'error' not in data and data.get('candles'):
@@ -1424,6 +1479,16 @@ def run_analysis_cycle():
     is_confirmed = llm_action in ['BUY', 'SELL']
     low_conf_override = verdict.get('low_confidence_override', False)
     original_action = verdict.get('original_action')
+    
+    # WAIT из-за ошибки API (Gemini не вернул ответ) — сохраняем в БД; в GUARD 1 следующий цикл
+    # увидит last_was_error_fallback и вызовет LLM снова независимо от изменения цены
+    is_error_fallback = bool(
+        ai_response and (
+            'не смог сформировать' in ai_response or 'Ошибка анализа' in ai_response
+        )
+    )
+    if is_error_fallback:
+        logger.warning("⚠️ Ответ LLM — fallback из-за ошибки API. Сохраняем WAIT; следующий цикл вызовет LLM снова.")
     
     # Логируем с информацией о confidence override
     if low_conf_override:
@@ -1474,7 +1539,8 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
     
     else:
-        # Определяем причину WAIT
+        # WAIT (в т.ч. fallback из-за ошибки API) — сохраняем в БД, чтобы следующий цикл в GUARD 1
+        # увидел last_was_error_fallback и вызвал LLM снова независимо от изменения цены
         if low_conf_override:
             logger.warning(f"⚠️ LOW CONFIDENCE WAIT: оригинальный сигнал {original_action} отклонён (confidence={verdict['confidence']}%)")
             wait_reason = f'⚠️ LOW CONFIDENCE ({verdict["confidence"]}%): {original_action} → WAIT'
@@ -1491,10 +1557,8 @@ def run_analysis_cycle():
             logger.error(f"❌ Ошибка сохранения: {e}")
         
         # Отправляем WAIT сигнал пользователям (с полными данными wait_metadata)
-        # Передаём verdict чтобы format_signal_message знал о low_confidence_override
         user_ids = db_service.get_all_active_users()
         if user_ids:
-            # Создаём модифицированный ответ с информацией о verdict
             formatted_wait_msg = format_signal_message_with_verdict(ai_response, verdict)
             telegram_service.broadcast_signal(user_ids, formatted_wait_msg)
             logger.info(f"📤 WAIT сигнал отправлен {len(user_ids)} пользователям")
@@ -1892,6 +1956,52 @@ def run_trade_manager_cycle():
         return
 
     # ------------------------------------------------------------------
+    # HTF контекст (H4, H1) для менеджера — компактный summary для LLM
+    # ------------------------------------------------------------------
+    manager_htf_context = {}
+    if smc_detector:
+        for tf_name, tf_key, bar_limit in [('H4', 'H4', 80), ('H1', 'H1', 120)]:
+            try:
+                tf_data = oanda_service.get_candles(timeframe=tf_key, limit=bar_limit)
+                if 'error' in tf_data or not tf_data.get('candles'):
+                    continue
+                tf_candles = tf_data.get('candles', [])
+                tf_analysis = smc_detector.analyze(tf_candles, timeframe=tf_key)
+                adv = tf_analysis.get('advanced', {}) or {}
+                kl = adv.get('key_levels', {}) or {}
+                zones = adv.get('zones', {}) or {}
+                zone_name = kl.get('Current_Zone') or zones.get('current_zone', 'UNKNOWN')
+                sw_bos = tf_analysis.get('swing_bos_confirmed') or []
+                sw_choch = tf_analysis.get('swing_choch_confirmed') or []
+                last_bos = sw_bos[-1] if sw_bos else {}
+                last_choch = sw_choch[-1] if sw_choch else {}
+                ph = tf_analysis.get('swing_pivot_high')
+                pl = tf_analysis.get('swing_pivot_low')
+                if ph is not None and isinstance(ph, float) and (ph != ph or abs(ph) == float('inf')):
+                    ph = None
+                if pl is not None and isinstance(pl, float) and (pl != pl or abs(pl) == float('inf')):
+                    pl = None
+                manager_htf_context[tf_name] = {
+                    'trend': tf_analysis.get('trend', 'NEUTRAL'),
+                    'zone': zone_name,
+                    'key_levels': {
+                        'Current_Zone': zone_name,
+                        'High_Type': kl.get('High_Type', ''),
+                        'Low_Type': kl.get('Low_Type', ''),
+                        'swing_pivot_high': float(ph) if ph is not None else None,
+                        'swing_pivot_low': float(pl) if pl is not None else None,
+                    },
+                    'swing_bos_confirmed_count': len(sw_bos),
+                    'swing_choch_confirmed_count': len(sw_choch),
+                    'last_swing_bos': {'type': last_bos.get('type'), 'price': last_bos.get('price'), 'bars_ago': last_bos.get('bars_ago')} if last_bos else None,
+                    'last_swing_choch': {'type': last_choch.get('type'), 'price': last_choch.get('price'), 'bars_ago': last_choch.get('bars_ago')} if last_choch else None,
+                }
+            except Exception as e:
+                logger.debug(f"Manager HTF {tf_name}: {e}")
+    if manager_htf_context:
+        logger.info(f"🤖 Manager: HTF контекст для LLM — {list(manager_htf_context.keys())}")
+
+    # ------------------------------------------------------------------
     # 5. Вызов LLM Manager-агента
     # ------------------------------------------------------------------
     trade_context = {
@@ -1910,10 +2020,10 @@ def run_trade_manager_cycle():
         'opposite_structure': opposite_structure_trigger,
     }
 
-    # Технический контекст для LLM (последние свечи M5 + SMC-контекст)
+    # Технический контекст для LLM (M5 + опционально H4/H1 summary)
     technical_context = {
         'timeframe': 'M5',
-        'candles': candles_m5[-20:],  # последние 20 свечей
+        'candles': candles_m5[-20:],
         'smc_m5': {
             'trend': smc_trend_m5,
             'zone': smc_zone_m5,
@@ -1921,6 +2031,8 @@ def run_trade_manager_cycle():
             'has_opposite_choch': has_opposite_choch
         }
     }
+    if manager_htf_context:
+        technical_context['htf_context'] = manager_htf_context
 
     try:
         ai_response = llm_service.manage_active_trade(
