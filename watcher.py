@@ -43,6 +43,11 @@ SIGNAL_COOLDOWN_HOURS = 0.5     # 30 минут после BUY/SELL
 WAIT_COOLDOWN_HOURS = 0.25     # 15 минут после WAIT — быстрее переоценка и новый вход
 # Менеджер: после N рекомендаций LLM «закрыть сделку» (CLOSE_ALL) — авто-закрытие по причине «слишком рискованно»
 MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER = 3
+# Менеджер: после N рекомендаций «частично закрыть» (CLOSE_50) — авто-закрытие; гибрид: также закрытие при откате от 70%+ если LLM уже рекомендовал закрыть
+MANAGER_CLOSE_50_AUTO_CLOSE_AFTER = 3
+# Гибрид: пороги прогресса к TP — был пик >= PEAK и откат ниже PULLBACK при хотя бы одной рекомендации закрыть
+MANAGER_PROGRESS_PEAK = 0.70
+MANAGER_PROGRESS_PULLBACK = 0.70
 # Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
 MANAGER_MIN_TRADE_AGE_MINUTES = 15
 # Минимальный интервал (мин) между вызовами LLM по одной сделке — защита от спама по квоте API
@@ -76,6 +81,10 @@ logger = logging.getLogger("AstraWatcher")
 
 # Менеджер: счётчик рекомендаций CLOSE_ALL по trade_id (при N — авто-закрытие, см. MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER)
 _manager_close_all_count = {}
+# Менеджер: счётчик рекомендаций CLOSE_50 по trade_id (при N — авто-закрытие; также для гибрида «откат + хотя бы раз сказал закрыть»)
+_manager_close_50_count = {}
+# Менеджер: макс. прогресс к TP по trade_id (для гибрида: закрытие при откате от 70%+)
+_manager_max_progress = {}
 # Менеджер: время последнего вызова LLM по trade_id (кулдаун, чтобы не спамить API)
 _manager_llm_last_call_ts = {}
 
@@ -469,6 +478,7 @@ def format_debug_report(status_data):
         'low_confidence_wait': '📉',  # v7.6: Низкая уверенность (< 50%)
         'active_trade': '🛑',  # Manager: есть активная сделка
         'trade_closed_sl': '🛑', 'trade_closed_tp': '✅', 'trade_closed_manager_news': '⚠️',
+        'trade_closed_manager_risky': '🔴', 'trade_closed_manager_pullback': '✅', 'trade_closed_manager_50': '✅',
         'move_sl_be': '🔒'
     }
     
@@ -494,6 +504,9 @@ def format_debug_report(status_data):
         'trade_closed_sl': 'Manager: Сделка закрыта по SL',
         'trade_closed_tp': 'Manager: Сделка закрыта по TP',
         'trade_closed_manager_news': 'Manager: Сделка закрыта перед новостями',
+        'trade_closed_manager_risky': 'Manager: Сделка закрыта (3/3 рекомендаций закрыть полностью)',
+        'trade_closed_manager_pullback': 'Manager: Сделка закрыта (откат от пика к TP)',
+        'trade_closed_manager_50': 'Manager: Сделка закрыта (3/3 рекомендаций частично закрыть)',
         'move_sl_be': 'Manager: SL переведён в безубыток'
     }
     
@@ -1736,6 +1749,8 @@ def run_trade_manager_cycle():
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_sl')
         _manager_close_all_count.pop(trade_id, None)
+        _manager_close_50_count.pop(trade_id, None)
+        _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_sl',
@@ -1777,6 +1792,8 @@ def run_trade_manager_cycle():
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_tp')
         _manager_close_all_count.pop(trade_id, None)
+        _manager_close_50_count.pop(trade_id, None)
+        _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_tp',
@@ -1838,6 +1855,40 @@ def run_trade_manager_cycle():
         })
         # После перевода в BE продолжаем менеджмент (вдруг есть LLM-триггеры)
 
+    # Гибрид: обновляем макс. прогресс к TP и проверяем откат (закрытие при откате от 70%+ если LLM уже рекомендовал закрыть)
+    _manager_max_progress[trade_id] = max(_manager_max_progress.get(trade_id, 0.0), progress_ratio)
+    max_prog = _manager_max_progress[trade_id]
+    close_50_cnt = _manager_close_50_count.get(trade_id, 0)
+    close_all_cnt = _manager_close_all_count.get(trade_id, 0)
+    if (
+        max_prog >= MANAGER_PROGRESS_PEAK
+        and progress_ratio < MANAGER_PROGRESS_PULLBACK
+        and (close_50_cnt >= 1 or close_all_cnt >= 1)
+    ):
+        result_pnl = (current_price - entry_price) if signal_type == 'BUY' else (entry_price - current_price)
+        db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
+        _manager_close_all_count.pop(trade_id, None)
+        _manager_close_50_count.pop(trade_id, None)
+        _manager_max_progress.pop(trade_id, None)
+        _manager_llm_last_call_ts.pop(trade_id, None)
+        send_debug_notification({
+            'status': 'trade_closed_manager_pullback',
+            'reason': f'Откат от {max_prog*100:.0f}% к TP (сейчас {progress_ratio*100:.0f}%). LLM уже рекомендовал закрыть — фиксация. PnL={result_pnl:.2f}',
+            'trade_id': trade_id, 'entry': entry_price, 'sl': stop_loss, 'tp': take_profit,
+            'current_price': current_price, 'signal_type': signal_type
+        })
+        user_ids_pb = db_service.get_all_active_users()
+        if user_ids_pb:
+            msg_pb = (
+                f"✅ ASTRA Manager: сделка id={trade_id} закрыта (откат от пика к TP).\n"
+                f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
+                f"Причина: цена была на {max_prog*100:.0f}% пути к TP, откатила до {progress_ratio*100:.0f}%. LLM уже рекомендовал закрыть — фиксация профита.\n"
+                f"Охотник снова ищет новую сделку."
+            )
+            telegram_service.broadcast_deals_only(user_ids_pb, msg_pb)
+        logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по гибриду (откат от {max_prog*100:.0f}% к TP).")
+        return
+
     # ------------------------------------------------------------------
     # 4. LLM TRIGGERS — когда вообще имеет смысл спрашивать ИИ
     # ------------------------------------------------------------------
@@ -1892,6 +1943,8 @@ def run_trade_manager_cycle():
         )
         db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
         _manager_close_all_count.pop(trade_id, None)
+        _manager_close_50_count.pop(trade_id, None)
+        _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_manager_news',
@@ -2086,13 +2139,16 @@ def run_trade_manager_cycle():
         count = _manager_close_all_count[trade_id]
 
         if count >= MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER:
-            # Авто-закрытие: слишком рискованно (N рекомендаций на закрытие)
+            # Авто-закрытие: слишком рискованно (N рекомендаций на закрытие) — 3/3
             result_pnl = (current_price - entry_price) if signal_type == 'BUY' else (entry_price - current_price)
             db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
             _manager_close_all_count.pop(trade_id, None)
+            _manager_close_50_count.pop(trade_id, None)
+            _manager_max_progress.pop(trade_id, None)
+            _manager_llm_last_call_ts.pop(trade_id, None)
             send_debug_notification({
                 'status': 'trade_closed_manager_risky',
-                'reason': f'Слишком рискованно: {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие. PnL={result_pnl:.2f}',
+                'reason': f'Слишком рискованно: {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие (3/3). PnL={result_pnl:.2f}',
                 'trade_id': trade_id,
                 'entry': entry_price,
                 'sl': stop_loss,
@@ -2101,34 +2157,61 @@ def run_trade_manager_cycle():
                 'signal_type': signal_type
             })
             msg = (
-                f"🔴 ASTRA Manager: сделка id={trade_id} закрыта автоматически.\n"
+                f"🔴 ASTRA Manager: сделка id={trade_id} закрыта автоматически (3/3).\n"
                 f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
-                f"Причина: слишком рискованно ({MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие).\n"
+                f"Причина: LLM 3 раза рекомендовала закрыть сделку полностью — слишком рискованно.\n"
                 f"Охотник снова ищет новую сделку."
             )
             if user_ids:
                 telegram_service.broadcast_deals_only(user_ids, msg)
-            logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по {count}-й рекомендации CLOSE_ALL (слишком рискованно).")
+            logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по {count}-й рекомендации CLOSE_ALL (3/3).")
         else:
-            # Только уведомление (1-я и 2-я рекомендация при N=3)
+            # Уведомление с нумерацией 1/3, 2/3
             msg = (
                 f"⚠️ ASTRA Manager: LLM рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью ({count}/{MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER}).\n"
                 f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
                 f"Причина: {mgr_reason}\n\n"
-                f"После {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций сделка будет закрыта автоматически."
+                f"После {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций (3/3) сделка будет закрыта автоматически."
             )
             if user_ids:
                 telegram_service.broadcast_deals_only(user_ids, msg)
 
     elif mgr_action == 'CLOSE_50':
-        msg = (
-            f"ℹ️ ASTRA Manager: LLM рекомендует частично закрыть (50%) сделку id={trade_id}.\n"
-            f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
-            f"Причина: {mgr_reason}\n\n"
-            f"⚠️ Это только рекомендация, авто-частичное закрытие не выполняется."
-        )
-        if user_ids:
-            telegram_service.broadcast_deals_only(user_ids, msg)
+        _manager_close_50_count[trade_id] = _manager_close_50_count.get(trade_id, 0) + 1
+        count_50 = _manager_close_50_count[trade_id]
+
+        if count_50 >= MANAGER_CLOSE_50_AUTO_CLOSE_AFTER:
+            # 3/3 — авто-закрытие по третьей рекомендации «частично закрыть»
+            result_pnl = (current_price - entry_price) if signal_type == 'BUY' else (entry_price - current_price)
+            db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_manager')
+            _manager_close_all_count.pop(trade_id, None)
+            _manager_close_50_count.pop(trade_id, None)
+            _manager_max_progress.pop(trade_id, None)
+            _manager_llm_last_call_ts.pop(trade_id, None)
+            send_debug_notification({
+                'status': 'trade_closed_manager_50',
+                'reason': f'{MANAGER_CLOSE_50_AUTO_CLOSE_AFTER} рекомендаций частично закрыть (3/3). Сделка закрыта. PnL={result_pnl:.2f}',
+                'trade_id': trade_id, 'entry': entry_price, 'sl': stop_loss, 'tp': take_profit,
+                'current_price': current_price, 'signal_type': signal_type
+            })
+            msg = (
+                f"✅ ASTRA Manager: сделка id={trade_id} закрыта автоматически (3/3).\n"
+                f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
+                f"Причина: LLM 3 раза рекомендовала частично закрыть — сделка закрыта по текущей цене.\n"
+                f"Охотник снова ищет новую сделку."
+            )
+            if user_ids:
+                telegram_service.broadcast_deals_only(user_ids, msg)
+            logger.info(f"🤖 Manager: сделка id={trade_id} закрыта по {count_50}-й рекомендации CLOSE_50 (3/3).")
+        else:
+            msg = (
+                f"ℹ️ ASTRA Manager: LLM рекомендует частично закрыть (50%) сделку id={trade_id} ({count_50}/{MANAGER_CLOSE_50_AUTO_CLOSE_AFTER}).\n"
+                f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
+                f"Причина: {mgr_reason}\n\n"
+                f"После {MANAGER_CLOSE_50_AUTO_CLOSE_AFTER} рекомендаций (3/3) сделка будет закрыта автоматически."
+            )
+            if user_ids:
+                telegram_service.broadcast_deals_only(user_ids, msg)
 
     else:
         # HOLD или неизвестное действие — просто логируем и, опционально, уведомляем
