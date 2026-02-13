@@ -38,7 +38,7 @@ class OandaService:
         try:
             # Мапим таймфреймы под стандарт OANDA
             # OANDA понимает M15, H1, H4, но если будут другие — добавь сюда
-            tf_map = {"M15": "M15", "H1": "H1", "H4": "H4", "D1": "D"}
+            tf_map = {"M5": "M5", "M15": "M15", "H1": "H1", "H4": "H4", "D1": "D"}
             granularity = tf_map.get(timeframe, "M15")
 
             url = f"{self.base_url}/accounts/{self.account_id}/instruments/{self.symbol}/candles"
