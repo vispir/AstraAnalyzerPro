@@ -23,6 +23,14 @@ except ImportError:
 
 from services.cache_service import cache_service
 
+try:
+    from services.forex_factory_calendar import fetch_forex_factory_events
+    FOREX_FACTORY_AVAILABLE = True
+except ImportError as e:
+    FOREX_FACTORY_AVAILABLE = False
+    fetch_forex_factory_events = None
+    _ff_import_error = str(e)
+
 logger = logging.getLogger(__name__)
 
 # Логируем отсутствие investpy только один раз за процесс
@@ -46,7 +54,10 @@ class NewsService:
                 max_results=20
             )
         
-        logger.info(f"News service initialized - investpy: {INVESTPY_AVAILABLE}, gnews: {GNEWS_AVAILABLE}")
+        logger.info(
+            f"News service initialized - investpy: {INVESTPY_AVAILABLE}, "
+            f"gnews: {GNEWS_AVAILABLE}, forexfactory: {FOREX_FACTORY_AVAILABLE}"
+        )
         
     def fetch_calendar(self, from_date: datetime, to_date: datetime) -> List[Dict]:
         """
@@ -229,19 +240,56 @@ class NewsService:
             return "Medium"
         else:
             return "Low"
-    
+
+    def _fetch_forex_factory_calendar(self, from_date: datetime, to_date: datetime) -> List[Dict]:
+        """Календарь Forex Factory за период (с кэшем). Возвращает события в том же формате, что и fetch_calendar."""
+        if not FOREX_FACTORY_AVAILABLE or not fetch_forex_factory_events:
+            return []
+        cache_key = cache_service._generate_key(
+            'calendar_ff',
+            from_date.strftime('%Y-%m-%d'),
+            to_date.strftime('%Y-%m-%d')
+        )
+        cached = cache_service.get(cache_key)
+        if cached is not None:
+            logger.info(f"Returning cached Forex Factory calendar ({len(cached)} events)")
+            return cached
+        try:
+            events = fetch_forex_factory_events(from_date, to_date)
+            cache_service.set(cache_key, events, self.calendar_cache_ttl)
+            return events
+        except Exception as e:
+            logger.warning("Forex Factory calendar fetch failed: %s", e)
+            return []
+
+    def _get_merged_calendar(self, from_date: datetime, to_date: datetime) -> List[Dict]:
+        """Объединённый календарь: investpy + Forex Factory. Дедупликация по (timestamp, title), сортировка по времени."""
+        investpy_events = self.fetch_calendar(from_date, to_date)
+        ff_events = self._fetch_forex_factory_calendar(from_date, to_date)
+        seen = set()
+        merged = []
+        for e in investpy_events + ff_events:
+            ts = e.get('timestamp')
+            title = (e.get('title') or '').strip()
+            key = (ts, title) if ts and title else None
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            merged.append(e)
+        merged.sort(key=lambda x: x.get('timestamp') or 0)
+        return merged
+
     def get_all_news(self) -> List[Dict]:
         """
-        Получение всех новостей недели
+        Получение всех новостей недели (investpy + Forex Factory).
         
         Returns:
             Список всех событий
         """
-        # Получаем календарь на неделю вперед
         now = datetime.now()
         week_later = now + timedelta(days=7)
-        
-        return self.fetch_calendar(now, week_later)
+        return self._get_merged_calendar(now, week_later)
     
     def filter_news(
         self,
@@ -368,8 +416,8 @@ class NewsService:
             now = datetime.now()
             past_date = now - timedelta(hours=hours)
             
-            # Получаем календарь за прошедший период
-            calendar_data = self.fetch_calendar(past_date, now)
+            # Получаем календарь за прошедший период (investpy + Forex Factory)
+            calendar_data = self._get_merged_calendar(past_date, now)
             
             # Фильтруем только прошедшие USD события High и Medium важности
             past_events = []
@@ -587,8 +635,12 @@ class NewsService:
             }
     
     def clear_cache(self):
-        """Очистка кеша новостей"""
-        count = cache_service.clear('calendar') + cache_service.clear('geopolitical')
+        """Очистка кеша новостей (investpy, Forex Factory, geopolitical)"""
+        count = (
+            cache_service.clear('calendar')
+            + cache_service.clear('calendar_ff')
+            + cache_service.clear('geopolitical')
+        )
         logger.info(f"News cache cleared ({count} entries)")
 
 

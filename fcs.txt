@@ -1,0 +1,131 @@
+Search News
+Latest:
+
+Return all Latest news by date that contain your search terms.
+
+Search Syntax
+Basic Search:
+find=election - Returns articles with exactly "election" (not "elections")
+
+Wildcard:
+find=tech* - Matches "tech", "technology", "technical", etc.
+
+Boolean Operators:
+
+find=climate energy - Any one or both words
+find=+climate +policy - Must include both terms
+find=vaccine -covid - Include "vaccine", exclude "covid"
+find="artificial intelligence" - Exact phrase match
+find=car race +super - Must have "super", with any word "car/race"
+find=+breaking +news -sport* - Contain "breaking" and "news", exclude anything start with "sport"
+find=tech* -apple -google - Words starting with "tech" but excluding "apple" and "google"
+find="climate change" +policy - The exact phrase "climate change" with the word "policy"
+Notes:
+
+Results sorted by newest first
+No prefix wildcards (*ing) or mid-word wildcards (c*r)
+Minimum search term: 3 characters
+Default Search covers titles and descriptions
+https://news.fcsapi.com/api/news?find=car&access_key=twAoG3EGMZME539a8BA9rBJ
+From Specific Date:
+Return all news sort by date that contain words "trump".
+
+https://news.fcsapi.com/api/news?find=car*&from=2026-02-10&to=2026-02-04&access_key=twAoG3EGMZME539a8BA9rBJ
+From Language:
+Return all news sort by language that contain words "trump".
+
+https://news.fcsapi.com/api/news?find=+trump +elections&language=en&access_key=twAoG3EGMZME539a8BA9rBJ
+From limit:
+Give news in define limit.
+
+https://news.fcsapi.com/api/news?find=trump&limit=10&access_key=twAoG3EGMZME539a8BA9rBJ
+From offset:
+skipping given number results (pagination) and showing next news.
+
+https://news.fcsapi.com/api/news?find=trump&limit=10&offset=10&access_key=twAoG3EGMZME539a8BA9rBJ
+From search:
+Return news according to search fields.
+
+https://news.fcsapi.com/api/news?find=trump&search_in=title,content,description&access_key=twAoG3EGMZME539a8BA9rBJ
+Response:
+After you request on API, It would give you the response in JSON format which you can change, it is up to your need. Moreover, We have characterized our News API response in the form of different index keys (id, name, symbol, and decimals) concerning the different popular currencies which you can use according to your requirements.
+
+{
+  "status": true,
+  "code": 200,
+  "message": "All news articles",
+  "response": [
+    {
+      "id": "755",
+      "title": "Kalgoorlie man who allegedly severed father...",
+      "description": "The 19-year-old's lawyer told a ...",
+      "image_url": "https://live-production.wcms.abc-cdn.net.au/e6db9..."
+      "language": "en",
+      "datetime": "2025-03-14 02:55:32",
+      "url": "https://www.abc.net.au/news/2025-03-14/kalgoorlie-samurai-sword-accused-granted-bail/105047726",
+      "site": "abc",
+      "Category": "business",
+      "country": "india",
+      "keywords": "india",
+      "author": "Priscilla Alvarez"
+    }
+  ]
+}
+Category News
+Category:
+Return all Latest news by category.
+
+https://news.fcsapi.com/api/news?find=trump&category=entertainment&access_key=twAoG3EGMZME539a8BA9rBJ
+Response:
+After you request on API, It would give you the response in JSON format which you can change, it is up to your need. Moreover, We have characterized our News API response in the form of different index keys (id, name, symbol, and decimals) concerning the different popular currencies which you can use according to your requirements.
+
+{
+  "status": true,
+  "code": 200,
+  "message": "All news articles",
+  "response": [
+    {
+      "id": "755",
+      "title": "Kalgoorlie man who allegedly severed father...",
+      "description": "The 19-year-old's lawyer told a ...",
+      "image_url": "https://live-production.wcms.abc-cdn.net.au/e6db9..."
+      "language": "en",
+      "datetime": "2025-03-14 02:55:32",
+      "url": "https://www.abc.net.au/news/2025-03-14/kalgoorlie-samurai-sword-accused-granted-bail/105047726",
+      "site": "abc",
+      "category": "entertainment",
+      "Country": "india",
+      "keywords": "india",
+      "author": "Priscilla Alvarez"
+    }
+  ]
+}
+Country News
+Country:
+Return all Latest news by country.
+
+https://news.fcsapi.com/api/news?find=trump&country=us&access_key=twAoG3EGMZME539a8BA9rBJ
+Response:
+After you request on API, It would give you the response in JSON format which you can change, it is up to your need. Moreover, We have characterized our News API response in the form of different index keys (id, name, symbol, and decimals) concerning the different popular currencies which you can use according to your requirements.
+
+{
+  "status": true,
+  "code": 200,
+  "message": "All news articles",
+  "response": [
+    {
+      "id": "755",
+      "title": "Kalgoorlie man who allegedly severed father...",
+      "description": "The 19-year-old's lawyer told a ...",
+      "image_url": "https://live-production.wcms.abc-cdn.net.au/e6db9..."
+      "language": "en",
+      "datetime": "2025-03-14 02:55:32",
+      "url": "https://www.abc.net.au/news/2025-03-14/kalgoorlie-samurai-sword-accused-granted-bail/105047726",
+      "site": "abc",
+      "category": "entertainment",
+      "Country": "usa",
+      "keywords": "usa",
+      "author": "Priscilla Alvarez"
+    }
+  ]
+}
