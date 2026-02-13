@@ -1674,6 +1674,29 @@ def run_trade_manager_cycle():
         return
 
     current_price = safe_float(candles_m5[-1].get('close'), 0.0)
+    # Только свечи после открытия сделки — избегаем фейковых SL/TP по прошлым свечам
+    trade_open_ts = None
+    trade_created_raw = trade.get('created_at') or trade.get('timestamp') or ''
+    if trade_created_raw:
+        try:
+            ts_str = str(trade_created_raw).strip().replace(' ', 'T').replace('Z', '+00:00')
+            if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
+                ts_str = ts_str + ':00'
+            created_dt = datetime.fromisoformat(ts_str)
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            trade_open_ts = int(created_dt.timestamp())
+        except Exception:
+            trade_open_ts = None
+    # Начало M5-свечи, в которую попал вход (5 мин = 300 сек)
+    M5_SEC = 300
+    trade_candle_start = (trade_open_ts // M5_SEC) * M5_SEC if trade_open_ts else 0
+    # Берём последние 6 свечей, но только те, что начались не раньше свечи входа
+    MANAGER_CANDLES_LOOKBACK = 6
+    recent_m5_raw = candles_m5[-MANAGER_CANDLES_LOOKBACK:] if len(candles_m5) >= MANAGER_CANDLES_LOOKBACK else candles_m5
+    recent_m5 = [c for c in recent_m5_raw if c.get('time', 0) >= trade_candle_start] if trade_candle_start else recent_m5_raw
+    if not recent_m5:
+        recent_m5 = candles_m5[-1:]  # хотя бы текущая свеча
     logger.info(
         f"💼 Manager: активная сделка id={trade_id}, type={signal_type}, "
         f"entry={entry_price:.2f}, sl={stop_loss:.2f}, tp={take_profit:.2f}, "
@@ -1736,12 +1759,22 @@ def run_trade_manager_cycle():
     # 3. HARD-CODED CHECKS — Stop Loss и перевод в безубыток
     # ------------------------------------------------------------------
 
-    # 3.1. Стоп-лосс сработал (или цена пересекла SL) → закрываем сделку
+    # 3.1. Стоп-лосс сработал: проверяем по low/high свечей (тень) — если цена коснулась SL, закрываем
     hit_stop = False
-    if signal_type == 'BUY' and current_price <= stop_loss:
-        hit_stop = True
-    elif signal_type == 'SELL' and current_price >= stop_loss:
-        hit_stop = True
+    for c in recent_m5:
+        h = safe_float(c.get('high'), 0.0)
+        l = safe_float(c.get('low'), 0.0)
+        if signal_type == 'BUY' and l <= stop_loss:
+            hit_stop = True
+            break
+        if signal_type == 'SELL' and h >= stop_loss:
+            hit_stop = True
+            break
+    if not hit_stop:
+        if signal_type == 'BUY' and current_price <= stop_loss:
+            hit_stop = True
+        elif signal_type == 'SELL' and current_price >= stop_loss:
+            hit_stop = True
 
     if hit_stop:
         # PnL и цена закрытия считаем по уровню SL (как выставил охотник), а не по текущей цене — избегаем проскальзывания в отчёте
@@ -1781,12 +1814,22 @@ def run_trade_manager_cycle():
             telegram_service.broadcast_deals_only(user_ids_sl, msg_sl)
         return
 
-    # 3.1b. Take Profit достигнут → закрываем с профитом, статус closed_tp
+    # 3.1b. Take Profit достигнут: проверяем по high/low свечей (тень) — если цена коснулась TP, закрываем
     hit_tp = False
-    if signal_type == 'BUY' and current_price >= take_profit:
-        hit_tp = True
-    elif signal_type == 'SELL' and current_price <= take_profit:
-        hit_tp = True
+    for c in recent_m5:
+        h = safe_float(c.get('high'), 0.0)
+        l = safe_float(c.get('low'), 0.0)
+        if signal_type == 'BUY' and h >= take_profit:
+            hit_tp = True
+            break
+        if signal_type == 'SELL' and l <= take_profit:
+            hit_tp = True
+            break
+    if not hit_tp:
+        if signal_type == 'BUY' and current_price >= take_profit:
+            hit_tp = True
+        elif signal_type == 'SELL' and current_price <= take_profit:
+            hit_tp = True
 
     if hit_tp:
         # PnL и цена закрытия считаем по уровню TP (как выставил охотник), а не по текущей цене — без проскальзывания в отчёте
