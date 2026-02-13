@@ -1226,6 +1226,8 @@ Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
                 trigger_desc.append("High-impact USD news within 5 minutes.")
             if triggers.get('opposite_structure'):
                 trigger_desc.append("Opposite SMC structure detected on M5.")
+            if triggers.get('reached_1r'):
+                trigger_desc.append("Price has reached or passed 1R in favor of the position (unrealized profit >= 1R).")
 
             triggers_text = "\n".join(f"- {t}" for t in trigger_desc) if trigger_desc else "None detected."
 
@@ -1276,6 +1278,7 @@ You are NOT allowed to open new trades.
 You ONLY manage the existing position described above.
 
 Use <htf_context> if present for bias (H4/H1 trend and zone). Do not close the position only because of M5 noise if HTF trend and zone still support the position. Then consider M5 triggers and candles.
+When "reached_1r" (price at or above 1R profit) is among the triggers, you MAY recommend CLOSE_ALL or CLOSE_50 to lock profit if structure or momentum no longer justify holding to TP; otherwise HOLD or MOVE_SL_BE.
 Decide ONE of the following management actions:
 1) HOLD         → keep position and all levels unchanged
 2) MOVE_SL_BE   → move Stop Loss to BreakEven (entry price)
