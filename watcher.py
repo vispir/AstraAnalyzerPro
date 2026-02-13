@@ -1789,35 +1789,37 @@ def run_trade_manager_cycle():
         hit_tp = True
 
     if hit_tp:
+        # PnL и цена закрытия считаем по уровню TP (как выставил охотник), а не по текущей цене — без проскальзывания в отчёте
         if signal_type == 'BUY':
-            result_pnl = current_price - entry_price
+            result_pnl = take_profit - entry_price
         else:
-            result_pnl = entry_price - current_price
+            result_pnl = entry_price - take_profit
+        close_price_tp = take_profit
 
         logger.info(
-            f"✅ Manager: цена достигла TP. Закрываем сделку id={trade_id} по цене {current_price:.2f} "
-            f"(PnL={result_pnl:.2f})."
+            f"✅ Manager: цена достигла TP. Закрываем сделку id={trade_id} по уровню TP={close_price_tp:.2f} "
+            f"(PnL={result_pnl:.2f}, текущая цена M5={current_price:.2f})."
         )
-        db_service.update_signal_result(trade_id, result_pnl, current_price, status='closed_tp')
+        db_service.update_signal_result(trade_id, result_pnl, close_price_tp, status='closed_tp')
         _manager_close_all_count.pop(trade_id, None)
         _manager_close_50_count.pop(trade_id, None)
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         send_debug_notification({
             'status': 'trade_closed_tp',
-            'reason': f'Цена достигла TP. Сделка закрыта в плюс. PnL={result_pnl:.2f}',
+            'reason': f'Цена достигла TP. Сделка закрыта по уровню TP. PnL={result_pnl:.2f}',
             'trade_id': trade_id,
             'entry': entry_price,
             'sl': stop_loss,
             'tp': take_profit,
-            'current_price': current_price,
+            'current_price': close_price_tp,
             'signal_type': signal_type
         })
         user_ids_tp = db_service.get_all_active_users()
         if user_ids_tp:
             msg_tp = (
                 f"✅ <b>Сделка закрыта: Take Profit</b>\n"
-                f"id={trade_id} | {signal_type} | entry={entry_price:.2f} → close={current_price:.2f}\n"
+                f"id={trade_id} | {signal_type} | entry={entry_price:.2f} → close={close_price_tp:.2f} (уровень TP)\n"
                 f"PnL=+{result_pnl:.2f}\n"
                 f"Данные сохранены в БД для анализа и обучения моделей."
             )
