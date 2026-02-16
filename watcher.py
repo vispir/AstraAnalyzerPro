@@ -50,6 +50,8 @@ MANAGER_PROGRESS_PEAK = 0.70
 MANAGER_PROGRESS_PULLBACK = 0.70
 # Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
 MANAGER_MIN_TRADE_AGE_MINUTES = 10
+# Макс. время (мин) ожидания достижения цены входа; если не достигнута — сделка считается отменённой (менеджер скипает, охотник может искать новый вход)
+ENTRY_FILL_TIMEOUT_MINUTES = 30
 # Минимальный интервал (мин) между вызовами LLM по одной сделке — защита от спама по квоте API
 MANAGER_LLM_COOLDOWN_MINUTES = 5
 # При 1R+5% (цена прошла 1R с запасом) переводим SL с входа (BE) на уровень 1R — гарантированный плюс даже без LLM
@@ -89,6 +91,10 @@ _manager_close_50_count = {}
 _manager_max_progress = {}
 # Менеджер: время последнего вызова LLM по trade_id (кулдаун, чтобы не спамить API)
 _manager_llm_last_call_ts = {}
+# Менеджер: для каких trade_id уже отправлено одноразовое уведомление «цена входа не достигнута» (сигнальный бот)
+_entry_pending_notification_sent = set()
+# Менеджер: для каких trade_id уже отправлено одноразовое уведомление «цена входа достигнута, сделка активирована» (Astra Signal Bot)
+_entry_filled_notification_sent = set()
 
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -109,6 +115,49 @@ def safe_float(value, default=0.0):
         return result
     except (TypeError, ValueError):
         return default
+
+
+def _trade_open_timestamp(trade):
+    """Возвращает Unix timestamp открытия сделки из created_at/timestamp или None."""
+    raw = trade.get('created_at') or trade.get('timestamp') or ''
+    if not raw:
+        return None
+    try:
+        ts_str = str(raw).strip().replace(' ', 'T').replace('Z', '+00:00')
+        if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
+            ts_str = ts_str + ':00'
+        created_dt = datetime.fromisoformat(ts_str)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        return int(created_dt.timestamp())
+    except Exception:
+        return None
+
+
+def is_entry_filled(trade, candles_m5):
+    """
+    Проверяет, достигла ли цена уровня входа после создания сигнала (по high/low M5-свечей, как детект SL/TP).
+    BUY: хотя бы одна свеча с low <= entry_price.
+    SELL: хотя бы одна свеча с high >= entry_price.
+    """
+    entry_price = safe_float(trade.get('entry_price'), 0.0)
+    if entry_price <= 0:
+        return False
+    signal_type = (trade.get('signal_type') or '').upper()
+    if signal_type not in ('BUY', 'SELL'):
+        return False
+    trade_open_ts = _trade_open_timestamp(trade)
+    if not trade_open_ts:
+        return False
+    M5_SEC = 300
+    trade_candle_start = (trade_open_ts // M5_SEC) * M5_SEC
+    filtered = [c for c in (candles_m5 or []) if c.get('time', 0) >= trade_candle_start]
+    if not filtered:
+        return False
+    if signal_type == 'BUY':
+        return any(safe_float(c.get('low'), 0) <= entry_price for c in filtered)
+    else:
+        return any(safe_float(c.get('high'), 0) >= entry_price for c in filtered)
 
 
 def is_market_active():
@@ -482,7 +531,8 @@ def format_debug_report(status_data):
         'trade_closed_sl': '🛑', 'trade_closed_tp': '✅', 'trade_closed_manager_news': '⚠️',
         'trade_closed_manager_risky': '🔴', 'trade_closed_manager_pullback': '✅', 'trade_closed_manager_50': '✅',
         'trade_closed_manager_1r': '✅',
-        'move_sl_be': '🔒'
+        'move_sl_be': '🔒',
+        'trade_cancelled_no_fill': '⏱'
     }
     
     status_texts = {
@@ -511,7 +561,8 @@ def format_debug_report(status_data):
         'trade_closed_manager_pullback': 'Manager: Сделка закрыта (откат от пика к TP)',
         'trade_closed_manager_50': 'Manager: Сделка закрыта (3/3 рекомендаций частично закрыть)',
         'trade_closed_manager_1r': 'Manager: Сделка закрыта по рекомендации LLM при 1R (фиксация прибыли)',
-        'move_sl_be': 'Manager: SL переведён в безубыток'
+        'move_sl_be': 'Manager: SL переведён в безубыток',
+        'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут'
     }
     
     status = status_data.get('status', 'unknown')
@@ -759,12 +810,13 @@ def run_analysis_cycle():
         last_trade = None
         logger.error(f"Ошибка проверки активной сделки: {e}")
     
-    # Если последний торговый сигнал BUY/SELL ещё не помечен как закрытый,
+    # Если последний торговый сигнал BUY/SELL ещё не помечен как закрытый/отменённый,
     # считаем что сделка активна и Охотник новые входы не ищет.
     if last_trade:
         status = (last_trade.get('status') or '').lower()
         close_ts = last_trade.get('close_timestamp')
-        if status != 'closed' and not close_ts:
+        is_terminal = status.startswith('closed') or status.startswith('cancelled') or bool(close_ts)
+        if not is_terminal:
             logger.info(
                 f"🛑 Active trade detected (id={last_trade.get('id')}, "
                 f"type={last_trade.get('signal_type')}, entry={last_trade.get('entry_price')}). "
@@ -1173,7 +1225,23 @@ def run_analysis_cycle():
     
     # Equilibrium (пропускаем при импульсе ИЛИ при CONFIRMED сигналах ИЛИ при пробое 20 свечей)
     # v8.1 FIX: CONFIRMED сигналы и пробой 20 свечей снимают запрет Equilibrium
-    if current_zone == "EQUILIBRIUM" and not is_breakout_impulse and not has_breakout and not has_swing_break_confirmed and not has_internal_break_confirmed:
+    # v8.2: Пробой полосы 48–52% (eq_top/eq_bottom) + internal confirmed — разрешаем сделку от уровня равновесия
+    has_equilibrium_breakout = False
+    eq = (zones or {}).get('equilibrium') or {}
+    eq_top = safe_float(eq.get('top'), 0)
+    eq_bottom = safe_float(eq.get('bottom'), 0)
+    if eq_top > 0 and eq_bottom > 0:
+        if current_price > eq_top or current_price < eq_bottom:
+            has_equilibrium_breakout = True
+    allow_equilibrium = (
+        is_breakout_impulse or has_breakout or has_swing_break_confirmed or has_internal_break_confirmed
+        or (has_equilibrium_breakout and has_internal_break_confirmed)
+    )
+    if current_zone == "EQUILIBRIUM" and (has_equilibrium_breakout and has_internal_break_confirmed):
+        logger.info(
+            f"⚪ Equilibrium: пробой полосы 48–52% (price={current_price:.2f}, eq_top={eq_top:.2f}, eq_bottom={eq_bottom:.2f}) + internal confirmed — разрешаем сделку."
+        )
+    if current_zone == "EQUILIBRIUM" and not allow_equilibrium:
         status_data['status'] = 'equilibrium_zone'
         status_data['reason'] = f'Цена в Equilibrium ({position_in_range_pct:.1f}%)'
         send_debug_notification(status_data)
@@ -1634,8 +1702,9 @@ def run_trade_manager_cycle():
     orig_status = trade.get('status') or ''
     status = orig_status.lower()
     close_ts = trade.get('close_timestamp')
-    if status == 'closed' or close_ts:
-        logger.info(f"👀 Manager: последний сигнал id={trade.get('id')} уже закрыт (status={status}).")
+    is_terminal = status.startswith('closed') or status.startswith('cancelled') or bool(close_ts)
+    if is_terminal:
+        logger.info(f"👀 Manager: последний сигнал id={trade.get('id')} уже закрыт/отменён (status={status}).")
         return
 
     signal_type = (trade.get('signal_type') or '').upper()
@@ -1697,6 +1766,109 @@ def run_trade_manager_cycle():
     recent_m5 = [c for c in recent_m5_raw if c.get('time', 0) >= trade_candle_start] if trade_candle_start else recent_m5_raw
     if not recent_m5:
         recent_m5 = candles_m5[-1:]  # хотя бы текущая свеча
+
+    # 2.0. Детект достижения цены входа (как SL/TP — по high/low свечи): управляем только если вход прокнул
+    if not is_entry_filled(trade, candles_m5):
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        age_minutes = (now_ts - trade_open_ts) / 60.0 if trade_open_ts else 0
+        # Нет created_at — нельзя определить возраст/вход; отменяем, чтобы охотник не блокировался навсегда
+        if trade_open_ts is None:
+            logger.warning(
+                f"⏱ Manager: сделка id={trade_id} без даты создания (created_at). Отменяем — охотник разблокируется."
+            )
+            db_service.update_signal_result(trade_id, 0.0, current_price, status='cancelled_no_fill')
+            _manager_close_all_count.pop(trade_id, None)
+            _manager_close_50_count.pop(trade_id, None)
+            _manager_max_progress.pop(trade_id, None)
+            _manager_llm_last_call_ts.pop(trade_id, None)
+            _entry_pending_notification_sent.discard(trade_id)
+            _entry_filled_notification_sent.discard(trade_id)
+            send_debug_notification({
+                'status': 'trade_cancelled_no_fill',
+                'reason': 'Нет даты создания сигнала — сделка отменена. Охотник возобновляет поиск.',
+                'trade_id': trade_id,
+            })
+            user_ids_cancel = db_service.get_all_active_users()
+            if user_ids_cancel:
+                msg_cancel = (
+                    f"⏱ <b>Сделка отменена</b>\n"
+                    f"id={trade_id} | Нет даты создания сигнала — отменяем. Охотник снова ищет сделку."
+                )
+                telegram_service.broadcast_deals_only(user_ids_cancel, msg_cancel)
+            return
+        if age_minutes >= ENTRY_FILL_TIMEOUT_MINUTES:
+            # ============================================================
+            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: entry не прокнуло за N минут —
+            # формально ОТМЕНЯЕМ сделку в БД, чтобы Охотник (Guard 0)
+            # перестал считать её активной и начал искать новый вход.
+            # ============================================================
+            logger.warning(
+                f"⏱ Manager: сделка id={trade_id} ОТМЕНЕНА — цена входа {entry_price:.2f} "
+                f"не достигнута за {ENTRY_FILL_TIMEOUT_MINUTES} мин (возраст {age_minutes:.0f} мин). "
+                f"Закрываем со статусом cancelled_no_fill."
+            )
+            db_service.update_signal_result(trade_id, 0.0, current_price, status='cancelled_no_fill')
+            _manager_close_all_count.pop(trade_id, None)
+            _manager_close_50_count.pop(trade_id, None)
+            _manager_max_progress.pop(trade_id, None)
+            _manager_llm_last_call_ts.pop(trade_id, None)
+            _entry_pending_notification_sent.discard(trade_id)
+            _entry_filled_notification_sent.discard(trade_id)
+            send_debug_notification({
+                'status': 'trade_cancelled_no_fill',
+                'reason': (
+                    f'Цена входа {entry_price:.2f} не была достигнута за '
+                    f'{ENTRY_FILL_TIMEOUT_MINUTES} мин. Сделка отменена. '
+                    f'Охотник возобновляет поиск нового входа.'
+                ),
+                'trade_id': trade_id,
+                'entry': entry_price,
+                'sl': stop_loss,
+                'tp': take_profit,
+                'current_price': current_price,
+                'signal_type': signal_type
+            })
+            user_ids_cancel = db_service.get_all_active_users()
+            if user_ids_cancel:
+                msg_cancel = (
+                    f"⏱ <b>Сделка отменена: Entry не достигнут</b>\n"
+                    f"id={trade_id} | {signal_type} | entry={entry_price:.2f}\n"
+                    f"Текущая цена: {current_price:.2f}\n"
+                    f"Таймаут {ENTRY_FILL_TIMEOUT_MINUTES} мин истёк — цена не дошла до уровня входа.\n"
+                    f"Охотник снова ищет новую сделку."
+                )
+                telegram_service.broadcast_deals_only(user_ids_cancel, msg_cancel)
+        else:
+            logger.info(
+                f"⏳ Manager: цена входа {entry_price:.2f} ещё не достигнута по M5 "
+                f"(сделка id={trade_id}, возраст {age_minutes:.0f} мин / {ENTRY_FILL_TIMEOUT_MINUTES} мин). Ожидаем."
+            )
+            # Один раз в сигнальный бот: уведомление о том, что ждём достижения цены входа
+            if trade_id not in _entry_pending_notification_sent:
+                _entry_pending_notification_sent.add(trade_id)
+                user_ids_pending = db_service.get_all_active_users()
+                if user_ids_pending:
+                    msg_pending = (
+                        f"⏳ <b>Ожидание входа</b>\n\n"
+                        f"Цена входа: <b>{entry_price:.2f}</b> — не достигнута.\n"
+                        f"Ожидаем, пока цена дойдёт до этого уровня. Если цена не дойдёт туда в течение {ENTRY_FILL_TIMEOUT_MINUTES} минут, "
+                        f"сделка закроется автоматически."
+                    )
+                    telegram_service.broadcast_deals_only(user_ids_pending, msg_pending)
+        return
+
+    _entry_pending_notification_sent.discard(trade_id)  # вход прокнул — снимаем с учёта одноразового уведомления
+    # Один раз в Astra Signal Bot: цена входа достигнута, сделка активирована
+    if trade_id not in _entry_filled_notification_sent:
+        _entry_filled_notification_sent.add(trade_id)
+        user_ids_filled = db_service.get_all_active_users()
+        if user_ids_filled:
+            msg_filled = (
+                f"✅ <b>Вход достигнут — сделка активирована</b>\n\n"
+                f"id={trade_id} | {signal_type} | цена входа <b>{entry_price:.2f}</b> достигнута.\n"
+                f"Текущая цена: {current_price:.2f}. Менеджер ведёт сделку (SL/TP)."
+            )
+            telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
     logger.info(
         f"💼 Manager: активная сделка id={trade_id}, type={signal_type}, "
         f"entry={entry_price:.2f}, sl={stop_loss:.2f}, tp={take_profit:.2f}, "
@@ -1793,6 +1965,7 @@ def run_trade_manager_cycle():
         _manager_close_50_count.pop(trade_id, None)
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
+        _entry_filled_notification_sent.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_sl',
             'reason': f'Цена достигла SL. Сделка закрыта по уровню SL. PnL={result_pnl:.2f}',
@@ -1848,6 +2021,7 @@ def run_trade_manager_cycle():
         _manager_close_50_count.pop(trade_id, None)
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
+        _entry_filled_notification_sent.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_tp',
             'reason': f'Цена достигла TP. Сделка закрыта по уровню TP. PnL={result_pnl:.2f}',
@@ -1970,6 +2144,7 @@ def run_trade_manager_cycle():
         _manager_close_50_count.pop(trade_id, None)
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
+        _entry_filled_notification_sent.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_manager_pullback',
             'reason': f'Откат от {max_prog*100:.0f}% к TP (сейчас {progress_ratio*100:.0f}%). LLM уже рекомендовал закрыть — фиксация. PnL={result_pnl:.2f}',
@@ -2053,6 +2228,7 @@ def run_trade_manager_cycle():
         _manager_close_50_count.pop(trade_id, None)
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
+        _entry_filled_notification_sent.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_manager_news',
             'reason': (
@@ -2249,6 +2425,7 @@ def run_trade_manager_cycle():
             _manager_close_50_count.pop(trade_id, None)
             _manager_max_progress.pop(trade_id, None)
             _manager_llm_last_call_ts.pop(trade_id, None)
+            _entry_filled_notification_sent.discard(trade_id)
             send_debug_notification({
                 'status': 'trade_closed_manager_1r',
                 'reason': f'LLM рекомендовала закрыть при 1R — фиксация прибыли. PnL={result_pnl:.2f}',
@@ -2277,6 +2454,7 @@ def run_trade_manager_cycle():
                 _manager_close_50_count.pop(trade_id, None)
                 _manager_max_progress.pop(trade_id, None)
                 _manager_llm_last_call_ts.pop(trade_id, None)
+                _entry_filled_notification_sent.discard(trade_id)
                 send_debug_notification({
                     'status': 'trade_closed_manager_risky',
                     'reason': f'Слишком рискованно: {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие (3/3). PnL={result_pnl:.2f}',
@@ -2316,6 +2494,7 @@ def run_trade_manager_cycle():
             _manager_close_50_count.pop(trade_id, None)
             _manager_max_progress.pop(trade_id, None)
             _manager_llm_last_call_ts.pop(trade_id, None)
+            _entry_filled_notification_sent.discard(trade_id)
             send_debug_notification({
                 'status': 'trade_closed_manager_1r',
                 'reason': f'LLM рекомендовала зафиксировать прибыль при 1R. PnL={result_pnl:.2f}',
@@ -2343,6 +2522,7 @@ def run_trade_manager_cycle():
                 _manager_close_50_count.pop(trade_id, None)
                 _manager_max_progress.pop(trade_id, None)
                 _manager_llm_last_call_ts.pop(trade_id, None)
+                _entry_filled_notification_sent.discard(trade_id)
                 send_debug_notification({
                     'status': 'trade_closed_manager_50',
                     'reason': f'{MANAGER_CLOSE_50_AUTO_CLOSE_AFTER} рекомендаций частично закрыть (3/3). Сделка закрыта. PnL={result_pnl:.2f}',
