@@ -222,18 +222,18 @@ class LLMService:
     "- Trend is identifiable\n"
     "- At least one SMC confluence (OB OR FVG OR liquidity level)\n"
     "- Internal structure confirmation\n"
-    "- R:R >= 1.0\n"
+    "- R:R >= 1.2\n"
     "\n"
     "## B Setup (Confidence 50-54) — Минимально допустимый\n"
     "- Basic structure alignment\n"
     "- One clear reason to enter\n"
-    "- R:R = 1.0\n"
+    "- R:R = 1.2\n"
     "\n"
     "## C Setup (Confidence < 50) — НЕ ТОРГУЕМ → WAIT\n"
     "- Conflicting timeframes\n"
     "- No clear structure\n"
     "- Price in no-trade zone (middle of range)\n"
-    "- Poor R:R (< 1.0)\n"
+    "- Poor R:R (< 1.2)\n"
     "\n"
     "# TRADE IDENTIFICATION\n"
     "\n"
@@ -256,9 +256,9 @@ class LLMService:
     "- **Take Profit**: Next liquidity pool, opposing OB, or fixed R:R\n"
     "\n"
     "## Step 4: R:R Check\n"
-    "- Minimum acceptable R:R = 1.0 (for B+ or better setups)\n"
+    "- Minimum acceptable R:R = 1.2 (for B+ or better setups; gold favours slightly higher)\n"
     "- Ideal R:R > 1.5\n"
-    "- If R:R < 1.0 → downgrade to WAIT\n"
+    "- If R:R < 1.2 → downgrade to WAIT\n"
     "\n"
     "# CONFIDENCE SCORING\n"
     "\n"
@@ -278,7 +278,7 @@ class LLMService:
     "- HTF vs LTF conflict → -15\n"
     "- No clear structure break → -10\n"
     "- Price in equilibrium (45-55%) → -10\n"
-    "- Poor R:R (<1.0) → -15\n"
+    "- Poor R:R (<1.2) → -15\n"
     "- Against major trend → -10\n"
     "- Near high-impact news → -10\n"
     "\n"
@@ -289,14 +289,14 @@ class LLMService:
     "✅ Price at quality OB or FVG\n"
     "✅ Liquidity sweep + reversal structure\n"
     "✅ BOS/CHoCH with follow-through\n"
-    "✅ R:R >= 1.0 with defined invalidation\n"
+    "✅ R:R >= 1.2 with defined invalidation\n"
     "\n"
     "# WHEN TO WAIT\n"
     "❌ Market closed (Sat, Sun before 22:00 UTC, Fri after 22:00 UTC)\n"
     "❌ High-impact news within 30 minutes\n"
     "❌ HTF and LTF in direct conflict\n"
     "❌ Price stuck in equilibrium with no structure break\n"
-    "❌ R:R below 1.0\n"
+    "❌ R:R below 1.2\n"
     "❌ No clear SMC setup visible\n"
     "\n"
     "# USER IDEA VALIDATION\n"
@@ -855,7 +855,7 @@ RULES:
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
 - Entry: use CURRENT_PRICE for market execution, or a limit within 0.1% of it.
-- Minimum R:R = 1.0. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.0 → WAIT.
+- Minimum R:R = 1.2. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.2 → WAIT.
 INVALIDATION LEVELS:
 {json.dumps(inv_levels, indent=2)}
 </invalidation_and_atr>
@@ -886,7 +886,7 @@ Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
 1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
 2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
 3. Validate the setup using the "Decision Protocol" from System Instructions.
-4. RESPECT <invalidation_and_atr>: SL beyond invalidation, R:R >= 1.0, entry near current price.
+4. RESPECT <invalidation_and_atr>: SL beyond invalidation, R:R >= 1.2, entry near current price.
 5. If outputting BUY/SELL, include "confluence" object with: htf_aligned, ltf_trigger_confirmed, no_news_soon, rr_acceptable, invalidation_respected (all true for valid trade).
 6. Output the STRICT JSON decision with the required fields.
 </task>

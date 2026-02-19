@@ -449,7 +449,7 @@ def extract_llm_verdict(parsed):
     }
 
 
-def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.0, entry_tolerance_pct=0.5):
+def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5):
     """
     v8.6 MUST-HAVE: пост-валидация вердикта LLM.
     - R:R >= min_rr иначе WAIT.
@@ -1775,7 +1775,7 @@ def run_analysis_cycle():
     # v8.6 MUST-HAVE: пост-валидация R:R, инвалидации SL, confluence, entry
     invalidation_levels = (analysis_light.get('invalidation_levels') or {})
     strict_action, strict_entry, strict_sl, strict_tp, strict_reason = validate_llm_verdict_strict(
-        verdict, current_price, invalidation_levels, min_rr=1.0, entry_tolerance_pct=0.5
+        verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5
     )
     if strict_reason:
         logger.warning(f"🛑 v8.6 Strict validation: {verdict.get('action')} → WAIT. {strict_reason}")
