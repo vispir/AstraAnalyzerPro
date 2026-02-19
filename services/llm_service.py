@@ -317,6 +317,13 @@ class LLMService:
     '    "setup_grade": "A+" | "A" | "B+" | "B",\n'
     '    "setup_type": "OB_RETEST" | "FVG_FILL" | "LIQUIDITY_SWEEP" | "BOS_CONTINUATION" | "CHOCH_REVERSAL"\n'
     "  },\n"
+    '  "confluence": {\n'
+    '    "htf_aligned": true,\n'
+    '    "ltf_trigger_confirmed": true,\n'
+    '    "no_news_soon": true,\n'
+    '    "rr_acceptable": true,\n'
+    '    "invalidation_respected": true\n'
+    "  },\n"
     '  "math_debug_log": {\n'
     '    "entry_price": Float,\n'
     '    "buffered_stop_loss": Float,\n'
@@ -334,6 +341,8 @@ class LLMService:
     "  }\n"
     "}\n"
     "```\n"
+    "Entry (final_entry) must be within 0.1% of current price for market execution.\n"
+    "If any confluence field is false, action MUST be WAIT.\n"
     "\n"
     "## For WAIT:\n"
     "```json\n"
@@ -832,6 +841,27 @@ IMPORTANT: Use these exact values for Targets (TP) and Structural Stops (SL).
 {json.dumps(computed_levels, indent=2)}
 </computed_levels>
 """
+            # v8.6 MUST-HAVE: инвалидация, ATR, текущая цена — для жёсткой валидации SL и R:R
+            inv_levels = (technical_data or {}).get("invalidation_levels") or {}
+            atr_m15 = (technical_data or {}).get("atr_m15") or 0
+            cur_price = (technical_data or {}).get("current_price") or 0
+            if inv_levels or atr_m15 or cur_price:
+                inv_atr_block = f"""
+<invalidation_and_atr>
+CURRENT_PRICE: {cur_price}
+ATR_M15(14): {atr_m15}
+RULES:
+- For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
+- For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
+- SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
+- Entry: use CURRENT_PRICE for market execution, or a limit within 0.1% of it.
+- Minimum R:R = 1.0. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.0 → WAIT.
+INVALIDATION LEVELS:
+{json.dumps(inv_levels, indent=2)}
+</invalidation_and_atr>
+"""
+                user_prompt_text += inv_atr_block
+
             # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
             htf_block = ""
             htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
@@ -856,7 +886,9 @@ Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
 1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
 2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
 3. Validate the setup using the "Decision Protocol" from System Instructions.
-4. Output the STRICT JSON decision with the required fields.
+4. RESPECT <invalidation_and_atr>: SL beyond invalidation, R:R >= 1.0, entry near current price.
+5. If outputting BUY/SELL, include "confluence" object with: htf_aligned, ltf_trigger_confirmed, no_news_soon, rr_acceptable, invalidation_respected (all true for valid trade).
+6. Output the STRICT JSON decision with the required fields.
 </task>
 """
             

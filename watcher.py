@@ -117,6 +117,69 @@ def safe_float(value, default=0.0):
         return default
 
 
+def compute_atr(candles, period=14):
+    """
+    ATR(period) по последним свечам. candles = list of dicts с 'high','low','close'.
+    Нужно минимум period+1 свечей. Возвращает float или 0.0 при ошибке.
+    """
+    if not candles or len(candles) < period + 1:
+        return 0.0
+    try:
+        tr_list = []
+        for i in range(1, len(candles)):
+            h = safe_float(candles[i].get('high'), 0)
+            l = safe_float(candles[i].get('low'), 0)
+            prev_c = safe_float(candles[i - 1].get('close'), 0)
+            if h <= 0 or l <= 0:
+                continue
+            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+            tr_list.append(tr)
+        if len(tr_list) < period:
+            return 0.0
+        # ATR = SMA(TR, period) по последним period значениям
+        atr = sum(tr_list[-period:]) / period
+        return round(atr, 2)
+    except Exception as e:
+        logger.debug(f"compute_atr error: {e}")
+        return 0.0
+
+
+def get_invalidation_levels(analysis, buffer=0.5):
+    """
+    Уровни инвалидации сетапа для LLM: SL должен быть за этими уровнями.
+    BUY: инвалидация = swing_pivot_low (SL должен быть на или ниже этого уровня).
+    SELL: инвалидация = swing_pivot_high (SL должен быть на или выше).
+    buffer добавляется к уровню для допуска на вick.
+    """
+    sw_high = safe_float(analysis.get('swing_pivot_high'), 0)
+    sw_low = safe_float(analysis.get('swing_pivot_low'), 0)
+    # Дополнительно: из OB/FVG можно взять ближайшие границы (для BUY — минимум низов OB/FVG, для SELL — максимум верхов)
+    inv_buy = sw_low - buffer if sw_low > 0 else None
+    inv_sell = sw_high + buffer if sw_high > 0 else None
+    for ob in analysis.get('order_blocks', [])[:5]:
+        bot = safe_float(ob.get('bottom'), 0)
+        if bot > 0 and (inv_buy is None or bot < inv_buy + buffer):
+            inv_buy = bot - buffer
+    for fvg in analysis.get('fvg', [])[:5]:
+        bot = safe_float(fvg.get('bottom'), 0)
+        if bot > 0 and (inv_buy is None or bot < inv_buy + buffer):
+            inv_buy = bot - buffer
+    for ob in analysis.get('order_blocks', [])[:5]:
+        top = safe_float(ob.get('top'), 0)
+        if top > 0 and (inv_sell is None or top > inv_sell - buffer):
+            inv_sell = top + buffer
+    for fvg in analysis.get('fvg', [])[:5]:
+        top = safe_float(fvg.get('top'), 0)
+        if top > 0 and (inv_sell is None or top > inv_sell - buffer):
+            inv_sell = top + buffer
+    return {
+        'invalidation_buy': round(inv_buy, 2) if inv_buy is not None else None,
+        'invalidation_sell': round(inv_sell, 2) if inv_sell is not None else None,
+        'swing_pivot_high': round(sw_high, 2) if sw_high > 0 else None,
+        'swing_pivot_low': round(sw_low, 2) if sw_low > 0 else None,
+    }
+
+
 def _trade_open_timestamp(trade):
     """Возвращает Unix timestamp открытия сделки из created_at/timestamp или None."""
     raw = trade.get('created_at') or trade.get('timestamp') or ''
@@ -271,6 +334,39 @@ def is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5):
     return False, "Нет близких SMC структур"
 
 
+def is_price_near_key_levels(current_price, key_levels, swing_pivot_high=None, swing_pivot_low=None, threshold_percent=0.5):
+    """
+    Проверяет, находится ли цена близко к ключевым уровням (идея Роберта — чаще запускать анализ).
+    Используемые ключевые уровни:
+      - Equilibrium_Price — цена равновесия (50% диапазона);
+      - High_250 / Low_250 — верх/низ диапазона за 250 баров (LOOKBACK);
+      - swing_pivot_high / swing_pivot_low — последний свинг-хай/лоу (Strong/Weak High/Low).
+    Возвращает (True, описание) если цена в пределах threshold_percent от любого уровня.
+    """
+    if not key_levels and swing_pivot_high is None and swing_pivot_low is None:
+        return False, "Нет ключевых уровней"
+    threshold = current_price * (threshold_percent / 100)
+    near = []
+    levels_to_check = [
+        ("Equilibrium", key_levels.get('Equilibrium_Price') if key_levels else None),
+        ("High_250", key_levels.get('High_250') if key_levels else None),
+        ("Low_250", key_levels.get('Low_250') if key_levels else None),
+        ("Swing High", swing_pivot_high),
+        ("Swing Low", swing_pivot_low),
+    ]
+    for name, level in levels_to_check:
+        if level is not None:
+            try:
+                lv = float(level)
+                if lv > 0 and abs(current_price - lv) <= threshold:
+                    near.append(f"{name}={lv:.2f}")
+            except (TypeError, ValueError):
+                pass
+    if near:
+        return True, ", ".join(near[:5])
+    return False, "Далеко от ключевых уровней"
+
+
 # ============================================================================
 # ПАРСИНГ И ФОРМАТИРОВАНИЕ
 # ============================================================================
@@ -322,6 +418,11 @@ def extract_llm_verdict(parsed):
     
     reason = parsed.get('executive_summary') or parsed.get('REASON', '')
     
+    # v8.6: confluence и R:R из ответа LLM
+    confluence = parsed.get('confluence') or {}
+    math_log = parsed.get('math_debug_log') or {}
+    calculated_rr = safe_float(math_log.get('calculated_rr'), None)
+    
     # КРИТИЧЕСКАЯ ПРОВЕРКА: если confidence < 50, преобразуем в WAIT
     low_confidence_override = False
     original_action = action
@@ -342,8 +443,67 @@ def extract_llm_verdict(parsed):
         'low_confidence_override': low_confidence_override,
         'original_action': original_action if low_confidence_override else None,
         'setup_grade': setup_grade,
-        'setup_type': setup_type
+        'setup_type': setup_type,
+        'confluence': confluence,
+        'calculated_rr': calculated_rr,
     }
+
+
+def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.0, entry_tolerance_pct=0.5):
+    """
+    v8.6 MUST-HAVE: пост-валидация вердикта LLM.
+    - R:R >= min_rr иначе WAIT.
+    - SL за уровнем инвалидации (BUY: SL <= inv_buy; SELL: SL >= inv_sell).
+    - Entry в пределах entry_tolerance_pct от current_price, иначе подменяем на current_price.
+    - Если confluence любой false → WAIT.
+    Возвращает (action, entry, sl, tp, reason_override).
+    """
+    action = verdict.get('action', 'WAIT')
+    entry = verdict.get('entry')
+    sl = verdict.get('sl')
+    tp = verdict.get('tp')
+    reason_override = None
+    inv_buy = invalidation_levels.get('invalidation_buy')
+    inv_sell = invalidation_levels.get('invalidation_sell')
+    
+    if action not in ('BUY', 'SELL'):
+        return action, entry, sl, tp, reason_override
+    
+    entry_f = safe_float(entry, 0)
+    sl_f = safe_float(sl, 0)
+    tp_f = safe_float(tp, 0)
+    if entry_f <= 0:
+        entry_f = current_price
+    if sl_f <= 0 or tp_f <= 0:
+        return 'WAIT', entry_f, sl_f, tp_f, 'Отсутствуют SL или TP в ответе LLM.'
+    
+    # Entry: если далеко от текущей цены — подменяем на current_price
+    if current_price > 0:
+        pct_diff = abs(entry_f - current_price) / current_price * 100
+        if pct_diff > entry_tolerance_pct:
+            logger.info(f"🔄 v8.6: Entry скорректирован с {entry_f:.2f} на current_price {current_price:.2f} (отклонение {pct_diff:.1f}%)")
+            entry_f = current_price
+    
+    # R:R
+    risk = abs(entry_f - sl_f)
+    reward = abs(tp_f - entry_f)
+    rr = reward / risk if risk > 0 else 0
+    if rr < min_rr:
+        return 'WAIT', entry_f, sl_f, tp_f, f'R:R={rr:.2f} < {min_rr} (минимальный порог). Риск/прибыль недопустимы.'
+    
+    # Инвалидация: BUY — SL должен быть на или ниже invalidation_buy; SELL — SL на или выше invalidation_sell
+    if action == 'BUY' and inv_buy is not None and sl_f > inv_buy + 0.5:
+        return 'WAIT', entry_f, sl_f, tp_f, f'SL для BUY ({sl_f:.2f}) выше уровня инвалидации ({inv_buy:.2f}). Стоп должен быть за структурой.'
+    if action == 'SELL' and inv_sell is not None and sl_f < inv_sell - 0.5:
+        return 'WAIT', entry_f, sl_f, tp_f, f'SL для SELL ({sl_f:.2f}) ниже уровня инвалидации ({inv_sell:.2f}). Стоп должен быть за структурой.'
+    
+    # Confluence: если любой false — WAIT
+    confluence = verdict.get('confluence') or {}
+    for key in ('htf_aligned', 'ltf_trigger_confirmed', 'rr_acceptable', 'invalidation_respected'):
+        if key in confluence and confluence[key] is False:
+            return 'WAIT', entry_f, sl_f, tp_f, f'Confluence: {key}=false. Условия входа не выполнены.'
+    
+    return action, entry_f, sl_f, tp_f, reason_override
 
 
 def extract_executive_summary(ai_response):
@@ -523,6 +683,7 @@ def format_debug_report(status_data):
         'weak_patterns': '📉', 'neutral_no_swing': '⚖️', 'cooldown': '⏳',
         'signal_sent': '✅', 'wait_decision': '⚖️',
         'impulse_override': '⚡', 'reversal_mode': '🔄',
+        'proximity_trigger': '🎯',  # v8.5: Вызов LLM по близости к OB/FVG/ликвидности/ключевым уровням
         'smc_sweet_spot': '🎯',  # v8.0: Идеальный SMC сетап
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
         'impulse_no_confirmation': '⚠️',  # v7.5.2: Impulse/Reversal без internal confirmed
@@ -549,6 +710,7 @@ def format_debug_report(status_data):
         'wait_decision': 'LLM рекомендует WAIT',
         'impulse_override': '⚡ IMPULSE MODE: Сильный импульс',
         'reversal_mode': '🔄 REVERSAL MODE: Поиск разворота',
+        'proximity_trigger': '🎯 PROXIMITY: Близость к OB/FVG/ликвидности/ключевым уровням — вызов LLM',  # v8.5
         'smc_sweet_spot': '🎯 SMC SWEET SPOT: Идеальный сетап',  # v8.0
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
         'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.2
@@ -569,7 +731,7 @@ def format_debug_report(status_data):
     emoji = status_emoji.get(status, '❓')
     
     now_utc = datetime.now(timezone.utc)
-    msg = f"<b>{emoji} ASTRA WATCHER v8.0</b>\n"
+    msg = f"<b>{emoji} ASTRA WATCHER v8.5</b>\n"
     msg += f"<code>UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
     msg += "━" * 32 + "\n\n"
     
@@ -581,6 +743,15 @@ def format_debug_report(status_data):
         msg += "\n"
     
     msg += f"<b>📋 Решение:</b> {status_texts.get(status, 'Неизвестно')}\n\n"
+    
+    # v8.5: явно показываем, почему запустился анализ (триггер: OB/FVG или ключевые уровни)
+    trigger_parts = []
+    if status_data.get('near_structures') and status_data.get('near_structures') != "Нет близких SMC структур":
+        trigger_parts.append("OB/FVG/ликвидность")
+    if status_data.get('near_key_levels') and status_data.get('near_key_levels_desc'):
+        trigger_parts.append("ключевые уровни")
+    if trigger_parts:
+        msg += f"<b>🔔 Триггер анализа v8.5:</b> {', '.join(trigger_parts)}\n\n"
     
     if status_data.get('price', 0) > 0:
         msg += "<b>💹 Рыночные данные:</b>\n"
@@ -626,7 +797,7 @@ def format_debug_report(status_data):
     
     if 'smc_summary' in status_data:
         smc = status_data['smc_summary']
-        msg += "<b>📊 SMC Паттерны v8.0:</b>\n"
+        msg += "<b>📊 SMC Паттерны v8.5:</b>\n"
         msg += f"├ Order Blocks: {smc.get('ob', 0)}\n"
         msg += f"├ Fair Value Gaps: {smc.get('fvg', 0)}\n"
         msg += f"├ Swing BOS: {smc.get('swing_bos_total', 0)} (All) | ✅ Confirmed: {smc.get('swing_bos_confirmed', 0)}\n"
@@ -642,7 +813,9 @@ def format_debug_report(status_data):
         msg += f"<b>📍 Internal сигналы:</b> {escape_html(', '.join(status_data['internal_signals'][:5]))}\n\n"
     
     if 'near_structures' in status_data:
-        msg += f"<b>🎯 Уровни рядом:</b>\n{escape_html(status_data['near_structures'])}\n\n"
+        msg += f"<b>🎯 Уровни рядом (SMC):</b>\n{escape_html(status_data['near_structures'])}\n\n"
+    if status_data.get('near_key_levels') and status_data.get('near_key_levels_desc'):
+        msg += f"<b>🎯 Ключевые уровни рядом:</b>\n{escape_html(status_data['near_key_levels_desc'])}\n\n"
 
     # Блок ближайших новостей (используется, в т.ч. при news_block)
     upcoming_news = status_data.get('upcoming_news') or []
@@ -743,19 +916,25 @@ def get_signal_label(action):
 
 def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_price,
                                 trend, internal_trend, zone,
-                                swing_signals, internal_signals, smc_summary):
+                                swing_signals, internal_signals, smc_summary,
+                                verdict=None):
+    """
+    Готовит данные сигнала для сохранения в БД.
+    Если передан verdict (после v8.6 — провалидированный), используются entry/sl/tp/reason из него.
+    Иначе извлекаются из parsed_llm (обратная совместимость).
+    """
     all_patterns = swing_signals + internal_signals
     patterns_list = list(all_patterns) if all_patterns else []
     signal_label = get_signal_label(llm_action)
     
-    # Извлекаем данные через универсальный парсер (поддержка ОБОИХ форматов)
-    verdict = extract_llm_verdict(parsed_llm)
+    if verdict is None:
+        verdict = extract_llm_verdict(parsed_llm)
     
-    entry_price = safe_float(verdict['entry'] or current_price, safe_float(current_price, 0.0))
-    stop_loss = safe_float(verdict['sl'], 0.0)
-    take_profit = safe_float(verdict['tp'], 0.0)
-    confidence = verdict['confidence'] or 0
-    reason = verdict['reason'] or ""
+    entry_price = safe_float(verdict.get('entry') or current_price, safe_float(current_price, 0.0))
+    stop_loss = safe_float(verdict.get('sl'), 0.0)
+    take_profit = safe_float(verdict.get('tp'), 0.0)
+    confidence = verdict.get('confidence') or 0
+    reason = verdict.get('reason') or ""
     
     return {
         'symbol': 'XAU_USD',
@@ -1040,6 +1219,12 @@ def run_analysis_cycle():
     confirmed_count = smc_summary.get('confirmed_total', 0)
     
     is_near, near_description = is_price_near_smc_structure(current_price, analysis, threshold_percent=0.5)
+    key_levels = analysis.get('advanced', {}).get('key_levels', {})
+    is_near_key_levels, near_key_levels_desc = is_price_near_key_levels(
+        current_price, key_levels,
+        analysis.get('swing_pivot_high'), analysis.get('swing_pivot_low'),
+        threshold_percent=0.5
+    )
     
     # Базовый статус
     status_data = {
@@ -1055,6 +1240,8 @@ def run_analysis_cycle():
         'internal_signals': internal_signals,
         'smc_summary': smc_summary,
         'near_structures': near_description,
+        'near_key_levels': is_near_key_levels,
+        'near_key_levels_desc': near_key_levels_desc,
         'impulse_context': impulse_context,
         'status': 'unknown',
         'reason': ''
@@ -1216,10 +1403,14 @@ def run_analysis_cycle():
     # ОСТАЛЬНЫЕ ФИЛЬТРЫ
     # ========================================================================
     
-    # Близость к структурам (пропускаем при импульсе или confirmed break)
-    if not is_near and not is_breakout_impulse and not has_swing_break_confirmed:
+    # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break)
+    # v8.5: триггер LLM также при цене близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low)
+    if not is_near and not is_near_key_levels and not is_breakout_impulse and not has_swing_break_confirmed:
         status_data['status'] = 'not_near_structure'
-        status_data['reason'] = f'Цена ${current_price:.2f} далеко от SMC структур (нет confirmed break)'
+        status_data['reason'] = (
+            f'Цена ${current_price:.2f} далеко от SMC структур (OB/FVG) и от ключевых уровней. '
+            f'Нет confirmed break.'
+        )
         send_debug_notification(status_data)
         return
     
@@ -1313,12 +1504,14 @@ def run_analysis_cycle():
             return
     
     # ========================================================================
-    # v6.0 КРИТИЧЕСКИЙ ФИЛЬТР: ТРЕБУЕМ CONFIRMED СИГНАЛ ДЛЯ ВЫЗОВА LLM
+    # v6.0 + v8.5: УСЛОВИЯ ВЫЗОВА LLM
     # ========================================================================
-    # LLM вызывается ТОЛЬКО если:
+    # LLM вызывается если выполняется ХОТЯ БЫ ОДНО:
     # 1. Есть хотя бы один CONFIRMED BOS/CHoCH (пробой телом свечи)
-    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5.2 fix!)
-    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5.2 fix!)
+    # 2. ИЛИ активен impulse override + есть internal confirmed (v7.5.2)
+    # 3. ИЛИ есть reversal setup + есть internal confirmed (v7.5.2)
+    # 4. ИЛИ цена близко к OB / FVG / уровню ликвидности (v8.5 — по запросу, чаще анализы)
+    # 5. ИЛИ цена близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low) — идея Роберта
     
     has_any_confirmed = (
         has_swing_bos_confirmed or 
@@ -1327,15 +1520,17 @@ def run_analysis_cycle():
         has_int_choch_confirmed
     )
     
+    # v8.5: близость к SMC или ключевым уровням — достаточное условие для вызова LLM (без обязательного confirmed)
+    allow_llm_by_proximity = is_near or is_near_key_levels
+    
     # v7.5.2 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
-    # Это защищает от ложных пробоев (только wick, не body)
     impulse_needs_confirmation = (is_breakout_impulse or is_reversal_setup) and not has_internal_break_confirmed
     
-    if not has_any_confirmed and not (is_breakout_impulse or is_reversal_setup):
+    if not has_any_confirmed and not (is_breakout_impulse or is_reversal_setup) and not allow_llm_by_proximity:
         status_data['status'] = 'no_confirmed_signal'
         status_data['reason'] = (
             f'⏳ Нет CONFIRMED сигналов (confirmed_total={confirmed_count}).\n'
-            f'LLM не вызывается без уверенного пробоя (телом свечи).\n'
+            f'LLM не вызывается без уверенного пробоя (телом свечи) и без близости к OB/FVG/ликвидности/ключевым уровням.\n'
             f'Swing BOS_conf={has_swing_bos_confirmed}, CHoCH_conf={has_swing_choch_confirmed}\n'
             f'Internal BOS_conf={has_int_bos_confirmed}, CHoCH_conf={has_int_choch_confirmed}'
         )
@@ -1354,7 +1549,10 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    logger.info(f"✅ CONFIRMED SIGNALS: {confirmed_count} | Preparing to call LLM...")
+    if allow_llm_by_proximity and not has_any_confirmed and not (is_breakout_impulse or is_reversal_setup):
+        logger.info(f"✅ PROXIMITY TRIGGER (OB/FVG/ликвидность или ключевые уровни) | Preparing to call LLM...")
+    else:
+        logger.info(f"✅ CONFIRMED SIGNALS: {confirmed_count} | Preparing to call LLM...")
 
     # ------------------------------------------------------------------------
     # GUARD 1: Память охотника — избегаем повторного LLM вызова,
@@ -1447,6 +1645,9 @@ def run_analysis_cycle():
     elif is_reversal_setup:
         mode_text = "🔄 REVERSAL MODE"
         status_data['status'] = 'reversal_mode'
+    elif allow_llm_by_proximity:
+        mode_text = "🎯 PROXIMITY MODE (OB/FVG/ликвидность/ключевые уровни)"
+        status_data['status'] = 'proximity_trigger'
     
     logger.info("=" * 60)
     logger.info(f"🎯 {mode_text} ВСЕ ФИЛЬТРЫ ПРОЙДЕНЫ! Запрашиваем Gemini...")
@@ -1505,8 +1706,15 @@ def run_analysis_cycle():
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
+    # v8.6 MUST-HAVE: инвалидация, ATR, текущая цена для валидации SL/R:R/entry
     # ========================================================================
     logger.info("📊 Подготавливаем оптимизированные данные M15 для LLM...")
+    
+    m15_candles = data.get('candles', [])[-50:] if 'error' not in data and data.get('candles') else []
+    atr_m15 = compute_atr(m15_candles, 14) if m15_candles else 0.0
+    invalidation = get_invalidation_levels(analysis, buffer=0.5)
+    if atr_m15 > 0:
+        logger.info(f"✓ ATR(14) M15 = {atr_m15:.2f} | Invalidation BUY<={invalidation.get('invalidation_buy')} SELL>={invalidation.get('invalidation_sell')}")
     
     # Создаем легкую версию analysis без массивов all_* (они только для визуализации)
     analysis_light = {
@@ -1538,13 +1746,17 @@ def run_analysis_cycle():
         # Импульс контекст (режим импульса, breakout, причины override — для LLM)
         'impulse_context': analysis.get('impulse_context', {}),
         'impulse': analysis.get('impulse', {}),
+        
+        # v8.6 MUST-HAVE: для валидации SL, R:R и entry
+        'current_price': current_price,
+        'atr_m15': atr_m15,
+        'invalidation_levels': invalidation,
     }
     if htf_context:
         analysis_light['htf_context'] = htf_context
     
     # Добавляем свечи
-    if 'error' not in data and data.get('candles'):
-        m15_candles = data.get('candles', [])[-50:]  # Последние 50 для LLM
+    if m15_candles:
         analysis_light['candles'] = m15_candles
         logger.info(f"✓ M15 данные подготовлены: {len(m15_candles)} свечей")
     
@@ -1559,6 +1771,23 @@ def run_analysis_cycle():
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_llm)
+    
+    # v8.6 MUST-HAVE: пост-валидация R:R, инвалидации SL, confluence, entry
+    invalidation_levels = (analysis_light.get('invalidation_levels') or {})
+    strict_action, strict_entry, strict_sl, strict_tp, strict_reason = validate_llm_verdict_strict(
+        verdict, current_price, invalidation_levels, min_rr=1.0, entry_tolerance_pct=0.5
+    )
+    if strict_reason:
+        logger.warning(f"🛑 v8.6 Strict validation: {verdict.get('action')} → WAIT. {strict_reason}")
+        verdict['action'] = 'WAIT'
+        verdict['reason'] = f"[v8.6] {strict_reason}. " + (verdict.get('reason') or '')
+        verdict['entry'] = strict_entry
+        verdict['sl'] = strict_sl
+        verdict['tp'] = strict_tp
+    else:
+        verdict['entry'] = strict_entry
+        verdict['sl'] = strict_sl
+        verdict['tp'] = strict_tp
     
     llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
@@ -1582,7 +1811,7 @@ def run_analysis_cycle():
     else:
         logger.info(f"📊 LLM Verdict: action={llm_action}, confidence={verdict['confidence']}%, entry={verdict['entry']}, sl={verdict['sl']}, tp={verdict['tp']}")
     
-    # Подготовка данных для БД
+    # Подготовка данных для БД (v8.6: используем провалидированный verdict — корректные entry/sl/tp)
     signal_data_db = prepare_signal_data_for_db(
         llm_action=llm_action,
         parsed_llm=parsed_llm,
@@ -1593,7 +1822,8 @@ def run_analysis_cycle():
         zone=current_zone,
         swing_signals=swing_signals,
         internal_signals=internal_signals,
-        smc_summary=smc_summary
+        smc_summary=smc_summary,
+        verdict=verdict
     )
     
     # ========================================================================
@@ -1613,7 +1843,8 @@ def run_analysis_cycle():
         
         user_ids = db_service.get_all_active_users()
         if user_ids:
-            formatted_msg = format_signal_message(ai_response)
+            # v8.6: используем провалидированный verdict (скорректированные entry/sl/tp)
+            formatted_msg = format_signal_message_with_verdict(ai_response, verdict)
             telegram_service.broadcast_signal(user_ids, formatted_msg)
             telegram_service.broadcast_deals_only(user_ids, formatted_msg)  # Astra Signal Bot — только BUY/SELL
             logger.info(f"📤 Сигнал отправлен {len(user_ids)} пользователям (в т.ч. Signal Bot)")
