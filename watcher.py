@@ -96,6 +96,66 @@ _entry_pending_notification_sent = set()
 # Менеджер: для каких trade_id уже отправлено одноразовое уведомление «цена входа достигнута, сделка активирована» (Astra Signal Bot)
 _entry_filled_notification_sent = set()
 
+# Task 7: Cooldown after stop loss (prevent cascade entries)
+_last_stop_loss_time = {}
+_last_stop_loss_structure = {}
+COOLDOWN_BARS_M15 = 8
+COOLDOWN_MINUTES_AFTER_SL = COOLDOWN_BARS_M15 * 15
+
+# Task 8: Trade limits — 3 total per day; 2 per direction per SESSION (Fix: за сессию)
+_trades_today = {
+    'count': 0,
+    'reset_date': datetime.now(timezone.utc).date()
+}
+_trades_by_session = {}  # session_key (date_sessionname) -> {'BUY': 0, 'SELL': 0}
+
+# Task 9: Manager recommendation history (for escalation logic)
+_recommendation_history = {}
+
+# P2 Double TP: trade_ids for which TP1 was already reached (50% partial profit locked)
+_trade_tp1_reached = set()
+
+
+def add_recommendation(trade_id, action, reasoning):
+    """Task 9: Store manager recommendation for this trade. Keep last 5."""
+    if trade_id not in _recommendation_history:
+        _recommendation_history[trade_id] = []
+    _recommendation_history[trade_id].append({
+        'timestamp': datetime.now(timezone.utc),
+        'action': (action or '').upper(),
+        'reasoning': (reasoning or '')[:200]
+    })
+    _recommendation_history[trade_id] = _recommendation_history[trade_id][-5:]
+
+
+def get_recommendation_context(trade_id):
+    """Task 9: Format last 3 recommendations as context for LLM."""
+    if trade_id not in _recommendation_history:
+        return "<previous_recommendations>No previous recommendations for this trade.</previous_recommendations>"
+    history = _recommendation_history[trade_id][-3:]
+    if not history:
+        return "<previous_recommendations>No previous recommendations.</previous_recommendations>"
+    lines = ["<previous_recommendations>", f"Last {len(history)} manager decisions for this trade:\n"]
+    for i, rec in enumerate(history, 1):
+        mins = (datetime.now(timezone.utc) - rec['timestamp']).total_seconds() / 60
+        time_str = f"{int(mins)} min ago" if mins < 60 else f"{mins/60:.1f} hours ago"
+        lines.append(f"{i}. [{time_str}] {rec['action']}\n   Reasoning: \"{rec['reasoning']}\"\n\n")
+    lines.append("ESCALATION LOGIC: If previous calls suggested caution (MOVE_SL_BE, CLOSE_50) and situation hasn't improved, escalate. If 2+ consecutive HOLD but trade isn't progressing, consider exit. If already CLOSE_50 and price stuck, CLOSE_ALL.\n</previous_recommendations>")
+    return "".join(lines)
+
+
+def check_escalation_triggers(trade_id):
+    """Task 9: If manager recommended close 2+ times in last 3 calls, auto-escalate to CLOSE_ALL."""
+    if trade_id not in _recommendation_history:
+        return False, ""
+    history = _recommendation_history[trade_id][-3:]
+    if len(history) < 2:
+        return False, ""
+    close_count = sum(1 for h in history if 'CLOSE' in (h.get('action') or ''))
+    if close_count >= 2:
+        return True, f"Manager recommended close {close_count} times in last 3 calls. Auto-escalating to CLOSE_ALL."
+    return False, ""
+
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================================
@@ -388,7 +448,7 @@ def extract_llm_verdict(parsed):
     Извлекает action и trade данные из ответа LLM.
     Поддерживает оба формата: signal.action + trade_plan и старый ACTION/ENTRY/SL/TP.
     
-    ВАЖНО: Если confidence < 50, сигнал автоматически преобразуется в WAIT!
+    ВАЖНО: Если confidence < 55, сигнал автоматически преобразуется в WAIT!
     """
     if not parsed or not isinstance(parsed, dict):
         return {'action': 'WAIT', 'entry': None, 'sl': None, 'tp': None, 'confidence': 0, 
@@ -405,6 +465,7 @@ def extract_llm_verdict(parsed):
     entry = trade_plan.get('final_entry') or math_log.get('entry_price') or parsed.get('ENTRY')
     sl = trade_plan.get('final_sl') or math_log.get('buffered_stop_loss') or parsed.get('SL')
     tp = trade_plan.get('final_tp') or math_log.get('target_price') or parsed.get('TP')
+    tp1 = trade_plan.get('final_tp1')  # optional first target (50% position); if set, close 50% at TP1 then rest at TP
     
     confidence = signal.get('confidence') or parsed.get('CONFIDENCE') or 0
     try:
@@ -412,9 +473,11 @@ def extract_llm_verdict(parsed):
     except (TypeError, ValueError):
         confidence = 0
     
-    # Грейд и тип сетапа
+    # Грейд, тип сетапа, модель и полнота модели (Task 10)
     setup_grade = signal.get('setup_grade', None)
     setup_type = signal.get('setup_type', None)
+    model = signal.get('model', 'NONE')
+    model_completeness = signal.get('model_completeness') or {}
     
     reason = parsed.get('executive_summary') or parsed.get('REASON', '')
     
@@ -423,12 +486,12 @@ def extract_llm_verdict(parsed):
     math_log = parsed.get('math_debug_log') or {}
     calculated_rr = safe_float(math_log.get('calculated_rr'), None)
     
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: если confidence < 50, преобразуем в WAIT
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: если confidence < 55, преобразуем в WAIT (Fix.txt: Confidence < 55 = WAIT)
     low_confidence_override = False
     original_action = action
     
-    if action in ('BUY', 'SELL') and confidence < 50:
-        logger.warning(f"⚠️ LOW CONFIDENCE OVERRIDE: {action} → WAIT (confidence={confidence}%)")
+    if action in ('BUY', 'SELL') and confidence < 55:
+        logger.warning(f"⚠️ LOW CONFIDENCE OVERRIDE: {action} → WAIT (confidence={confidence}% < 55)")
         low_confidence_override = True
         action = 'WAIT'
         reason = f"[LOW CONFIDENCE: {confidence}%] Оригинальный сигнал: {original_action}. {reason}"
@@ -438,15 +501,150 @@ def extract_llm_verdict(parsed):
         'entry': entry, 
         'sl': sl, 
         'tp': tp, 
+        'tp1': tp1, 
         'confidence': confidence, 
         'reason': str(reason)[:4000],
         'low_confidence_override': low_confidence_override,
         'original_action': original_action if low_confidence_override else None,
         'setup_grade': setup_grade,
         'setup_type': setup_type,
+        'model': model,
+        'model_completeness': model_completeness,
         'confluence': confluence,
         'calculated_rr': calculated_rr,
     }
+
+
+def validate_stop_loss(entry, sl, atr):
+    """
+    Task 6: Validate that SL meets minimum requirements for Gold trading.
+    Rejects SL < max($5, 0.75*ATR) or SL > 3*ATR.
+    
+    Returns:
+        Tuple: (is_valid: bool, reason: str)
+    """
+    try:
+        entry_f = safe_float(entry, 0)
+        sl_f = safe_float(sl, 0)
+        atr_f = safe_float(atr, 10.0)
+        if entry_f <= 0 or sl_f <= 0:
+            return True, "SL valid"  # skip if no levels
+        sl_distance = abs(entry_f - sl_f)
+        MIN_SL_FIXED = 5.0
+        MIN_SL_ATR_MULTIPLIER = 0.75
+        min_required = max(MIN_SL_FIXED, atr_f * MIN_SL_ATR_MULTIPLIER)
+        if sl_distance < min_required:
+            return False, f"SL too narrow: ${sl_distance:.2f} < required ${min_required:.2f} (min ${MIN_SL_FIXED} or {MIN_SL_ATR_MULTIPLIER}*ATR)"
+        if sl_distance > atr_f * 3.0:
+            return False, f"SL too wide: ${sl_distance:.2f} > 3*ATR={atr_f*3.0:.2f}"
+        return True, "SL valid"
+    except Exception as e:
+        logger.debug(f"validate_stop_loss error: {e}")
+        return True, "SL valid"
+
+
+def check_cooldown_after_sl(direction, current_time, current_structure_breaks):
+    """
+    Task 7: Check if enough time has passed since last SL in this direction
+    and ensure there's a NEW structure break (not the same one).
+    Returns: (can_trade: bool, reason: str)
+    """
+    direction = (direction or '').upper()
+    if direction not in ('BUY', 'SELL'):
+        return True, "OK"
+    if direction in _last_stop_loss_time:
+        elapsed_min = (current_time - _last_stop_loss_time[direction]).total_seconds() / 60
+        if elapsed_min < COOLDOWN_MINUTES_AFTER_SL:
+            return False, f"Cooldown active: {elapsed_min:.0f}min < {COOLDOWN_MINUTES_AFTER_SL}min since last {direction} SL"
+    if direction in _last_stop_loss_structure and current_structure_breaks:
+        last_id = _last_stop_loss_structure.get(direction)
+        # Use MOST RECENT break (max bar_index); lists from SMC are chronological (oldest first)
+        def _bar_idx(b):
+            if isinstance(b, dict):
+                return b.get('bar_index') or 0
+            return getattr(b, 'bar_index', 0) or 0
+        latest = max(current_structure_breaks, key=_bar_idx)
+        if latest is not None:
+            bi = latest.get('bar_index') if isinstance(latest, dict) else getattr(latest, 'bar_index', None)
+            st = latest.get('structure') or latest.get('type') if isinstance(latest, dict) else getattr(latest, 'structure', None)
+            if bi is not None and st is not None:
+                current_id = f"{st}_{bi}"
+                if current_id == last_id:
+                    return False, f"Same structure break as previous {direction} SL trade"
+    return True, "Cooldown passed and structure is new"
+
+
+def on_stop_loss_hit(trade_data):
+    """
+    Task 7: Call when a stop loss is hit to record for cooldown tracking.
+    trade_data: dict with 'direction' and optionally 'structure_breaks' (list).
+    """
+    direction = (trade_data or {}).get('direction', '').upper()
+    if direction not in ('BUY', 'SELL'):
+        return
+    _last_stop_loss_time[direction] = datetime.now(timezone.utc)
+    structure_breaks = (trade_data or {}).get('structure_breaks', [])
+    if structure_breaks:
+        latest = structure_breaks[0]
+        if isinstance(latest, dict):
+            st = latest.get('structure') or latest.get('type')
+            bi = latest.get('bar_index', 0)
+            if st is not None:
+                _last_stop_loss_structure[direction] = f"{st}_{bi}"
+        elif hasattr(latest, 'bar_index') and hasattr(latest, 'structure'):
+            _last_stop_loss_structure[direction] = f"{latest.structure}_{latest.bar_index}"
+    logger.info(f"📝 SL recorded for {direction} cooldown tracking")
+
+
+def _get_session_key():
+    """Session key for limits: date + session name (Tokyo/London/NY). 2 per direction per session."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    try:
+        session_info = llm_service.get_session_info()
+        session_name = (session_info or {}).get('session', 'Unknown') if isinstance(session_info, dict) else 'Unknown'
+    except Exception:
+        session_name = 'Unknown'
+    return f"{today}_{session_name}"
+
+
+def check_trade_limits(direction):
+    """
+    Task 8: Max 2 same direction per SESSION, max 3 total per day (Fix.txt).
+    Returns: (can_trade: bool, reason: str)
+    """
+    global _trades_today, _trades_by_session
+    direction = (direction or '').upper()
+    if direction not in ('BUY', 'SELL'):
+        return True, "OK"
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    if _trades_today['reset_date'] != today:
+        logger.info(f"🔄 New trading day: {today}. Resetting daily counter.")
+        _trades_today = {'count': 0, 'reset_date': today}
+    session_key = _get_session_key()
+    if session_key not in _trades_by_session:
+        _trades_by_session[session_key] = {'BUY': 0, 'SELL': 0}
+    by_dir = _trades_by_session[session_key].get(direction, 0)
+    if _trades_today['count'] >= 3:
+        return False, f"Daily limit reached: {_trades_today['count']}/3 trades today"
+    if by_dir >= 2:
+        return False, f"Direction limit reached: {by_dir}/2 {direction} this session"
+    return True, f"Within limits: {_trades_today['count']}/3 today, {by_dir}/2 {direction} this session"
+
+
+def increment_trade_counter(direction):
+    """Task 8: Call when a trade is executed. Updates daily total and per-session direction."""
+    global _trades_today, _trades_by_session
+    direction = (direction or '').upper()
+    if direction not in ('BUY', 'SELL'):
+        return
+    _trades_today['count'] = _trades_today.get('count', 0) + 1
+    session_key = _get_session_key()
+    _trades_by_session.setdefault(session_key, {'BUY': 0, 'SELL': 0})
+    _trades_by_session[session_key][direction] = _trades_by_session[session_key].get(direction, 0) + 1
+    by_dir = _trades_by_session[session_key].get(direction, 0)
+    logger.info(f"📊 Trade counter: {_trades_today['count']}/3 today | {direction}: {by_dir}/2 this session")
 
 
 def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5):
@@ -587,7 +785,7 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
             rr_text = "N/A"
         
         # Уверенность с эмодзи
-        conf_emoji = "🟢" if int(confidence) >= 70 else "🟡" if int(confidence) >= 50 else "🔴"
+        conf_emoji = "🟢" if int(confidence) >= 70 else "🟡" if int(confidence) >= 55 else "🔴"
         
         # Math Debug Log
         math_section = ""
@@ -687,7 +885,7 @@ def format_debug_report(status_data):
         'smc_sweet_spot': '🎯',  # v8.0: Идеальный SMC сетап
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
         'impulse_no_confirmation': '⚠️',  # v7.5.2: Impulse/Reversal без internal confirmed
-        'low_confidence_wait': '📉',  # v7.6: Низкая уверенность (< 50%)
+        'low_confidence_wait': '📉',  # v7.6: Низкая уверенность (< 55%)
         'active_trade': '🛑',  # Manager: есть активная сделка
         'trade_closed_sl': '🛑', 'trade_closed_tp': '✅', 'trade_closed_manager_news': '⚠️',
         'trade_closed_manager_risky': '🔴', 'trade_closed_manager_pullback': '✅', 'trade_closed_manager_50': '✅',
@@ -714,7 +912,7 @@ def format_debug_report(status_data):
         'smc_sweet_spot': '🎯 SMC SWEET SPOT: Идеальный сетап',  # v8.0
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
         'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.2
-        'low_confidence_wait': '📉 LOW CONFIDENCE: Сигнал отклонён (< 50%)',  # v7.6
+        'low_confidence_wait': '📉 LOW CONFIDENCE: Сигнал отклонён (< 55%)',  # v7.6
         'active_trade': 'Manager: активная сделка, охотник отключён',
         'trade_closed_sl': 'Manager: Сделка закрыта по SL',
         'trade_closed_tp': 'Manager: Сделка закрыта по TP',
@@ -933,6 +1131,11 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
     entry_price = safe_float(verdict.get('entry') or current_price, safe_float(current_price, 0.0))
     stop_loss = safe_float(verdict.get('sl'), 0.0)
     take_profit = safe_float(verdict.get('tp'), 0.0)
+    take_profit_1 = verdict.get('tp1')  # optional: first target for 50% (double TP)
+    if take_profit_1 is not None:
+        take_profit_1 = safe_float(take_profit_1, 0.0)
+    else:
+        take_profit_1 = 0.0
     confidence = verdict.get('confidence') or 0
     reason = verdict.get('reason') or ""
     
@@ -945,6 +1148,7 @@ def prepare_signal_data_for_db(llm_action, parsed_llm, ai_response, current_pric
         'current_price': safe_float(current_price, 0.0),
         'stop_loss': safe_float(stop_loss, 0.0),
         'take_profit': safe_float(take_profit, 0.0),
+        'take_profit_1': take_profit_1,
         'trend': str(trend) if trend else 'NEUTRAL',
         'internal_trend': str(internal_trend) if internal_trend else 'NEUTRAL',
         'zone': str(zone) if zone else 'UNKNOWN',
@@ -1789,8 +1993,48 @@ def run_analysis_cycle():
         verdict['sl'] = strict_sl
         verdict['tp'] = strict_tp
     
+    # Task 6: Minimum SL validation (reject too tight or too wide SL)
+    if strict_action in ('BUY', 'SELL') and strict_entry and strict_sl:
+        atr_m15 = analysis_light.get('atr_m15', 10.0) or 10.0
+        is_valid_sl, sl_reason = validate_stop_loss(strict_entry, strict_sl, atr_m15)
+        if not is_valid_sl:
+            logger.warning(f"⚠️ Trade REJECTED: {sl_reason}")
+            verdict['action'] = 'WAIT'
+            verdict['reason'] = (verdict.get('reason') or '') + f" | REJECTED: {sl_reason}"
+    
     llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
+    
+    # Task 10: Audit log model and model_completeness
+    model_name = verdict.get('model', 'NONE')
+    model_completeness = verdict.get('model_completeness') or {}
+    logger.info(f"🎯 Model identified: {model_name}")
+    if model_completeness and isinstance(model_completeness, dict):
+        present = sum(1 for v in model_completeness.values() if v)
+        total = len(model_completeness)
+        logger.info(f"📋 Model completeness: {present}/{total} elements present")
+    
+    # Task 7 & 8: Cooldown after SL and trade limits (before confirming signal)
+    if is_confirmed:
+        structure_breaks = (analysis.get('all_swing_choch') or []) + (analysis.get('all_swing_bos') or [])
+        can_cooldown, cooldown_reason = check_cooldown_after_sl(llm_action, datetime.now(timezone.utc), structure_breaks)
+        if not can_cooldown:
+            logger.warning(f"⚠️ Trade REJECTED: {cooldown_reason}")
+            verdict['action'] = 'WAIT'
+            verdict['reason'] = (verdict.get('reason') or '') + f" | {cooldown_reason}"
+            llm_action = 'WAIT'
+            is_confirmed = False
+        else:
+            can_limits, limit_reason = check_trade_limits(llm_action)
+            if not can_limits:
+                logger.warning(f"⚠️ Trade REJECTED: {limit_reason}")
+                verdict['action'] = 'WAIT'
+                verdict['reason'] = (verdict.get('reason') or '') + f" | {limit_reason}"
+                llm_action = 'WAIT'
+                is_confirmed = False
+            else:
+                logger.info(f"✅ Trade limits OK: {limit_reason}")
+    
     low_conf_override = verdict.get('low_confidence_override', False)
     original_action = verdict.get('original_action')
     
@@ -1811,6 +2055,22 @@ def run_analysis_cycle():
     else:
         logger.info(f"📊 LLM Verdict: action={llm_action}, confidence={verdict['confidence']}%, entry={verdict['entry']}, sl={verdict['sl']}, tp={verdict['tp']}")
     
+    # Task 7 (Fix #6): сохраняем триггерную структуру для кулдауна «новый CHoCH/BOS»
+    if llm_action in ('BUY', 'SELL'):
+        _sb = (analysis.get('all_swing_choch') or []) + (analysis.get('all_swing_bos') or [])
+        if _sb:
+            def _bar_idx(b):
+                if isinstance(b, dict):
+                    return b.get('bar_index') or 0
+                return getattr(b, 'bar_index', 0) or 0
+            _latest = max(_sb, key=_bar_idx)
+            _smc = dict(smc_summary) if isinstance(smc_summary, dict) else {}
+            if isinstance(_latest, dict):
+                _smc['_trigger_structure'] = {'structure': _latest.get('structure') or _latest.get('type'), 'bar_index': _latest.get('bar_index', 0)}
+            else:
+                _smc['_trigger_structure'] = {'structure': getattr(_latest, 'structure', None) or getattr(_latest, 'type', None), 'bar_index': _bar_idx(_latest)}
+            smc_summary = _smc
+
     # Подготовка данных для БД (v8.6: используем провалидированный verdict — корректные entry/sl/tp)
     signal_data_db = prepare_signal_data_for_db(
         llm_action=llm_action,
@@ -1833,6 +2093,7 @@ def run_analysis_cycle():
     if is_confirmed:
         logger.info(f"🔥 ТОРГОВЫЙ СИГНАЛ: {llm_action}")
         
+        increment_trade_counter(llm_action)
         db_service.update_last_signal_time()
         
         try:
@@ -1947,6 +2208,7 @@ def run_trade_manager_cycle():
     entry_price = safe_float(trade.get('entry_price'), 0.0)
     stop_loss = safe_float(trade.get('stop_loss'), 0.0)
     take_profit = safe_float(trade.get('take_profit'), 0.0)
+    take_profit_1 = safe_float(trade.get('take_profit_1'), 0.0)  # P2: first target (50% position); 0 = not set
 
     if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
         logger.warning(
@@ -2180,6 +2442,9 @@ def run_trade_manager_cycle():
             hit_stop = True
 
     if hit_stop:
+        # Task 7 (Fix #6): Record SL for cooldown; pass trigger structure for "new CHoCH/BOS" check
+        trigger = (trade.get('smc_summary') or {}).get('_trigger_structure')
+        on_stop_loss_hit({'direction': signal_type, 'structure_breaks': [trigger] if trigger else []})
         # PnL и цена закрытия считаем по уровню SL (как выставил охотник), а не по текущей цене — избегаем проскальзывания в отчёте
         if signal_type == 'BUY':
             result_pnl = stop_loss - entry_price
@@ -2197,6 +2462,8 @@ def run_trade_manager_cycle():
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         _entry_filled_notification_sent.discard(trade_id)
+        _recommendation_history.pop(trade_id, None)
+        _trade_tp1_reached.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_sl',
             'reason': f'Цена достигла SL. Сделка закрыта по уровню SL. PnL={result_pnl:.2f}',
@@ -2218,7 +2485,45 @@ def run_trade_manager_cycle():
             telegram_service.broadcast_deals_only(user_ids_sl, msg_sl)
         return
 
-    # 3.1b. Take Profit достигнут: проверяем по high/low свечей (тень) — если цена коснулась TP, закрываем
+    # 3.1a. P2 Double TP: если задан TP1 (первый уровень для 50%) и ещё не достигнут — проверяем TP1
+    if take_profit_1 > 0 and trade_id not in _trade_tp1_reached:
+        hit_tp1 = False
+        for c in recent_m5:
+            h = safe_float(c.get('high'), 0.0)
+            l = safe_float(c.get('low'), 0.0)
+            if signal_type == 'BUY' and h >= take_profit_1:
+                hit_tp1 = True
+                break
+            if signal_type == 'SELL' and l <= take_profit_1:
+                hit_tp1 = True
+                break
+        if not hit_tp1 and signal_type == 'BUY' and current_price >= take_profit_1:
+            hit_tp1 = True
+        if not hit_tp1 and signal_type == 'SELL' and current_price <= take_profit_1:
+            hit_tp1 = True
+        if hit_tp1:
+            _trade_tp1_reached.add(trade_id)
+            # При достижении TP1 переносим SL на уровень 1R (не ухудшаем уже поднятый стоп)
+            sl_1r = entry_price + risk_amount if signal_type == 'BUY' else entry_price - risk_amount
+            if signal_type == 'BUY':
+                new_sl = max(sl_1r, stop_loss)
+            else:
+                new_sl = min(sl_1r, stop_loss)
+            db_service.update_signal_sl_and_status(trade_id, new_sl, status='tp1_reached')
+            partial_pnl = (take_profit_1 - entry_price) if signal_type == 'BUY' else (entry_price - take_profit_1)
+            logger.info(
+                f"✅ Manager: достигнут TP1={take_profit_1:.2f}. Частичный профит зафиксирован (50%), SL на 1R={new_sl:.2f}. PnL(50%)≈{partial_pnl:.2f}"
+            )
+            user_ids_tp1 = db_service.get_all_active_users()
+            if user_ids_tp1:
+                msg_tp1 = (
+                    f"📈 <b>TP1 достигнут (50% позиции)</b>\n"
+                    f"id={trade_id} | {signal_type} | TP1={take_profit_1:.2f} | SL переведён на 1R ({new_sl:.2f}).\n"
+                    f"Оставшаяся часть — до TP2={take_profit:.2f}."
+                )
+                telegram_service.broadcast_deals_only(user_ids_tp1, msg_tp1)
+
+    # 3.1b. Take Profit (TP2 или единственный TP) достигнут: закрываем сделку
     hit_tp = False
     for c in recent_m5:
         h = safe_float(c.get('high'), 0.0)
@@ -2253,6 +2558,7 @@ def run_trade_manager_cycle():
         _manager_max_progress.pop(trade_id, None)
         _manager_llm_last_call_ts.pop(trade_id, None)
         _entry_filled_notification_sent.discard(trade_id)
+        _trade_tp1_reached.discard(trade_id)
         send_debug_notification({
             'status': 'trade_closed_tp',
             'reason': f'Цена достигла TP. Сделка закрыта по уровню TP. PnL={result_pnl:.2f}',
@@ -2602,11 +2908,13 @@ def run_trade_manager_cycle():
     if manager_htf_context:
         technical_context['htf_context'] = manager_htf_context
 
+    rec_context = get_recommendation_context(trade_id)
     try:
         ai_response = llm_service.manage_active_trade(
             trade_context=trade_context,
             technical_context=technical_context,
-            triggers=triggers
+            triggers=triggers,
+            recommendation_context=rec_context,
         )
     except Exception as e:
         logger.error(f"❌ Manager: ошибка вызова LLM manage_active_trade: {e}")
@@ -2621,6 +2929,13 @@ def run_trade_manager_cycle():
     # Поддерживаем как 'manager_action', так и просто 'action'
     mgr_action = (parsed.get('manager_action') or parsed.get('action') or '').upper()
     mgr_reason = parsed.get('reason') or parsed.get('executive_summary') or ''
+
+    add_recommendation(trade_id, mgr_action, mgr_reason)
+    should_escalate, escalation_reason = check_escalation_triggers(trade_id)
+    if should_escalate:
+        logger.warning(f"⚠️ AUTO-ESCALATION: {escalation_reason}")
+        mgr_action = 'CLOSE_ALL'
+        mgr_reason = escalation_reason
 
     logger.info(f"🤖 Manager LLM Verdict: action={mgr_action}, reason={mgr_reason}")
 
@@ -2657,6 +2972,8 @@ def run_trade_manager_cycle():
             _manager_max_progress.pop(trade_id, None)
             _manager_llm_last_call_ts.pop(trade_id, None)
             _entry_filled_notification_sent.discard(trade_id)
+            _recommendation_history.pop(trade_id, None)
+            _trade_tp1_reached.discard(trade_id)
             send_debug_notification({
                 'status': 'trade_closed_manager_1r',
                 'reason': f'LLM рекомендовала закрыть при 1R — фиксация прибыли. PnL={result_pnl:.2f}',
@@ -2686,6 +3003,8 @@ def run_trade_manager_cycle():
                 _manager_max_progress.pop(trade_id, None)
                 _manager_llm_last_call_ts.pop(trade_id, None)
                 _entry_filled_notification_sent.discard(trade_id)
+                _recommendation_history.pop(trade_id, None)
+                _trade_tp1_reached.discard(trade_id)
                 send_debug_notification({
                     'status': 'trade_closed_manager_risky',
                     'reason': f'Слишком рискованно: {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций LLM на закрытие (3/3). PnL={result_pnl:.2f}',
@@ -2726,6 +3045,8 @@ def run_trade_manager_cycle():
             _manager_max_progress.pop(trade_id, None)
             _manager_llm_last_call_ts.pop(trade_id, None)
             _entry_filled_notification_sent.discard(trade_id)
+            _recommendation_history.pop(trade_id, None)
+            _trade_tp1_reached.discard(trade_id)
             send_debug_notification({
                 'status': 'trade_closed_manager_1r',
                 'reason': f'LLM рекомендовала зафиксировать прибыль при 1R. PnL={result_pnl:.2f}',

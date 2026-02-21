@@ -377,6 +377,8 @@ class DBService:
             'current_price': safe_float(signal_data.get('current_price'), 0.0),
             'stop_loss': safe_float(signal_data.get('stop_loss'), 0.0),
             'take_profit': safe_float(signal_data.get('take_profit'), 0.0),
+            # Double TP (Fix P2): первый уровень для 50% позиции; если в таблице нет колонки take_profit_1 — добавить её или убрать эту строку
+            'take_profit_1': safe_float(signal_data.get('take_profit_1'), 0.0),
             
             # Тренд и зона — строки (internal_trend УБРАН — нет в таблице)
             'trend': str(signal_data.get('trend', 'NEUTRAL')),

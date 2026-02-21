@@ -1402,7 +1402,83 @@ class SMCDetector:
     # ========================================================================
     # ORDER BLOCKS v7.0 (MITIGATION / INVALIDATION / BREAKER)
     # ========================================================================
-    
+
+    def _check_ob_caused_break(self, ob: Dict, bos_list: List, choch_list: List) -> Optional[str]:
+        """
+        Task 4: Check if this OB caused a BOS or CHoCH within 5 bars after its formation.
+        Returns string like "INT_BOS at 4913.07" or None.
+        """
+        ob_bar = ob.get('bar_index', 0)
+        for bos in (bos_list or []):
+            bi = bos.get('bar_index') if isinstance(bos, dict) else getattr(bos, 'bar_index', None)
+            if bi is not None and ob_bar <= bi <= ob_bar + 5:
+                st = bos.get('type') or bos.get('structure') if isinstance(bos, dict) else getattr(bos, 'structure', None)
+                pr = bos.get('price') if isinstance(bos, dict) else getattr(bos, 'price', 0)
+                return f"{st or 'BOS'}_BOS at {pr:.2f}"
+        for choch in (choch_list or []):
+            bi = choch.get('bar_index') if isinstance(choch, dict) else getattr(choch, 'bar_index', None)
+            if bi is not None and ob_bar <= bi <= ob_bar + 5:
+                st = choch.get('type') or choch.get('structure') if isinstance(choch, dict) else getattr(choch, 'structure', None)
+                pr = choch.get('price') if isinstance(choch, dict) else getattr(choch, 'price', 0)
+                return f"{st or 'CHOCH'}_CHOCH at {pr:.2f}"
+        return None
+
+    def _check_ob_mitigated(self, ob: Dict, df: pd.DataFrame) -> bool:
+        """
+        Task 4: Check if price has returned to this OB zone after its creation.
+        """
+        ob_bar = ob.get('bar_index', 0)
+        ob_high = ob.get('top') or (ob.get('range', [None, None])[0])
+        ob_low = ob.get('bottom') or (ob.get('range', [None, None])[1])
+        if ob_high is None or ob_low is None:
+            return bool(ob.get('status') == 'mitigated')
+        for i in range(ob_bar + 1, len(df)):
+            bar_low = df['low'].iloc[i]
+            bar_high = df['high'].iloc[i]
+            if bar_low <= ob_high and bar_high >= ob_low:
+                return True
+        return False
+
+    def _check_fvg_overlap(self, ob: Dict, fvg_list: List) -> bool:
+        """
+        Task 4: Check if any FVG overlaps with this OB.
+        """
+        ob_high = ob.get('top') or (ob.get('range', [0, 0])[0]) or 0
+        ob_low = ob.get('bottom') or (ob.get('range', [0, 0])[1]) or 0
+        for fvg in (fvg_list or []):
+            fvg_high = fvg.get('high') or fvg.get('top', 0)
+            fvg_low = fvg.get('low') or fvg.get('bottom', 0)
+            if not (ob_high < fvg_low or ob_low > fvg_high):
+                return True
+        return False
+
+    def _check_sweep_followed_by_choch(self, sweep_bar: int, bos_list: List, choch_list: List) -> bool:
+        """
+        Task 5: True if CHoCH or BOS within 5 bars after the liquidity sweep.
+        """
+        for choch in (choch_list or []):
+            bi = choch.get('bar_index') if isinstance(choch, dict) else getattr(choch, 'bar_index', None)
+            if bi is not None and sweep_bar < bi <= sweep_bar + 5:
+                return True
+        for bos in (bos_list or []):
+            bi = bos.get('bar_index') if isinstance(bos, dict) else getattr(bos, 'bar_index', None)
+            if bi is not None and sweep_bar < bi <= sweep_bar + 5:
+                return True
+        return False
+
+    def _get_nearest_choch_after_sweep(self, sweep_bar: int, choch_list: List) -> Optional[float]:
+        """
+        Task 5: Price level of nearest CHoCH after liquidity sweep.
+        """
+        sorted_choch = sorted(
+            [c for c in (choch_list or []) if (c.get('bar_index') if isinstance(c, dict) else getattr(c, 'bar_index', 0)) > sweep_bar],
+            key=lambda x: x.get('bar_index') if isinstance(x, dict) else getattr(x, 'bar_index', 0)
+        )
+        if not sorted_choch:
+            return None
+        c = sorted_choch[0]
+        return c.get('price') if isinstance(c, dict) else getattr(c, 'price', None)
+
     def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 50) -> Dict:
         """
         Order Blocks v7.0 с профессиональной логикой:
@@ -2017,6 +2093,30 @@ class SMCDetector:
                 # Advanced
                 'advanced': advanced
             }
+            
+            # Task 4: Enrich Order Blocks (caused_break, is_mitigated, has_fvg_overlap, is_causative)
+            for ob in result['order_blocks']:
+                ob['range'] = [ob.get('top'), ob.get('bottom')]
+                caused = self._check_ob_caused_break(ob, all_bos, all_choch)
+                ob['caused_break'] = caused
+                ob['is_mitigated'] = self._check_ob_mitigated(ob, df)
+                ob['has_fvg_overlap'] = self._check_fvg_overlap(ob, fvg)
+                ob['is_causative'] = (caused is not None)
+            
+            # Task 5: Enrich Liquidity (followed_by_choch, choch_level, bars_since_sweep, is_recent)
+            n_bars = len(df)
+            for liq in result['liquidity']:
+                bar_idx = liq.get('sweep_bar') or liq.get('bar_index')
+                if bar_idx is not None:
+                    liq['followed_by_choch'] = self._check_sweep_followed_by_choch(bar_idx, all_bos, all_choch)
+                    liq['choch_level'] = self._get_nearest_choch_after_sweep(bar_idx, all_choch)
+                    liq['bars_since_sweep'] = n_bars - bar_idx - 1
+                    liq['is_recent'] = (n_bars - bar_idx - 1) <= 10
+                else:
+                    liq['followed_by_choch'] = False
+                    liq['choch_level'] = None
+                    liq['bars_since_sweep'] = None
+                    liq['is_recent'] = False
             
             # 8. Impulse Context
             impulse_context = self.detect_impulse_context_v52(df, result)
