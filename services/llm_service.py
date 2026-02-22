@@ -68,15 +68,15 @@ class TradingSession:
     """Определение текущей торговой сессии"""
     
     SESSIONS = {
-        'Sydney': {'start': 21, 'end': 6},      # 21:00 - 06:00 UTC
-        'Tokyo': {'start': 0, 'end': 9},        # 00:00 - 09:00 UTC
-        'London': {'start': 7, 'end': 16},      # 07:00 - 16:00 UTC
-        'New York': {'start': 12, 'end': 21},   # 12:00 - 21:00 UTC
+        'Sydney': {'start': 20, 'end': 5},      # 20:00 - 05:00 UTC (GMT+0)
+        'Tokyo': {'start': 0, 'end': 9},       # 00:00 - 09:00 UTC
+        'London': {'start': 8, 'end': 17},     # 08:00 - 17:00 UTC
+        'New York': {'start': 13, 'end': 22},  # 13:00 - 22:00 UTC
     }
     
     OVERLAPS = {
-        'London/New York': {'start': 12, 'end': 16},  # 12:00 - 16:00 UTC
-        'Tokyo/London': {'start': 7, 'end': 9},       # 07:00 - 09:00 UTC
+        'London/New York': {'start': 13, 'end': 17},  # 13:00 - 17:00 UTC
+        'Tokyo/London': {'start': 8, 'end': 9},       # 08:00 - 09:00 UTC
     }
     
     @classmethod
