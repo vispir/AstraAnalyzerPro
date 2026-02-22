@@ -103,9 +103,21 @@ COOLDOWN_BARS_M15 = 8
 COOLDOWN_MINUTES_AFTER_SL = COOLDOWN_BARS_M15 * 15
 
 # Task 8: Trade limits — 3 total per day; 2 per direction per SESSION (Fix: за сессию)
+# Лимит 3/3 сбрасывается в 02:00 по Астрахани (UTC+4), чтобы не тратить лимит на сделки после полуночи до открытия следующего торгового дня
+TRADE_LIMIT_TZ_OFFSET_HOURS = 4  # Астрахань UTC+4
+TRADE_LIMIT_RESET_HOUR_ASTRAKHAN = 2  # 02:00 по Астрахани — сброс
+
+def _get_trade_limit_date():
+    """Дата «торгового дня» для лимита 3/3: по Астрахани (UTC+4), сброс в 02:00. До 02:00 считаем предыдущий календарный день."""
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc + timedelta(hours=TRADE_LIMIT_TZ_OFFSET_HOURS)
+    if now_local.hour < TRADE_LIMIT_RESET_HOUR_ASTRAKHAN:
+        return (now_local - timedelta(days=1)).date()
+    return now_local.date()
+
 _trades_today = {
     'count': 0,
-    'reset_date': datetime.now(timezone.utc).date()
+    'reset_date': _get_trade_limit_date()
 }
 _trades_by_session = {}  # session_key (date_sessionname) -> {'BUY': 0, 'SELL': 0}
 
@@ -608,19 +620,31 @@ def _get_session_key():
     return f"{today}_{session_name}"
 
 
+def is_daily_trade_limit_reached():
+    """
+    Task 8: True если лимит 3/3 сделок за день уже исчерпан.
+    День по Астрахани (UTC+4), сброс в 02:00 по нашему времени.
+    """
+    global _trades_today
+    today = _get_trade_limit_date()
+    if _trades_today.get('reset_date') != today:
+        _trades_today = {'count': 0, 'reset_date': today}  # reset at 02:00 Astrakhan
+    return _trades_today.get('count', 0) >= 3
+
+
 def check_trade_limits(direction):
     """
     Task 8: Max 2 same direction per SESSION, max 3 total per day (Fix.txt).
+    День для лимита 3/3 — по Астрахани (UTC+4), сброс в 02:00 по нашему времени.
     Returns: (can_trade: bool, reason: str)
     """
     global _trades_today, _trades_by_session
     direction = (direction or '').upper()
     if direction not in ('BUY', 'SELL'):
         return True, "OK"
-    now = datetime.now(timezone.utc)
-    today = now.date()
+    today = _get_trade_limit_date()
     if _trades_today['reset_date'] != today:
-        logger.info(f"🔄 New trading day: {today}. Resetting daily counter.")
+        logger.info(f"🔄 New trading day (Astrakhan 02:00): {today}. Resetting daily counter.")
         _trades_today = {'count': 0, 'reset_date': today}
     session_key = _get_session_key()
     if session_key not in _trades_by_session:
@@ -891,7 +915,8 @@ def format_debug_report(status_data):
         'trade_closed_manager_risky': '🔴', 'trade_closed_manager_pullback': '✅', 'trade_closed_manager_50': '✅',
         'trade_closed_manager_1r': '✅',
         'move_sl_be': '🔒',
-        'trade_cancelled_no_fill': '⏱'
+        'trade_cancelled_no_fill': '⏱',
+        'trade_limit_reached': '🛑'
     }
     
     status_texts = {
@@ -922,7 +947,8 @@ def format_debug_report(status_data):
         'trade_closed_manager_50': 'Manager: Сделка закрыта (3/3 рекомендаций частично закрыть)',
         'trade_closed_manager_1r': 'Manager: Сделка закрыта по рекомендации LLM при 1R (фиксация прибыли)',
         'move_sl_be': 'Manager: SL переведён в безубыток',
-        'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут'
+        'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут',
+        'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен'
     }
     
     status = status_data.get('status', 'unknown')
@@ -1618,9 +1644,10 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # Equilibrium (пропускаем при импульсе ИЛИ при CONFIRMED сигналах ИЛИ при пробое 20 свечей)
-    # v8.1 FIX: CONFIRMED сигналы и пробой 20 свечей снимают запрет Equilibrium
+    # Equilibrium (пропускаем при импульсе ИЛИ при CONFIRMED ИЛИ при пробое 48–52% + internal ИЛИ при близости к уровню)
+    # v8.1 FIX: CONFIRMED сигналы снимают запрет Equilibrium
     # v8.2: Пробой полосы 48–52% (eq_top/eq_bottom) + internal confirmed — разрешаем сделку от уровня равновесия
+    # v8.6: Близость к OB/FVG/ликвидности/ключевым уровням — разрешаем вызов LLM в Equilibrium; решение за моделью
     has_equilibrium_breakout = False
     eq = (zones or {}).get('equilibrium') or {}
     eq_top = safe_float(eq.get('top'), 0)
@@ -1628,17 +1655,21 @@ def run_analysis_cycle():
     if eq_top > 0 and eq_bottom > 0:
         if current_price > eq_top or current_price < eq_bottom:
             has_equilibrium_breakout = True
+    proximity_ok = is_near or is_near_key_levels
     allow_equilibrium = (
         is_breakout_impulse or has_breakout or has_swing_break_confirmed or has_internal_break_confirmed
         or (has_equilibrium_breakout and has_internal_break_confirmed)
+        or proximity_ok
     )
     if current_zone == "EQUILIBRIUM" and (has_equilibrium_breakout and has_internal_break_confirmed):
         logger.info(
             f"⚪ Equilibrium: пробой полосы 48–52% (price={current_price:.2f}, eq_top={eq_top:.2f}, eq_bottom={eq_bottom:.2f}) + internal confirmed — разрешаем сделку."
         )
+    if current_zone == "EQUILIBRIUM" and proximity_ok and not (has_equilibrium_breakout or has_swing_break_confirmed or has_internal_break_confirmed):
+        logger.info(f"⚪ Equilibrium: цена у структуры/уровня (proximity) — разрешаем вызов LLM, решение за моделью.")
     if current_zone == "EQUILIBRIUM" and not allow_equilibrium:
         status_data['status'] = 'equilibrium_zone'
-        status_data['reason'] = f'Цена в Equilibrium ({position_in_range_pct:.1f}%)'
+        status_data['reason'] = f'Цена в Equilibrium ({position_in_range_pct:.1f}%) без структуры/пробоя/близости к уровням'
         send_debug_notification(status_data)
         return
     
@@ -1823,6 +1854,19 @@ def run_analysis_cycle():
                 return
         except Exception as e:
             logger.error(f"Ошибка логики памяти LLM (hunter guard): {e}")
+    
+    # Task 8: Лимит 3/3 за день — не вызываем LLM, экономим токены; пишем в TG
+    if is_daily_trade_limit_reached():
+        n = _trades_today.get('count', 0)
+        reason = f"Лимит сделок {n}/3 за день. Анализ не выполняется (вызов LLM пропущен)."
+        logger.info(f"🛑 {reason}")
+        send_debug_notification({
+            'status': 'trade_limit_reached',
+            'reason': reason,
+            'price': current_price,
+            'trade_limit_today': f"{n}/3"
+        })
+        return
     
     # ========================================================================
     # ФАЗА 3: ВЫЗОВ LLM
@@ -2034,6 +2078,30 @@ def run_analysis_cycle():
                 is_confirmed = False
             else:
                 logger.info(f"✅ Trade limits OK: {limit_reason}")
+
+        # Fix #8: Sweep freshness gate — для моделей со свипом требуем свежий свип (≤10 бар M15)
+        if is_confirmed and model_name in ('LIQUIDITY_SWEEP_REVERSAL', 'RANGE_SWEEP'):
+            liquidity_list = analysis.get('liquidity') or []
+            if llm_action == 'BUY':
+                has_recent_sweep = any(
+                    liq.get('swept') and liq.get('is_recent') and liq.get('type') == 'SWEPT_LOW'
+                    for liq in liquidity_list
+                )
+            else:
+                has_recent_sweep = any(
+                    liq.get('swept') and liq.get('is_recent') and liq.get('type') == 'SWEPT_HIGH'
+                    for liq in liquidity_list
+                )
+            if not has_recent_sweep:
+                sweep_reason = (
+                    f"Fix #8: модель {model_name} требует свежий свип ликвидности (≤10 бар M15). "
+                    f"Для {llm_action}: нет недавнего {'SWEPT_LOW' if llm_action == 'BUY' else 'SWEPT_HIGH'}."
+                )
+                logger.warning(f"⚠️ Trade REJECTED: {sweep_reason}")
+                verdict['action'] = 'WAIT'
+                verdict['reason'] = (verdict.get('reason') or '') + f" | {sweep_reason}"
+                llm_action = 'WAIT'
+                is_confirmed = False
     
     low_conf_override = verdict.get('low_confidence_override', False)
     original_action = verdict.get('original_action')

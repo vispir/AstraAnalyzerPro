@@ -346,6 +346,7 @@ class LLMService:
     "+ Entry at extreme of range (< 25% for BUY, > 75% for SELL) → +5\n"
     "- Entry at middle of range (40-60%) without swing break → -5\n"
     "Note: Zone is CONTEXT. A valid sweep+CHoCH in any zone can be traded.\n"
+    "In EQUILIBRIUM (middle of range 40-60%): trades are allowed when you have a complete entry model and confirmed structure (BOS/CHoCH); do not WAIT only because price is in equilibrium — if the setup is valid, grade and confidence apply as usual.\n"
     "\n"
     "GRADE ASSIGNMENT:\n"
     "85-100 → A+ (all model elements present + swing confirmation)\n"
