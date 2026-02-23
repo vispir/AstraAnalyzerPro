@@ -22,6 +22,184 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 
+def _build_market_status(utc_time: Optional[datetime] = None) -> str:
+    """
+    Определяет статус рынка (OPEN/CLOSED) на основе времени UTC.
+    
+    Args:
+        utc_time: время UTC (по умолчанию - текущее время)
+    
+    Returns:
+        "OPEN" или "CLOSED"
+    """
+    if utc_time is None:
+        utc_time = datetime.now(timezone.utc)
+    
+    weekday = utc_time.weekday()
+    hour = utc_time.hour
+    
+    if weekday == 5:  # Saturday
+        return "CLOSED"
+    elif weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
+        return "CLOSED"
+    elif weekday == 4 and hour >= 22:  # Friday after 22:00
+        return "CLOSED"
+    
+    return "OPEN"
+
+
+def _build_common_prompt_section(
+    current_time_utc: str,
+    session_info: Dict[str, Any],
+    news_data: Dict,
+    computed_levels: Dict,
+    technical_data: Dict,
+    balance: float,
+    daily_loss_limit: float,
+    risk_percent: float,
+    language: str,
+    user_idea: str = '',
+    manual_entry: Optional[str] = None,
+    manual_sl: Optional[str] = None,
+    manual_tp: Optional[str] = None,
+    include_visual_section: bool = True,
+    invalidation_data: Optional[Dict] = None,
+    htf_context: Optional[Dict] = None
+) -> str:
+    """
+    Формирует общую часть промпта для LLM (используется в build_user_payload и _analyze_with_gemini).
+    
+    Args:
+        current_time_utc: Строка времени "YYYY-MM-DD HH:MM UTC"
+        session_info: Информация о сессии
+        news_data: JSON с новостями
+        computed_levels: JSON с уровнями
+        technical_data: JSON с техническими данными
+        balance: Баланс счета
+        daily_loss_limit: Дневной лимит убытков
+        risk_percent: Процент риска
+        language: Язык ответа
+        user_idea: Торговая идея пользователя
+        manual_entry/sl/tp: Ручные уровни пользователя
+        include_visual_section: Включить секцию <visual_attachments>
+        invalidation_data: Данные об инвалидации и ATR (опционально)
+        htf_context: HTF контекст (H4/H1) (опционально)
+    
+    Returns:
+        Строка с промптом
+    """
+    risk_amount = balance * (risk_percent / 100)
+    
+    # Секция с пользовательской идеей
+    user_idea_context = ""
+    if user_idea or manual_entry or manual_sl or manual_tp:
+        user_idea_context = f"""
+<user_trading_idea>
+The user has proposed their own trading idea:
+Idea/Thoughts: {user_idea if user_idea else "No text provided"}
+Proposed Entry: {manual_entry if manual_entry else "Not specified"}
+Proposed Stop Loss: {manual_sl if manual_sl else "Not specified"}
+Proposed Take Profit: {manual_tp if manual_tp else "Not specified"}
+
+TASK: You MUST validate this user idea. Compare it with your own market analysis.
+If the user idea is dangerous or contradicts the technical/news data, explain why in the 'executive_summary'.
+If the user idea is good, you can use it as a basis for your trade plan.
+</user_trading_idea>
+"""
+    
+    market_status = _build_market_status()
+    
+    # Базовая часть промпта
+    prompt = f"""
+REPORT GENERATION REQUEST for XAUUSD
+
+<environment>
+Current Time (UTC): {current_time_utc}
+Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
+Active Session: {session_info['description']}
+Session Details: {json.dumps(session_info, indent=2)}
+Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
+</environment>
+
+<account_config>
+Balance: ${balance}
+Daily Loss Limit: ${daily_loss_limit}
+Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
+</account_config>
+
+{user_idea_context}
+<news_context>
+{json.dumps(news_data, indent=2)}
+</news_context>
+
+<computed_levels>
+IMPORTANT: Use these exact values for Targets (TP) and Structural Stops (SL).
+{json.dumps(computed_levels, indent=2)}
+</computed_levels>
+"""
+    
+    # HTF контекст (если передан)
+    if htf_context:
+        prompt += f"""
+<htf_context>
+Higher Timeframe bias for Step 1 (H4 → H1). Use this FIRST to determine dominant trend and zones before looking at M15 entry.
+- H4: macro trend and zone (premium/discount).
+- H1: intermediate structure and last confirmed BOS/CHoCH.
+Do NOT take M15 entries against strong HTF trend unless there is clear reversal confirmation.
+{json.dumps(htf_context, indent=2)}
+</htf_context>
+"""
+    
+    # Блок инвалидации и ATR (если передан)
+    if invalidation_data:
+        inv_levels = invalidation_data.get("invalidation_levels", {})
+        atr_m15 = invalidation_data.get("atr_m15", 0)
+        cur_price = invalidation_data.get("current_price", 0)
+        
+        prompt += f"""
+<invalidation_and_atr>
+CURRENT_PRICE: {cur_price}
+ATR_M15(14): {atr_m15}
+RULES:
+- For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
+- For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
+- SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
+- Entry: use CURRENT_PRICE for market execution, or a limit within 0.1% of it.
+- Minimum R:R = 1.2. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.2 → WAIT.
+INVALIDATION LEVELS:
+{json.dumps(inv_levels, indent=2)}
+</invalidation_and_atr>
+"""
+    
+    # Технические данные
+    prompt += f"""
+<raw_technical_data>
+{json.dumps(technical_data, indent=2)}
+</raw_technical_data>
+"""
+    
+    # Визуальная секция (опционально)
+    if include_visual_section:
+        prompt += """
+<visual_attachments>
+The following images are attached to this request in order:
+1. H4 Chart (Macro Trend & Narrative)
+2. H1 Chart (Intermediate Structure)
+3. M15 Chart (Execution & Trigger)
+</visual_attachments>
+"""
+    
+    prompt += """
+<task>
+1. Synthesize the News, Visuals, and Data.
+2. Validate the setup using the "Decision Protocol" from System Instructions.
+3. Output the STRICT JSON decision with the required fields.
+</task>
+"""
+    
+    return prompt
+
+
 def get_current_ip() -> Optional[str]:
     """
     Получает текущий внешний IP адрес для логирования
@@ -40,27 +218,59 @@ def get_current_ip() -> Optional[str]:
 
 def parse_json_response(response_text: str) -> Optional[Dict]:
     """
-    Очищает ответ LLM от Markdown обёрток и парсит JSON
-    
+    Очищает ответ LLM от Markdown обёрток и парсит JSON.
+    Улучшенная версия: обрабатывает экранированные кавычки и различные варианты markdown-обёрток.
+
     Args:
         response_text: Сырой текст ответа от LLM
-        
+
     Returns:
         Распарсенный JSON объект или None при ошибке
     """
     try:
-        # 1. Удаляем Markdown обертку ```json и ```
-        clean_text = re.sub(r"```json\s*", "", response_text)
-        clean_text = re.sub(r"```\s*$", "", clean_text)
+        # 1. Удаляем Markdown обертки (различные варианты)
+        clean_text = response_text
+        # Варианты: ```json, ```, ``` JSON, ```json\n
+        clean_text = re.sub(r"```(?:json|JSON)?\s*", "", clean_text)
+        clean_text = re.sub(r"```\s*$", "", clean_text, flags=re.MULTILINE)
         
-        # 2. Удаляем лишние пробелы по краям
+        # 2. Находим первую '{' и последнюю '}' для извлечения JSON
+        start = clean_text.find('{')
+        end = clean_text.rfind('}') + 1
+        
+        if start == -1 or end <= start:
+            logger.debug(f"No JSON object found in response")
+            return None
+        
+        clean_text = clean_text[start:end]
+
+        # 3. Удаляем лишние пробелы по краям
         clean_text = clean_text.strip()
         
-        # 3. Парсим JSON
-        return json.loads(clean_text)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON Parse Error: {e}")
-        logger.debug(f"Raw text: {response_text[:500]}...")
+        # 4. Пробуем стандартный парсинг
+        try:
+            return json.loads(clean_text)
+        except json.JSONDecodeError as first_error:
+            # 5. Если не удалось, пробуем исправить распространённые проблемы
+            #    a. Экранированные кавычки внутри строк (например: "reason": "Цена \"пробила\"")
+            #    b. Неправильные escape-последовательности
+            
+            # Пробуем заменить проблемные экранирования
+            fixed_text = clean_text
+            # Замена \" на " только внутри строк (упрощённо)
+            # Это может помочь если LLM неправильно экранировал кавычки
+            fixed_text = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', fixed_text)
+            
+            try:
+                return json.loads(fixed_text)
+            except json.JSONDecodeError:
+                # Если всё ещё ошибка, логируем первую ошибку и возвращаем None
+                logger.error(f"JSON Parse Error: {first_error}")
+                logger.debug(f"Raw text (first 500 chars): {clean_text[:500]}...")
+                return None
+
+    except Exception as e:
+        logger.error(f"Unexpected error in parse_json_response: {e}")
         return None
 
 
@@ -586,92 +796,24 @@ class LLMService:
         Returns:
             List с текстовым контекстом и изображениями
         """
-        
-        # 1. Формируем текстовую часть (контекст)
-        risk_amount = balance * (risk_percent / 100)
-        
-        # Секция с пользовательской идеей, если она есть
-        user_idea_context = ""
-        if user_idea or manual_entry or manual_sl or manual_tp:
-            user_idea_context = f"""
-<user_trading_idea>
-The user has proposed their own trading idea:
-Idea/Thoughts: {user_idea if user_idea else "No text provided"}
-Proposed Entry: {manual_entry if manual_entry else "Not specified"}
-Proposed Stop Loss: {manual_sl if manual_sl else "Not specified"}
-Proposed Take Profit: {manual_tp if manual_tp else "Not specified"}
+        # Используем общую функцию для формирования промпта
+        user_prompt_text = _build_common_prompt_section(
+            current_time_utc=current_time_utc,
+            session_info=session_info,
+            news_data=news_data,
+            computed_levels=computed_levels,
+            technical_data=technical_data,
+            balance=balance,
+            daily_loss_limit=daily_loss_limit,
+            risk_percent=risk_percent,
+            language=language,
+            user_idea=user_idea,
+            manual_entry=manual_entry,
+            manual_sl=manual_sl,
+            manual_tp=manual_tp,
+            include_visual_section=True
+        )
 
-TASK: You MUST validate this user idea. Compare it with your own market analysis. 
-If the user idea is dangerous or contradicts the technical/news data, explain why in the 'executive_summary'.
-If the user idea is good, you can use it as a basis for your trade plan.
-</user_trading_idea>
-"""
-        
-        # Определяем статус рынка для LLM
-        from datetime import datetime as dt_module
-        try:
-            utc_now = dt_module.strptime(current_time_utc, "%Y-%m-%d %H:%M UTC")
-            weekday = utc_now.weekday()  # 0=Monday, 6=Sunday
-            hour = utc_now.hour
-            
-            market_status = "OPEN"
-            if weekday == 5:  # Saturday
-                market_status = "CLOSED"
-            elif weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
-                market_status = "CLOSED"
-            elif weekday == 4 and hour >= 22:  # Friday after 22:00
-                market_status = "CLOSED"
-        except:
-            market_status = "UNKNOWN"
-
-        user_prompt_text = f"""
-REPORT GENERATION REQUEST for XAUUSD
-
-<environment>
-Current Time (UTC): {current_time_utc}
-Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
-Active Session: {session_info['description']}
-Session Details: {json.dumps(session_info, indent=2)}
-Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
-</environment>
-
-<account_config>
-Balance: ${balance}
-Daily Loss Limit: ${daily_loss_limit}
-Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
-</account_config>
-
-{user_idea_context}
-
-<news_context>
-{json.dumps(news_data, indent=2)}
-</news_context>
-
-<computed_levels>
-IMPORTANT: Use these exact values for Targets (TP) and Structural Stops (SL).
-{json.dumps(computed_levels, indent=2)}
-</computed_levels>
-
-<raw_technical_data>
-Contains OHLCV arrays and Algo-Levels for M15, H1, H4. 
-Use this data to find the specific High/Low/Close of the trigger candle.
-{json.dumps(technical_data, indent=2)}
-</raw_technical_data>
-
-<visual_attachments>
-The following images are attached to this request in order:
-1. H4 Chart (Macro Trend & Narrative)
-2. H1 Chart (Intermediate Structure)
-3. M15 Chart (Execution & Trigger)
-</visual_attachments>
-
-<task>
-1. Synthesize the News, Visuals, and Data.
-2. Validate the setup using the "Decision Protocol" from System Instructions.
-3. Output the STRICT JSON decision with the required fields.
-</task>
-"""
-        
         # 2. Подготавливаем картинки
         images = []
         try:
@@ -920,113 +1062,50 @@ The following images are attached to this request in order:
         try:
             if not self.gemini_key:
                 return {"error": "GEMINI_API_KEY not configured"}
-            
+
             # Получаем текущую сессию
             current_time = datetime.now(timezone.utc)
             session_info = self.session.get_current_session(current_time)
             time_str = current_time.strftime("%Y-%m-%d %H:%M UTC")
-            
-            # Формируем текстовый промпт (без изображений для Gemini)
-            risk_amount = balance * (risk_percent / 100)
-            
-            # Секция с пользовательской идеей
-            user_idea_context = ""
-            if user_idea or manual_entry or manual_sl or manual_tp:
-                user_idea_context = f"""
-<user_trading_idea>
-The user has proposed their own trading idea:
-Idea/Thoughts: {user_idea if user_idea else "No text provided"}
-Proposed Entry: {manual_entry if manual_entry else "Not specified"}
-Proposed Stop Loss: {manual_sl if manual_sl else "Not specified"}
-Proposed Take Profit: {manual_tp if manual_tp else "Not specified"}
 
-TASK: You MUST validate this user idea. Compare it with your own market analysis. 
-If the user idea is dangerous or contradicts the technical/news data, explain why in the 'executive_summary'.
-If the user idea is good, you can use it as a basis for your trade plan.
-</user_trading_idea>
-"""
-            
-            # Определяем статус рынка для LLM
-            weekday = current_time.weekday()  # 0=Monday, 6=Sunday
-            hour = current_time.hour
-            
-            market_status = "OPEN"
-            if weekday == 5:  # Saturday
-                market_status = "CLOSED"
-            elif weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
-                market_status = "CLOSED"
-            elif weekday == 4 and hour >= 22:  # Friday after 22:00
-                market_status = "CLOSED"
-
-            user_prompt_text = f"""
-REPORT GENERATION REQUEST for XAUUSD
-
-<environment>
-Current Time (UTC): {time_str}
-Market Status: {market_status} (Gold market opens Sunday 22:00 UTC, closes Friday 22:00 UTC)
-Active Session: {session_info['description']}
-Session Details: {json.dumps(session_info, indent=2)}
-Language Requirement: Please provide the 'executive_summary' and all string descriptions in {language.upper()} language.
-</environment>
-
-<account_config>
-Balance: ${balance}
-Daily Loss Limit: ${daily_loss_limit}
-Risk Per Trade: {risk_percent}% (${risk_amount:.2f})
-</account_config>
-
-{user_idea_context}
-
-<news_context>
-{json.dumps(news_data, indent=2)}
-</news_context>
-
-<computed_levels>
-IMPORTANT: Use these exact values for Targets (TP) and Structural Stops (SL).
-{json.dumps(computed_levels, indent=2)}
-</computed_levels>
-"""
             # v8.6 MUST-HAVE: инвалидация, ATR, текущая цена — для жёсткой валидации SL и R:R
             inv_levels = (technical_data or {}).get("invalidation_levels") or {}
             atr_m15 = (technical_data or {}).get("atr_m15") or 0
             cur_price = (technical_data or {}).get("current_price") or 0
+            
+            invalidation_data = None
             if inv_levels or atr_m15 or cur_price:
-                inv_atr_block = f"""
-<invalidation_and_atr>
-CURRENT_PRICE: {cur_price}
-ATR_M15(14): {atr_m15}
-RULES:
-- For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
-- For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
-- SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
-- Entry: use CURRENT_PRICE for market execution, or a limit within 0.1% of it.
-- Minimum R:R = 1.2. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.2 → WAIT.
-INVALIDATION LEVELS:
-{json.dumps(inv_levels, indent=2)}
-</invalidation_and_atr>
-"""
-                user_prompt_text += inv_atr_block
-
+                invalidation_data = {
+                    "invalidation_levels": inv_levels,
+                    "atr_m15": atr_m15,
+                    "current_price": cur_price
+                }
+            
             # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
-            htf_block = ""
             htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
-            if htf_context:
-                htf_block = f"""
-<htf_context>
-Higher Timeframe bias for Step 1 (H4 → H1). Use this FIRST to determine dominant trend and zones before looking at M15 entry.
-- H4: macro trend and zone (premium/discount).
-- H1: intermediate structure and last confirmed BOS/CHoCH.
-Do NOT take M15 entries against strong HTF trend unless there is clear reversal confirmation.
-{json.dumps(htf_context, indent=2)}
-</htf_context>
-"""
-            user_prompt_text += htf_block + f"""
-<raw_technical_data>
-M15 execution data: OHLCV candles, Order Blocks, FVG, Liquidity, BOS/CHoCH (including confirmed).
-Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
-{json.dumps(technical_data, indent=2)}
-</raw_technical_data>
 
+            # Формируем текстовый промпт через общую функцию (без изображений для Gemini)
+            user_prompt_text = _build_common_prompt_section(
+                current_time_utc=time_str,
+                session_info=session_info,
+                news_data=news_data,
+                computed_levels=computed_levels,
+                technical_data=technical_data,
+                balance=balance,
+                daily_loss_limit=daily_loss_limit,
+                risk_percent=risk_percent,
+                language=language,
+                user_idea=user_idea,
+                manual_entry=manual_entry,
+                manual_sl=manual_sl,
+                manual_tp=manual_tp,
+                include_visual_section=False,  # Gemini без картинок в этом методе
+                invalidation_data=invalidation_data,
+                htf_context=htf_context
+            )
+            
+            # Добавляем специфичный task для Gemini с учётом invalidation и HTF
+            task_addition = """
 <task>
 1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
 2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
@@ -1036,7 +1115,12 @@ Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
 6. Output the STRICT JSON decision with the required fields.
 </task>
 """
-            
+            # Заменяем стандартный <task> на расширенную версию
+            if "<task>" in user_prompt_text:
+                start = user_prompt_text.find("<task>")
+                end = user_prompt_text.find("</task>") + len("</task>")
+                user_prompt_text = user_prompt_text[:start] + task_addition + user_prompt_text[end:]
+
             # Формируем полный промпт (системный + пользовательский)
             full_prompt = self.SYSTEM_PROMPT + "\n\n" + user_prompt_text
             
@@ -1400,6 +1484,7 @@ Use this for Step 2 (LTF Entry): trigger candle, entry zone, invalidation.
             entry = trade_context.get('entry_price')
             sl = trade_context.get('stop_loss')
             tp = trade_context.get('take_profit')
+            tp1 = trade_context.get('take_profit_1')  # Double TP: первый тейк на 50% позиции
             current_price = trade_context.get('current_price')
             progress_pct = (trade_context.get('progress_ratio') or 0.0) * 100.0
 
@@ -1429,6 +1514,9 @@ Higher timeframe bias (H4 → H1). Use for context: if HTF trend and zone still 
             # M5 контекст без htf_context в выводе (он уже в отдельном блоке)
             technical_m5_for_prompt = {k: v for k, v in technical_context.items() if k != "htf_context"} if isinstance(technical_context, dict) else technical_context
 
+            # Double TP информация для менеджера
+            tp1_info = f"\nTake Profit 1 (50%): {tp1}" if tp1 and tp1 > 0 else ""
+
             manager_prompt = f"""
 TRADE MANAGEMENT REQUEST for XAUUSD
 
@@ -1443,7 +1531,7 @@ Session Details: {json.dumps(session_info, indent=2)}
 Direction: {direction}
 Entry Price: {entry}
 Stop Loss: {sl}
-Take Profit: {tp}
+Take Profit: {tp}{tp1_info}
 Current Price: {current_price}
 Progress To TP: {progress_pct:.1f}%
 </active_trade>

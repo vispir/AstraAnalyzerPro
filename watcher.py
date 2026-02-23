@@ -414,26 +414,50 @@ def is_price_near_key_levels(current_price, key_levels, swing_pivot_high=None, s
       - High_250 / Low_250 — верх/низ диапазона за 250 баров (LOOKBACK);
       - swing_pivot_high / swing_pivot_low — последний свинг-хай/лоу (Strong/Weak High/Low).
     Возвращает (True, описание) если цена в пределах threshold_percent от любого уровня.
+    
+    Fallback: если key_levels пустой, используем только swing_pivot_high/low.
     """
-    if not key_levels and swing_pivot_high is None and swing_pivot_low is None:
+    # Fallback: если key_levels пустой, проверяем только swing pivots
+    has_any_levels = bool(key_levels) or swing_pivot_high is not None or swing_pivot_low is not None
+    if not has_any_levels:
         return False, "Нет ключевых уровней"
+    
     threshold = current_price * (threshold_percent / 100)
     near = []
-    levels_to_check = [
-        ("Equilibrium", key_levels.get('Equilibrium_Price') if key_levels else None),
-        ("High_250", key_levels.get('High_250') if key_levels else None),
-        ("Low_250", key_levels.get('Low_250') if key_levels else None),
-        ("Swing High", swing_pivot_high),
-        ("Swing Low", swing_pivot_low),
-    ]
-    for name, level in levels_to_check:
-        if level is not None:
-            try:
-                lv = float(level)
-                if lv > 0 and abs(current_price - lv) <= threshold:
-                    near.append(f"{name}={lv:.2f}")
-            except (TypeError, ValueError):
-                pass
+    
+    # Уровни из key_levels (если есть)
+    if key_levels:
+        levels_from_key = [
+            ("Equilibrium", key_levels.get('Equilibrium_Price')),
+            ("High_250", key_levels.get('High_250')),
+            ("Low_250", key_levels.get('Low_250')),
+        ]
+        for name, level in levels_from_key:
+            if level is not None:
+                try:
+                    lv = float(level)
+                    if lv > 0 and abs(current_price - lv) <= threshold:
+                        near.append(f"{name}={lv:.2f}")
+                except (TypeError, ValueError):
+                    pass
+    
+    # Swing pivots (всегда проверяем, даже если key_levels пустой)
+    if swing_pivot_high is not None:
+        try:
+            lv = float(swing_pivot_high)
+            if lv > 0 and abs(current_price - lv) <= threshold:
+                near.append(f"Swing High={lv:.2f}")
+        except (TypeError, ValueError):
+            pass
+    
+    if swing_pivot_low is not None:
+        try:
+            lv = float(swing_pivot_low)
+            if lv > 0 and abs(current_price - lv) <= threshold:
+                near.append(f"Swing Low={lv:.2f}")
+        except (TypeError, ValueError):
+            pass
+    
     if near:
         return True, ", ".join(near[:5])
     return False, "Далеко от ключевых уровней"
@@ -527,11 +551,16 @@ def extract_llm_verdict(parsed):
     }
 
 
-def validate_stop_loss(entry, sl, atr):
+def validate_stop_loss(entry, sl, atr, tp=None):
     """
     Task 6: Validate that SL meets minimum requirements for Gold trading.
-    Rejects SL < max($5, 0.75*ATR) or SL > 3*ATR.
-    
+    Rejects SL < max($5, 1.5*ATR) or SL > 4.5*ATR (XAU/USD M15: защита от шума + структурные сетапы).
+    R:R-зависимый лимит: при SL > 3.5×ATR требуется min R:R ≥ 1.5, иначе ≥ 1.2.
+
+    Args:
+        entry, sl, atr: уровни и ATR M15
+        tp: опционально — take profit для проверки R:R (если не передан, проверка R:R пропускается)
+
     Returns:
         Tuple: (is_valid: bool, reason: str)
     """
@@ -542,13 +571,30 @@ def validate_stop_loss(entry, sl, atr):
         if entry_f <= 0 or sl_f <= 0:
             return True, "SL valid"  # skip if no levels
         sl_distance = abs(entry_f - sl_f)
+        if atr_f <= 0:
+            return True, "SL valid"
+        sl_in_atr = round(sl_distance / atr_f, 2)
+
         MIN_SL_FIXED = 5.0
-        MIN_SL_ATR_MULTIPLIER = 0.75
+        MIN_SL_ATR_MULTIPLIER = 1.5   # XAU/USD: минимум 1.5×ATR для защиты от шума (M15-H1)
+        MAX_SL_ATR_MULTIPLIER = 4.5   # XAU/USD: максимум 4.5×ATR для M15 (баланс структурных сетапов)
+        SL_RR_THRESHOLD_ATR = 3.5     # выше этого порога требуем R:R ≥ 1.5
+
         min_required = max(MIN_SL_FIXED, atr_f * MIN_SL_ATR_MULTIPLIER)
         if sl_distance < min_required:
             return False, f"SL too narrow: ${sl_distance:.2f} < required ${min_required:.2f} (min ${MIN_SL_FIXED} or {MIN_SL_ATR_MULTIPLIER}*ATR)"
-        if sl_distance > atr_f * 3.0:
-            return False, f"SL too wide: ${sl_distance:.2f} > 3*ATR={atr_f*3.0:.2f}"
+
+        # R:R-зависимый порог: широкий SL → требуем лучший R:R
+        tp_f = safe_float(tp, 0) if tp is not None else None
+        if tp_f and tp_f > 0 and sl_distance > 0:
+            reward = abs(tp_f - entry_f)
+            rr = reward / sl_distance
+            min_rr_required = 1.5 if sl_in_atr > SL_RR_THRESHOLD_ATR else 1.2
+            if rr < min_rr_required:
+                return False, f"R:R={rr:.2f} < {min_rr_required} (требуется для SL={sl_in_atr:.1f}×ATR)"
+
+        if sl_in_atr > MAX_SL_ATR_MULTIPLIER:
+            return False, f"SL too wide: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR) > {MAX_SL_ATR_MULTIPLIER}×ATR"
         return True, "SL valid"
     except Exception as e:
         logger.debug(f"validate_stop_loss error: {e}")
@@ -678,40 +724,69 @@ def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min
     - SL за уровнем инвалидации (BUY: SL <= inv_buy; SELL: SL >= inv_sell).
     - Entry в пределах entry_tolerance_pct от current_price, иначе подменяем на current_price.
     - Если confluence любой false → WAIT.
+    
+    Double TP поддержка: если указан tp1, R:R считается по tp1 (первый тейк на 50% позиции).
     Возвращает (action, entry, sl, tp, reason_override).
     """
     action = verdict.get('action', 'WAIT')
     entry = verdict.get('entry')
     sl = verdict.get('sl')
     tp = verdict.get('tp')
+    tp1 = verdict.get('tp1')
     reason_override = None
     inv_buy = invalidation_levels.get('invalidation_buy')
     inv_sell = invalidation_levels.get('invalidation_sell')
-    
+
     if action not in ('BUY', 'SELL'):
         return action, entry, sl, tp, reason_override
-    
+
     entry_f = safe_float(entry, 0)
     sl_f = safe_float(sl, 0)
     tp_f = safe_float(tp, 0)
+    tp1_f = safe_float(tp1, 0) if tp1 is not None else None
     if entry_f <= 0:
         entry_f = current_price
     if sl_f <= 0 or tp_f <= 0:
         return 'WAIT', entry_f, sl_f, tp_f, 'Отсутствуют SL или TP в ответе LLM.'
-    
+
     # Entry: если далеко от текущей цены — подменяем на current_price
     if current_price > 0:
         pct_diff = abs(entry_f - current_price) / current_price * 100
         if pct_diff > entry_tolerance_pct:
             logger.info(f"🔄 v8.6: Entry скорректирован с {entry_f:.2f} на current_price {current_price:.2f} (отклонение {pct_diff:.1f}%)")
             entry_f = current_price
-    
-    # R:R
+
+    # Double TP валидация: проверяем порядок уровней (tp1 должен быть между entry и tp)
+    if tp1_f and tp1_f > 0:
+        if action == 'BUY':
+            # Для BUY: entry < tp1 <= tp
+            if not (entry_f < tp1_f <= tp_f):
+                logger.warning(f"⚠️ tp1={tp1_f:.2f} некорректен для BUY (entry={entry_f:.2f}, tp={tp_f:.2f}) — игнорируем tp1")
+                tp1_f = None
+        else:  # SELL
+            # Для SELL: entry > tp1 >= tp
+            if not (entry_f > tp1_f >= tp_f):
+                logger.warning(f"⚠️ tp1={tp1_f:.2f} некорректен для SELL (entry={entry_f:.2f}, tp={tp_f:.2f}) — игнорируем tp1")
+                tp1_f = None
+
+    # R:R: если указан tp1 (и прошёл валидацию), считаем по нему (первый тейк на 50% позиции)
+    reward_tp = abs(tp_f - entry_f)
+    reward_tp1 = abs(tp1_f - entry_f) if tp1_f and tp1_f > 0 else None
     risk = abs(entry_f - sl_f)
-    reward = abs(tp_f - entry_f)
-    rr = reward / risk if risk > 0 else 0
+    
+    # Для Double TP: минимальный R:R проверяем по tp1 (более консервативно)
+    if reward_tp1 and reward_tp1 > 0:
+        rr = reward_tp1 / risk if risk > 0 else 0
+        rr_source = f"tp1 ({rr:.2f})"
+        logger.debug(f"📊 R:R расчёт по tp1: risk={risk:.2f}, reward_tp1={reward_tp1:.2f}, rr={rr:.2f}")
+    else:
+        rr = reward_tp / risk if risk > 0 else 0
+        rr_source = f"tp ({rr:.2f})"
+        logger.debug(f"📊 R:R расчёт по tp: risk={risk:.2f}, reward_tp={reward_tp:.2f}, rr={rr:.2f}")
+    
     if rr < min_rr:
-        return 'WAIT', entry_f, sl_f, tp_f, f'R:R={rr:.2f} < {min_rr} (минимальный порог). Риск/прибыль недопустимы.'
+        tp_used = "tp1" if reward_tp1 else "tp"
+        return 'WAIT', entry_f, sl_f, tp_f, f'R:R={rr:.2f} по {tp_used} < {min_rr} (минимальный порог). Риск/прибыль недопустимы.'
     
     # Инвалидация: BUY — SL должен быть на или ниже invalidation_buy; SELL — SL на или выше invalidation_sell
     if action == 'BUY' and inv_buy is not None and sl_f > inv_buy + 0.5:
@@ -980,6 +1055,14 @@ def format_debug_report(status_data):
     if status_data.get('price', 0) > 0:
         msg += "<b>💹 Рыночные данные:</b>\n"
         msg += f"├ Цена: <code>${status_data['price']:.2f}</code>\n"
+        # ATR и SL×ATR только для торгового сигнала (BUY/SELL)
+        if status_data.get('status') == 'signal_sent':
+            atr_val = status_data.get('atr_m15') or 0
+            sl_ratio = status_data.get('sl_atr_ratio')
+            if atr_val and atr_val > 0:
+                msg += f"├ ATR (14): <code>${atr_val:.2f}</code>\n"
+            if sl_ratio is not None:
+                msg += f"├ SL: <code>{sl_ratio:.2f}×ATR</code> (лимит 4.5×ATR)\n"
         
         if 'trend' in status_data:
             trend_emoji = "📈" if "UP" in status_data['trend'] else "📉" if "DOWN" in status_data['trend'] else "↔️"
@@ -1396,7 +1479,7 @@ def run_analysis_cycle():
             # Последний fallback на старую логику (для обратной совместимости)
             current_zone, position_in_range_pct, global_high, global_low = calculate_forced_zones(candles)
             zone_source = 'CALCULATE_FORCED'
-            logger.warning(f"⚠️ Используем старую логику calculate_forced_zones (fallback): [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
+            logger.warning(f"⚠️ zone_source={zone_source}: Используем старую логику calculate_forced_zones (fallback) — детектор не вернул зоны и key_levels пустой. Range: [{global_low:.2f} - {global_high:.2f}], pos={position_in_range_pct:.1f}%")
     
     # ВАЖНО: Гарантируем, что position_in_range_pct находится в разумных пределах (0-100%)
     # Это защита от некорректных значений из детектора или fallback
@@ -1456,9 +1539,13 @@ def run_analysis_cycle():
         threshold_percent=0.5
     )
     
+    # ATR M15 для отчёта и валидации (доступен в format_debug_report для любого статуса)
+    atr_m15_initial = compute_atr(candles, 14) if candles else 0.0
+    
     # Базовый статус
     status_data = {
         'price': current_price,
+        'atr_m15': atr_m15_initial,
         'trend': swing_trend,
         'internal_trend': internal_trend,
         'zone': current_zone,
@@ -2025,14 +2112,20 @@ def run_analysis_cycle():
     strict_action, strict_entry, strict_sl, strict_tp, strict_reason = validate_llm_verdict_strict(
         verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5
     )
+    
+    # 🔍 DEBUG: Логируем что было ДО валидации
+    logger.info(f"🔍 LLM Verdict ДО валидации: action={verdict.get('action')}, confidence={verdict.get('confidence')}%, entry={verdict.get('entry')}, sl={verdict.get('sl')}, tp={verdict.get('tp')}")
+    
     if strict_reason:
-        logger.warning(f"🛑 v8.6 Strict validation: {verdict.get('action')} → WAIT. {strict_reason}")
+        logger.warning(f"🛑 v8.6 Strict validation: {verdict.get('action')} → WAIT. Причина: {strict_reason}")
+        logger.warning(f"   Entry: {strict_entry:.2f}, SL: {strict_sl:.2f}, TP: {strict_tp:.2f}")
         verdict['action'] = 'WAIT'
         verdict['reason'] = f"[v8.6] {strict_reason}. " + (verdict.get('reason') or '')
         verdict['entry'] = strict_entry
         verdict['sl'] = strict_sl
         verdict['tp'] = strict_tp
     else:
+        logger.info(f"✅ v8.6 Strict validation: {verdict.get('action')} прошёл валидацию")
         verdict['entry'] = strict_entry
         verdict['sl'] = strict_sl
         verdict['tp'] = strict_tp
@@ -2040,12 +2133,15 @@ def run_analysis_cycle():
     # Task 6: Minimum SL validation (reject too tight or too wide SL)
     if strict_action in ('BUY', 'SELL') and strict_entry and strict_sl:
         atr_m15 = analysis_light.get('atr_m15', 10.0) or 10.0
-        is_valid_sl, sl_reason = validate_stop_loss(strict_entry, strict_sl, atr_m15)
+        is_valid_sl, sl_reason = validate_stop_loss(strict_entry, strict_sl, atr_m15, tp=strict_tp)
         if not is_valid_sl:
-            logger.warning(f"⚠️ Trade REJECTED: {sl_reason}")
+            logger.warning(f"⚠️ Trade REJECTED Task 6: {sl_reason}")
+            logger.warning(f"   Entry: {strict_entry:.2f}, SL: {strict_sl:.2f}, ATR: {atr_m15:.2f}")
             verdict['action'] = 'WAIT'
             verdict['reason'] = (verdict.get('reason') or '') + f" | REJECTED: {sl_reason}"
-    
+        else:
+            logger.info(f"✅ Task 6 SL validation: SL={strict_sl:.2f} корректен (ATR={atr_m15:.2f})")
+
     llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
     
@@ -2060,27 +2156,31 @@ def run_analysis_cycle():
     
     # Task 7 & 8: Cooldown after SL and trade limits (before confirming signal)
     if is_confirmed:
+        logger.info(f"🔍 Task 7: Проверка кулдауна после SL для {llm_action}...")
         structure_breaks = (analysis.get('all_swing_choch') or []) + (analysis.get('all_swing_bos') or [])
         can_cooldown, cooldown_reason = check_cooldown_after_sl(llm_action, datetime.now(timezone.utc), structure_breaks)
         if not can_cooldown:
-            logger.warning(f"⚠️ Trade REJECTED: {cooldown_reason}")
+            logger.warning(f"⚠️ Trade REJECTED Task 7: {cooldown_reason}")
             verdict['action'] = 'WAIT'
             verdict['reason'] = (verdict.get('reason') or '') + f" | {cooldown_reason}"
             llm_action = 'WAIT'
             is_confirmed = False
         else:
+            logger.info(f"✅ Task 7 Cooldown: пройден")
+            logger.info(f"🔍 Task 8: Проверка лимитов для {llm_action}...")
             can_limits, limit_reason = check_trade_limits(llm_action)
             if not can_limits:
-                logger.warning(f"⚠️ Trade REJECTED: {limit_reason}")
+                logger.warning(f"⚠️ Trade REJECTED Task 8: {limit_reason}")
                 verdict['action'] = 'WAIT'
                 verdict['reason'] = (verdict.get('reason') or '') + f" | {limit_reason}"
                 llm_action = 'WAIT'
                 is_confirmed = False
             else:
-                logger.info(f"✅ Trade limits OK: {limit_reason}")
+                logger.info(f"✅ Task 8 Trade limits: {limit_reason}")
 
         # Fix #8: Sweep freshness gate — для моделей со свипом требуем свежий свип (≤10 бар M15)
         if is_confirmed and model_name in ('LIQUIDITY_SWEEP_REVERSAL', 'RANGE_SWEEP'):
+            logger.info(f"🔍 Fix #8: Проверка свежести свипа для модели {model_name}...")
             liquidity_list = analysis.get('liquidity') or []
             if llm_action == 'BUY':
                 has_recent_sweep = any(
@@ -2097,11 +2197,13 @@ def run_analysis_cycle():
                     f"Fix #8: модель {model_name} требует свежий свип ликвидности (≤10 бар M15). "
                     f"Для {llm_action}: нет недавнего {'SWEPT_LOW' if llm_action == 'BUY' else 'SWEPT_HIGH'}."
                 )
-                logger.warning(f"⚠️ Trade REJECTED: {sweep_reason}")
+                logger.warning(f"⚠️ Trade REJECTED Fix #8: {sweep_reason}")
                 verdict['action'] = 'WAIT'
                 verdict['reason'] = (verdict.get('reason') or '') + f" | {sweep_reason}"
                 llm_action = 'WAIT'
                 is_confirmed = False
+            else:
+                logger.info(f"✅ Fix #8: Свежий свип найден")
     
     low_conf_override = verdict.get('low_confidence_override', False)
     original_action = verdict.get('original_action')
@@ -2181,6 +2283,12 @@ def run_analysis_cycle():
         status_data['status'] = 'signal_sent'
         status_data['reason'] = f'{mode_text} Gemini подтвердил {llm_action}!\n' + '\n'.join(impulse_reasons)
         status_data['llm_verdict'] = ai_response
+        atr_m15_val = analysis_light.get('atr_m15') or 0
+        status_data['atr_m15'] = atr_m15_val
+        if verdict.get('entry') is not None and verdict.get('sl') is not None and atr_m15_val > 0:
+            status_data['sl_atr_ratio'] = round(abs(float(verdict['entry']) - float(verdict['sl'])) / atr_m15_val, 2)
+        else:
+            status_data['sl_atr_ratio'] = None
         send_debug_notification(status_data)
     
     else:
@@ -2353,7 +2461,7 @@ def run_trade_manager_cycle():
             if user_ids_cancel:
                 msg_cancel = (
                     f"⏱ <b>Сделка отменена</b>\n"
-                    f"id={trade_id} | Нет даты создания сигнала — отменяем. Охотник снова ищет сделку."
+                    f"id={trade_id} | Нет даты создания сиг��ала — отменяем. Охотник снова ищет сделку."
                 )
                 telegram_service.broadcast_deals_only(user_ids_cancel, msg_cancel)
             return
