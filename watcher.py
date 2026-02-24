@@ -217,33 +217,63 @@ def compute_atr(candles, period=14):
 
 
 def get_invalidation_levels(analysis, buffer=0.5):
-    """
-    Уровни инвалидации сетапа для LLM: SL должен быть за этими уровнями.
-    BUY: инвалидация = swing_pivot_low (SL должен быть на или ниже этого уровня).
-    SELL: инвалидация = swing_pivot_high (SL должен быть на или выше).
-    buffer добавляется к уровню для допуска на вick.
-    """
+    inv_buy = None
+    inv_sell = None
+    current_price = safe_float(analysis.get('current_price'), 0)
+    atr = safe_float(analysis.get('atr_m15'), 8.0) or 8.0
+    max_sl_distance = atr * 4.5
+
+    # BUY: ищем ближайший BULL OB/FVG ниже цены
+    for ob in analysis.get('order_blocks', []):
+        if 'BULL' in (ob.get('type') or ob.get('ob_type') or '').upper():
+            bot = safe_float(ob.get('bottom'), 0)
+            if bot <= 0:
+                continue
+            if current_price > 0 and (current_price - bot) > max_sl_distance:
+                continue  # слишком далеко
+            if bot > 0 and (inv_buy is None or bot > inv_buy):
+                inv_buy = bot - buffer  # берём ближайший (самый высокий снизу)
+
+    for fvg in analysis.get('fvg', []):
+        if 'BULL' in (fvg.get('type') or '').upper():
+            bot = safe_float(fvg.get('bottom'), 0)
+            if bot <= 0:
+                continue
+            if current_price > 0 and (current_price - bot) > max_sl_distance:
+                continue
+            if inv_buy is None or bot > inv_buy:
+                inv_buy = bot - buffer
+
+    # SELL: ищем ближайший BEAR OB/FVG выше цены
+    for ob in analysis.get('order_blocks', []):
+        if 'BEAR' in (ob.get('type') or ob.get('ob_type') or '').upper():
+            top = safe_float(ob.get('top'), 0)
+            if top <= 0:
+                continue
+            if current_price > 0 and (top - current_price) > max_sl_distance:
+                continue
+            if top > 0 and (inv_sell is None or top < inv_sell):
+                inv_sell = top + buffer  # берём ближайший (самый низкий сверху)
+
+    for fvg in analysis.get('fvg', []):
+        if 'BEAR' in (fvg.get('type') or '').upper():
+            top = safe_float(fvg.get('top'), 0)
+            if top <= 0:
+                continue
+            if current_price > 0 and (top - current_price) > max_sl_distance:
+                continue
+            if inv_sell is None or top < inv_sell:
+                inv_sell = top + buffer
+
+    # Fallback: ATR-based если OB/FVG не найдены
+    if inv_buy is None and current_price > 0:
+        inv_buy = round(current_price - atr * 2.0, 2)
+    if inv_sell is None and current_price > 0:
+        inv_sell = round(current_price + atr * 2.0, 2)
+
     sw_high = safe_float(analysis.get('swing_pivot_high'), 0)
     sw_low = safe_float(analysis.get('swing_pivot_low'), 0)
-    # Дополнительно: из OB/FVG можно взять ближайшие границы (для BUY — минимум низов OB/FVG, для SELL — максимум верхов)
-    inv_buy = sw_low - buffer if sw_low > 0 else None
-    inv_sell = sw_high + buffer if sw_high > 0 else None
-    for ob in analysis.get('order_blocks', [])[:5]:
-        bot = safe_float(ob.get('bottom'), 0)
-        if bot > 0 and (inv_buy is None or bot < inv_buy + buffer):
-            inv_buy = bot - buffer
-    for fvg in analysis.get('fvg', [])[:5]:
-        bot = safe_float(fvg.get('bottom'), 0)
-        if bot > 0 and (inv_buy is None or bot < inv_buy + buffer):
-            inv_buy = bot - buffer
-    for ob in analysis.get('order_blocks', [])[:5]:
-        top = safe_float(ob.get('top'), 0)
-        if top > 0 and (inv_sell is None or top > inv_sell - buffer):
-            inv_sell = top + buffer
-    for fvg in analysis.get('fvg', [])[:5]:
-        top = safe_float(fvg.get('top'), 0)
-        if top > 0 and (inv_sell is None or top > inv_sell - buffer):
-            inv_sell = top + buffer
+
     return {
         'invalidation_buy': round(inv_buy, 2) if inv_buy is not None else None,
         'invalidation_sell': round(inv_sell, 2) if inv_sell is not None else None,
@@ -2047,7 +2077,8 @@ def run_analysis_cycle():
     
     m15_candles = data.get('candles', [])[-50:] if 'error' not in data and data.get('candles') else []
     atr_m15 = compute_atr(m15_candles, 14) if m15_candles else 0.0
-    invalidation = get_invalidation_levels(analysis, buffer=0.5)
+    analysis_with_price = {**analysis, 'current_price': current_price, 'atr_m15': atr_m15}
+    invalidation = get_invalidation_levels(analysis_with_price, buffer=0.5)
     if atr_m15 > 0:
         logger.info(f"✓ ATR(14) M15 = {atr_m15:.2f} | Invalidation BUY<={invalidation.get('invalidation_buy')} SELL>={invalidation.get('invalidation_sell')}")
     
