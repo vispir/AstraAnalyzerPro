@@ -509,7 +509,7 @@ class LLMService:
     "- **Entry**: Current price or limit at OB/FVG\n"
     "- **Stop Loss**: Beyond LOCAL (Internal M15) invalidation structure + $0.50-1.00 buffer\n"
     "  * Use NEAREST Internal OB or FVG for SL — NOT Swing High/Low\n"
-    "  * Keep SL within 1.5–4.5×ATR from entry (Gold M15 typical: $10–36)\n"
+    "  * Keep SL within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5138 (1.5×ATR, 12 points) ✓\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5134 (2.0×ATR, 16 points) ✓\n"
     "  * If Swing Low = $4975 and distance = 170 pts (21×ATR) — IGNORE IT\n"

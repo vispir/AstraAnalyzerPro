@@ -583,13 +583,13 @@ def extract_llm_verdict(parsed):
 
 def validate_stop_loss(entry, sl, atr, tp=None):
     """
-    Task 6: Validate that SL meets minimum requirements for Gold trading.
-    Rejects SL < max($5, 1.5*ATR) or SL > 4.5*ATR (XAU/USD M15: защита от шума + структурные сетапы).
-    R:R-зависимый лимит: при SL > 3.5×ATR требуется min R:R ≥ 1.5, иначе ≥ 1.2.
+    Мягкий страж SL: только абсолютный минимум $5 (защита от бага LLM).
+    Узкий/широкий SL по ATR — только WARNING в лог, не отклонение.
+    Главный фильтр плохих сделок — R:R ≥ 1.2 (и 1.5 при широком SL).
 
     Args:
         entry, sl, atr: уровни и ATR M15
-        tp: опционально — take profit для проверки R:R (если не передан, проверка R:R пропускается)
+        tp: опционально — take profit для проверки R:R
 
     Returns:
         Tuple: (is_valid: bool, reason: str)
@@ -599,22 +599,32 @@ def validate_stop_loss(entry, sl, atr, tp=None):
         sl_f = safe_float(sl, 0)
         atr_f = safe_float(atr, 10.0)
         if entry_f <= 0 or sl_f <= 0:
-            return True, "SL valid"  # skip if no levels
+            return True, "SL valid"
         sl_distance = abs(entry_f - sl_f)
         if atr_f <= 0:
             return True, "SL valid"
         sl_in_atr = round(sl_distance / atr_f, 2)
 
         MIN_SL_FIXED = 5.0
-        MIN_SL_ATR_MULTIPLIER = 1.5   # XAU/USD: минимум 1.5×ATR для защиты от шума (M15-H1)
-        MAX_SL_ATR_MULTIPLIER = 4.5   # XAU/USD: максимум 4.5×ATR для M15 (баланс структурных сетапов)
+        MIN_SL_ATR_MULTIPLIER = 1.0   # мягкий порог (только WARNING если < 1.0×ATR)
+        MAX_SL_ATR_MULTIPLIER = 6.0   # мягкий порог (только WARNING если > 6.0×ATR)
         SL_RR_THRESHOLD_ATR = 3.5     # выше этого порога требуем R:R ≥ 1.5
 
-        min_required = max(MIN_SL_FIXED, atr_f * MIN_SL_ATR_MULTIPLIER)
-        if sl_distance < min_required:
-            return False, f"SL too narrow: ${sl_distance:.2f} < required ${min_required:.2f} (min ${MIN_SL_FIXED} or {MIN_SL_ATR_MULTIPLIER}*ATR)"
+        # Абсолютный минимум $5 (защита от бага LLM)
+        if sl_distance < MIN_SL_FIXED:
+            return False, f"SL too small: ${sl_distance:.2f} < $5.00 (technical error)"
 
-        # R:R-зависимый порог: широкий SL → требуем лучший R:R
+        # Мягкие пределы ATR (только WARNING, не отклонение)
+        if sl_in_atr < 1.0:
+            logger.warning(
+                f"⚠️ SL узкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR < 1.0×ATR), но LLM знает что делает"
+            )
+        if sl_in_atr > MAX_SL_ATR_MULTIPLIER:
+            logger.warning(
+                f"⚠️ SL широкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR > {MAX_SL_ATR_MULTIPLIER}×ATR), но LLM знает что делает"
+            )
+
+        # R:R — главный фильтр (отсечёт плохие сделки)
         tp_f = safe_float(tp, 0) if tp is not None else None
         if tp_f and tp_f > 0 and sl_distance > 0:
             reward = abs(tp_f - entry_f)
@@ -623,12 +633,117 @@ def validate_stop_loss(entry, sl, atr, tp=None):
             if rr < min_rr_required:
                 return False, f"R:R={rr:.2f} < {min_rr_required} (требуется для SL={sl_in_atr:.1f}×ATR)"
 
-        if sl_in_atr > MAX_SL_ATR_MULTIPLIER:
-            return False, f"SL too wide: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR) > {MAX_SL_ATR_MULTIPLIER}×ATR"
-        return True, "SL valid"
+        return True, "SL valid (LLM judgment)"
     except Exception as e:
         logger.debug(f"validate_stop_loss error: {e}")
         return True, "SL valid"
+
+
+def fact_check_llm(verdict, analysis):
+    """
+    Уровень 1 защиты "Доверяй, но проверяй": проверяет утверждения LLM против данных smc_detector.
+    Если LLM упоминает CHoCH/BOS/sweep/fresh OB, но в данных этого нет — снижаем confidence.
+    Если confidence < 55 → WAIT (low_confidence_override).
+    """
+    confidence = verdict.get('confidence', 0)
+    reason = (verdict.get('reason') or '').lower()
+    action = verdict.get('action', 'WAIT')
+
+    # Проверка 1: CHoCH
+    if 'choch' in reason and action in ('BUY', 'SELL'):
+        choch_confirmed = analysis.get('choch_confirmed') or []
+        int_choch_confirmed = analysis.get('internal_choch_confirmed') or []
+        has_real_choch = len(choch_confirmed) > 0 or len(int_choch_confirmed) > 0
+        if not has_real_choch:
+            confidence -= 15
+            logger.warning("⚠️ LLM утверждает CHoCH, но в данных нет confirmed CHoCH")
+
+    # Проверка 2: Liquidity sweep
+    if 'sweep' in reason or 'liquidity' in reason:
+        liquidity = analysis.get('liquidity') or []
+        has_swept = any(liq.get('swept') for liq in liquidity)
+        if not has_swept:
+            confidence -= 10
+            logger.warning("⚠️ LLM утверждает sweep ликвидности, но в данных нет swept=true")
+
+    # Проверка 3: Fresh OB
+    if 'fresh ob' in reason or 'unmitigated' in reason:
+        order_blocks = analysis.get('order_blocks') or []
+        has_fresh_ob = any(not ob.get('mitigated') for ob in order_blocks)
+        if not has_fresh_ob:
+            confidence -= 10
+            logger.warning("⚠️ LLM утверждает свежий OB, но все OB mitigated")
+
+    # Проверка 4: BOS
+    if 'bos' in reason and action in ('BUY', 'SELL'):
+        bos_confirmed = analysis.get('bos_confirmed') or []
+        int_bos_confirmed = analysis.get('internal_bos_confirmed') or []
+        has_real_bos = len(bos_confirmed) > 0 or len(int_bos_confirmed) > 0
+        if not has_real_bos:
+            confidence -= 15
+            logger.warning("⚠️ LLM утверждает BOS, но в данных нет confirmed BOS")
+
+    confidence = max(0, min(100, confidence))
+
+    if confidence < 55 and verdict.get('action') in ('BUY', 'SELL'):
+        verdict['low_confidence_override'] = True
+        verdict['original_action'] = verdict.get('action')
+        verdict['action'] = 'WAIT'
+        verdict['reason'] = f"[Fact-check failed] {verdict.get('reason', '')}"
+
+    verdict['confidence'] = confidence
+    return verdict
+
+
+def check_real_facts(analysis, action):
+    """
+    Уровень 2 защиты: хотя бы один реальный факт для входа (swept liquidity, confirmed BOS/CHoCH, цена у структуры).
+    Если нет ни одного — возвращаем False (вызывающий выставит WAIT).
+    """
+    if action not in ('BUY', 'SELL'):
+        return True, "WAIT не требует фактов"
+
+    real_facts = []
+
+    liquidity = analysis.get('liquidity') or []
+    if any(liq.get('swept') for liq in liquidity):
+        real_facts.append('swept_liquidity')
+
+    if len(analysis.get('bos_confirmed') or []) > 0:
+        real_facts.append('bos_confirmed')
+    if len(analysis.get('choch_confirmed') or []) > 0:
+        real_facts.append('choch_confirmed')
+    if len(analysis.get('internal_bos_confirmed') or []) > 0:
+        real_facts.append('int_bos_confirmed')
+    if len(analysis.get('internal_choch_confirmed') or []) > 0:
+        real_facts.append('int_choch_confirmed')
+
+    current_price = safe_float(analysis.get('current_price'), 0)
+    order_blocks = analysis.get('order_blocks') or []
+    fvg_list = analysis.get('fvg') or []
+    price_near_structure = False
+    threshold = current_price * 0.005 if current_price > 0 else 0
+
+    for ob in order_blocks:
+        top = safe_float(ob.get('top'), 0)
+        bottom = safe_float(ob.get('bottom'), 0)
+        if top > 0 and bottom > 0 and bottom - threshold <= current_price <= top + threshold:
+            price_near_structure = True
+            break
+    for fvg in fvg_list:
+        top = safe_float(fvg.get('top'), 0)
+        bottom = safe_float(fvg.get('bottom'), 0)
+        if top > 0 and bottom > 0 and bottom - threshold <= current_price <= top + threshold:
+            price_near_structure = True
+            break
+
+    if price_near_structure:
+        real_facts.append('price_near_structure')
+
+    if len(real_facts) == 0:
+        return False, "Нет реальных фактов для входа (no swept liquidity, no confirmed BOS/CHoCH, no price near structure)"
+
+    return True, f"Реальные факты: {', '.join(real_facts)}"
 
 
 def check_cooldown_after_sl(direction, current_time, current_structure_breaks):
@@ -825,8 +940,10 @@ def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min
         return 'WAIT', entry_f, sl_f, tp_f, f'SL для SELL ({sl_f:.2f}) ниже уровня инвалидации ({inv_sell:.2f}). Стоп должен быть за структурой.'
     
     # Confluence: если любой false — WAIT
+    # ltf_trigger_confirmed исключён — покрывается fact_check_llm() через штраф к confidence
+    # и check_real_facts() через требование реальных фактов
     confluence = verdict.get('confluence') or {}
-    for key in ('htf_aligned', 'ltf_trigger_confirmed', 'rr_acceptable', 'invalidation_respected'):
+    for key in ('htf_aligned', 'rr_acceptable', 'invalidation_respected'):
         if key in confluence and confluence[key] is False:
             return 'WAIT', entry_f, sl_f, tp_f, f'Confluence: {key}=false. Условия входа не выполнены.'
     
@@ -2137,8 +2254,17 @@ def run_analysis_cycle():
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_llm)
-    
-    # v8.6 MUST-HAVE: пост-валидация R:R, инвалидации SL, confluence, entry
+
+    # Уровень 1: Факт-чекинг утверждений LLM (снижение confidence при галлюцинациях)
+    verdict = fact_check_llm(verdict, analysis_light)
+
+    # Уровень 2: Минимум реальных фактов (swept / BOS/CHoCH / price near structure)
+    has_facts, facts_reason = check_real_facts(analysis_light, verdict.get('action'))
+    if not has_facts:
+        verdict['action'] = 'WAIT'
+        verdict['reason'] = f"[No real facts] {facts_reason}. {verdict.get('reason', '')}"
+
+    # v8.6 MUST-HAVE: пост-валидация R:R, инвалидации SL, confluence, entry (Уровень 3)
     invalidation_levels = (analysis_light.get('invalidation_levels') or {})
     strict_action, strict_entry, strict_sl, strict_tp, strict_reason = validate_llm_verdict_strict(
         verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5
