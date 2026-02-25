@@ -1141,7 +1141,8 @@ def format_debug_report(status_data):
         'trade_closed_manager_1r': '✅',
         'move_sl_be': '🔒',
         'trade_cancelled_no_fill': '⏱',
-        'trade_limit_reached': '🛑'
+        'trade_limit_reached': '🛑',
+        'hunter_memory_skip': '🧠'
     }
     
     status_texts = {
@@ -1173,7 +1174,8 @@ def format_debug_report(status_data):
         'trade_closed_manager_1r': 'Manager: Сделка закрыта по рекомендации LLM при 1R (фиксация прибыли)',
         'move_sl_be': 'Manager: SL переведён в безубыток',
         'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут',
-        'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен'
+        'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен',
+        'hunter_memory_skip': 'Цена мало изменилась — вызов LLM пропущен (память охотника)'
     }
     
     status = status_data.get('status', 'unknown')
@@ -2062,10 +2064,19 @@ def run_analysis_cycle():
                 # Если анализ был очень давно (> 120 минут), лучше не полагаться на старый контекст
                 time_ok = minutes_ago <= 120
             
-            # Последний WAIT из-за ошибки API (Gemini не дал ответ) — не считаем вердиктом, не пропускаем LLM
+            # Последний WAIT из-за ошибки API — не считаем вердиктом, не пропускаем LLM (следующий цикл вызовет LLM)
             last_reason = (last_signal.get('llm_reason') or '') + (last_signal.get('llm_full_response') or '')
+            last_reason_lower = last_reason.lower()
             last_was_error_fallback = (
-                'не смог сформировать' in last_reason or 'Ошибка анализа' in last_reason
+                'не смог сформировать' in last_reason or
+                'Ошибка анализа' in last_reason or
+                'ИИ не смог' in last_reason or
+                'сфотографировать' in last_reason or
+                'API error' in last_reason_lower or
+                '503' in last_reason or
+                'overloaded' in last_reason_lower or
+                'high demand' in last_reason_lower or
+                'unavailable' in last_reason_lower
             )
             
             if (
@@ -2369,11 +2380,19 @@ def run_analysis_cycle():
     low_conf_override = verdict.get('low_confidence_override', False)
     original_action = verdict.get('original_action')
     
-    # WAIT из-за ошибки API (Gemini не вернул ответ) — сохраняем в БД; в GUARD 1 следующий цикл
-    # увидит last_was_error_fallback и вызовет LLM снова независимо от изменения цены
+    # WAIT из-за ошибки API — сохраняем в БД; в GUARD 1 следующий цикл увидит last_was_error_fallback и вызовет LLM снова
+    ai_lower = (ai_response or '').lower()
     is_error_fallback = bool(
         ai_response and (
-            'не смог сформировать' in ai_response or 'Ошибка анализа' in ai_response
+            'не смог сформировать' in ai_response or
+            'Ошибка анализа' in ai_response or
+            'ИИ не смог' in ai_response or
+            'сфотографировать' in ai_response or
+            'API error' in ai_lower or
+            '503' in ai_response or
+            'overloaded' in ai_lower or
+            'high demand' in ai_lower or
+            'unavailable' in ai_lower
         )
     )
     if is_error_fallback:
