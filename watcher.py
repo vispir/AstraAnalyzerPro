@@ -820,7 +820,9 @@ def is_daily_trade_limit_reached():
     today = _get_trade_limit_date()
     if _trades_today.get('reset_date') != today:
         _trades_today = {'count': 0, 'reset_date': today}  # reset at 02:00 Astrakhan
-    return _trades_today.get('count', 0) >= 3
+    # Временно отключено для диагностики (сбор статистики 2-3 дня)
+    # return _trades_today.get('count', 0) >= 3
+    return False  # Лимит 3/3 отключен
 
 
 def check_trade_limits(direction):
@@ -841,11 +843,12 @@ def check_trade_limits(direction):
     if session_key not in _trades_by_session:
         _trades_by_session[session_key] = {'BUY': 0, 'SELL': 0}
     by_dir = _trades_by_session[session_key].get(direction, 0)
-    if _trades_today['count'] >= 3:
-        return False, f"Daily limit reached: {_trades_today['count']}/3 trades today"
-    if by_dir >= 2:
-        return False, f"Direction limit reached: {by_dir}/2 {direction} this session"
-    return True, f"Within limits: {_trades_today['count']}/3 today, {by_dir}/2 {direction} this session"
+    # Временно отключено для диагностики (сбор статистики 2-3 дня)
+    # if _trades_today['count'] >= 3:
+    #     return False, f"Daily limit reached: {_trades_today['count']}/3 trades today"
+    # if by_dir >= 2:
+    #     return False, f"Direction limit reached: {by_dir}/2 {direction} this session"
+    return True, f"Within limits (лимиты отключены): {_trades_today['count']}/3 today, {by_dir}/2 {direction} this session"
 
 
 def increment_trade_counter(direction):
@@ -2090,18 +2093,19 @@ def run_analysis_cycle():
             logger.error(f"Ошибка логики памяти LLM (hunter guard): {e}")
     
     # Task 8: Лимит 3/3 за день — не вызываем LLM, экономим токены; пишем в TG
-    if is_daily_trade_limit_reached():
-        n = _trades_today.get('count', 0)
-        reason = f"Лимит сделок {n}/3 за день. Анализ не выполняется (вызов LLM пропущен)."
-        logger.info(f"🛑 {reason}")
-        send_debug_notification({
-            'status': 'trade_limit_reached',
-            'reason': reason,
-            'price': current_price,
-            'trade_limit_today': f"{n}/3"
-        })
-        return
-    
+    # Временно отключено для диагностики (сбор статистики 2-3 дня)
+    # if is_daily_trade_limit_reached():
+    #     n = _trades_today.get('count', 0)
+    #     reason = f"Лимит сделок {n}/3 за день. Анализ не выполняется (вызов LLM пропущен)."
+    #     logger.info(f"🛑 {reason}")
+    #     send_debug_notification({
+    #         'status': 'trade_limit_reached',
+    #         'reason': reason,
+    #         'price': current_price,
+    #         'trade_limit_today': f"{n}/3"
+    #     })
+    #     return
+
     # ========================================================================
     # ФАЗА 3: ВЫЗОВ LLM
     # ========================================================================
