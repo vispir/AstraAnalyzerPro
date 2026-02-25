@@ -2481,7 +2481,9 @@ def run_analysis_cycle():
             logger.info("⚖️ Gemini рекомендует WAIT")
             wait_reason = f'{mode_text} Gemini рекомендует ожидание.'
         
-        db_service.update_last_wait_time()
+        # Не обновляем кулдаун WAIT при ошибке API — следующий цикл должен вызвать LLM снова (без "Кулдаун активен")
+        if not is_error_fallback:
+            db_service.update_last_wait_time()
         
         try:
             signal_id = db_service.save_signal(signal_data_db)
