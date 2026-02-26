@@ -522,6 +522,24 @@ class LLMService:
     "- Ideal R:R > 1.5\n"
     "- If R:R < 1.2 → downgrade to WAIT\n"
     "\n"
+    "# RANGE BREAKOUT STRATEGY\n"
+    "\n"
+    "## Local Range Trading Rules:\n"
+    "- If price is INSIDE local range (local_range_low < price < local_range_high) → WAIT\n"
+    "- Only trade when price CLOSES beyond range boundary (body close, not wick)\n"
+    "- For BUY: Price must close ABOVE local_range_high\n"
+    "- For SELL: Price must close BELOW local_range_low\n"
+    "- SL placement:\n"
+    "  * Conservative: Below opposite range boundary\n"
+    "  * Aggressive: Below nearest OB inside range\n"
+    "- TP target: Opposite range boundary or liquidity pool\n"
+    "- If no confirmed breakout → MAX confidence 45, recommend WAIT\n"
+    "\n"
+    "## Example:\n"
+    "✅ GOOD: Price $5165, local_range_high $5160, close $5165 → BUY (breakout confirmed)\n"
+    "❌ BAD: Price $5155, local_range_high $5160, local_range_low $5140 → WAIT (inside range)\n"
+    "❌ BAD: Price $5162 (wick), close $5158, local_range_high $5160 → WAIT (wick only, no close)\n"
+    "\n"
     "# CONFIDENCE SCORING (v2 — Structure-based)\n"
     "\n"
     "Start from 50 (neutral) and adjust:\n"
@@ -1093,7 +1111,7 @@ class LLMService:
             # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
             htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
 
-            # Формируем текстовый промпт через общую функцию (без изображений для Gemini)
+            # Формируем текстовый промпт через общую функцию (секция visual — только при наличии картинок)
             user_prompt_text = _build_common_prompt_section(
                 current_time_utc=time_str,
                 session_info=session_info,
@@ -1108,7 +1126,7 @@ class LLMService:
                 manual_entry=manual_entry,
                 manual_sl=manual_sl,
                 manual_tp=manual_tp,
-                include_visual_section=False,  # Gemini без картинок в этом методе
+                include_visual_section=bool(chart_images),
                 invalidation_data=invalidation_data,
                 htf_context=htf_context
             )
@@ -1141,8 +1159,14 @@ class LLMService:
             # Логируем URL (без ключа)
             logger.debug(f"Gemini API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
             
+            parts = [{"text": full_prompt}]
+            if chart_images:
+                for _key, b64 in chart_images.items():
+                    if b64:
+                        parts.append({"inline_data": {"mime_type": "image/png", "data": b64}})
+                logger.info(f"Attached {len([p for p in parts if p.get('inline_data')])} chart image(s) to Gemini request")
             payload = {
-                "contents": [{"parts": [{"text": full_prompt}]}],
+                "contents": [{"parts": parts}],
                 "generationConfig": {
                     "maxOutputTokens": 8192,
                     "temperature": 0.7,
@@ -1411,7 +1435,7 @@ class LLMService:
                 technical_data=analysis_data,
                 news_data={"info": "Automated Watcher Alert - No high impact news checked"},
                 computed_levels=computed_levels,
-                chart_images={}, # В фоновом режиме пока без картинок для скорости
+                chart_images=analysis_data.get('chart_images', {}),
                 language='ru'
             )
 

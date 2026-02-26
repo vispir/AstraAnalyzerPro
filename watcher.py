@@ -34,6 +34,8 @@ import logging
 import json
 from services.db_service import db_service
 from services.telegram_service import telegram_service
+from services.chart_service import chart_service
+import pandas as pd
 
 # ============================================================================
 # КОНСТАНТЫ v7.5.2 SMART COOLDOWN
@@ -1142,7 +1144,8 @@ def format_debug_report(status_data):
         'move_sl_be': '🔒',
         'trade_cancelled_no_fill': '⏱',
         'trade_limit_reached': '🛑',
-        'hunter_memory_skip': '🧠'
+        'hunter_memory_skip': '🧠',
+        'range_internal': '⚪'
     }
     
     status_texts = {
@@ -1175,7 +1178,8 @@ def format_debug_report(status_data):
         'move_sl_be': 'Manager: SL переведён в безубыток',
         'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут',
         'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен',
-        'hunter_memory_skip': 'Цена мало изменилась — вызов LLM пропущен (память охотника)'
+        'hunter_memory_skip': 'Цена мало изменилась — вызов LLM пропущен (память охотника)',
+        'range_internal': '⚪ Цена внутри диапазона (нет пробоя)'
     }
     
     status = status_data.get('status', 'unknown')
@@ -1871,7 +1875,27 @@ def run_analysis_cycle():
     # ========================================================================
     # ОСТАЛЬНЫЕ ФИЛЬТРЫ
     # ========================================================================
-    
+
+    # Range Breakout: проверка закрепления за локальным диапазоном (телом свечи)
+    local_range = analysis.get('local_range') or {}
+    local_high = local_range.get('local_range_high')
+    local_low = local_range.get('local_range_low')
+    if local_high is not None and local_low is not None:
+        last_candle = candles[-1] if candles else {}
+        close = safe_float(last_candle.get('close'), 0)
+        breakout_above = close > local_high
+        breakout_below = close < local_low
+        if not breakout_above and not breakout_below:
+            status_data['status'] = 'range_internal'
+            status_data['reason'] = (
+                f'Цена внутри локального диапазона [{local_low:.2f} - {local_high:.2f}]. Нет закрепления за границей.'
+            )
+            send_debug_notification(status_data)
+            return
+        logger.info(f"✅ Range Breakout: закрепление {'выше' if breakout_above else 'ниже'} диапазона")
+    else:
+        logger.warning("⚠️ local_range не найден, пропускаем фильтр")
+
     # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break)
     # v8.5: триггер LLM также при цене близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low)
     if not is_near and not is_near_key_levels and not is_breakout_impulse and not has_swing_break_confirmed:
@@ -2258,8 +2282,25 @@ def run_analysis_cycle():
         analysis_light['candles'] = m15_candles
         logger.info(f"✓ M15 данные подготовлены: {len(m15_candles)} свечей")
     
+    # Генерация скриншота M15 для LLM (Task 4)
+    chart_images_b64 = {}
+    if m15_candles:
+        try:
+            df = pd.DataFrame(m15_candles)
+            if 'open' in df.columns and 'Open' not in df.columns:
+                df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'})
+            if 'time' in df.columns:
+                df['time'] = pd.to_datetime(df['time'])
+                df = df.set_index('time')
+            b64 = chart_service.generate_chart_image(df, smc_data=analysis, title="XAUUSD M15")
+            chart_images_b64['M15'] = b64
+            logger.info("✅ Скриншот M15 сгенерирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации скриншота M15: {e}")
+            chart_images_b64['M15'] = None
+    analysis_light['chart_images'] = chart_images_b64
+
     # Логируем размер payload
-    import json
     payload_size = len(json.dumps(analysis_light, ensure_ascii=False))
     logger.info(f"📦 Размер payload для LLM: {payload_size:,} символов ({payload_size/1024:.1f} KB)")
     

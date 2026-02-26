@@ -173,6 +173,57 @@ def sanitize_for_json(obj: Any) -> Any:
         return obj
 
 
+def calculate_local_range(candles, lookback=30):
+    """
+    Расчёт локального диапазона (Range Breakout).
+    candles: list of dicts (high/low) или pandas.DataFrame с колонками High/Low или high/low.
+    lookback: количество свечей для анализа (20-40).
+
+    Returns:
+        dict: local_range_high, local_range_low, lookback, range_size
+    """
+    if candles is None:
+        return {
+            'local_range_high': None,
+            'local_range_low': None,
+            'lookback': lookback,
+            'range_size': None
+        }
+    # DataFrame (из analyze)
+    if hasattr(candles, 'tail'):
+        if len(candles) < lookback:
+            return {
+                'local_range_high': None,
+                'local_range_low': None,
+                'lookback': lookback,
+                'range_size': None
+            }
+        recent = candles.tail(lookback)
+        high_col = 'High' if 'High' in recent.columns else 'high'
+        low_col = 'Low' if 'Low' in recent.columns else 'low'
+        local_high = float(recent[high_col].max())
+        local_low = float(recent[low_col].min())
+    else:
+        # list of dicts
+        if len(candles) < lookback:
+            return {
+                'local_range_high': None,
+                'local_range_low': None,
+                'lookback': lookback,
+                'range_size': None
+            }
+        recent_candles = candles[-lookback:]
+        local_high = max(c.get('high', c.get('High', 0)) for c in recent_candles)
+        local_low = min(c.get('low', c.get('Low', 0)) for c in recent_candles)
+    range_size = local_high - local_low
+    return {
+        'local_range_high': round(local_high, 2),
+        'local_range_low': round(local_low, 2),
+        'lookback': lookback,
+        'range_size': round(range_size, 2)
+    }
+
+
 # ============================================================================
 # ГЛАВНЫЙ КЛАСС
 # ============================================================================
@@ -2122,11 +2173,17 @@ class SMCDetector:
             impulse_context = self.detect_impulse_context_v52(df, result)
             result['impulse_context'] = impulse_context
             
+            # Local range (Range Breakout)
+            result['local_range'] = calculate_local_range(df, lookback=30)
+
             # Статистика v7.0
             total = len(all_order_blocks) + len(fvg) + len(liquidity) + len(all_choch) + len(all_bos)
             confirmed_total = len(confirmed_choch) + len(confirmed_bos)
             result['signals_count'] = total
             result['confirmed_signals_count'] = confirmed_total
+
+            # Range Breakout: локальный диапазон по последним N свечам
+            result['local_range'] = calculate_local_range(df, lookback=30)
             
             # Подсчёт активных/mitigated OB
             active_obs = sum(1 for ob in all_order_blocks if ob.get('status') == 'active')
