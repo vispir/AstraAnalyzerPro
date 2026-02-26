@@ -201,8 +201,8 @@ def calculate_local_range(candles, lookback=30):
             }
         recent = candles.tail(lookback)
         close_col = 'Close' if 'Close' in recent.columns else 'close'
-        local_high = float(recent[close_col].max())
-        local_low = float(recent[close_col].min())
+        local_high = float(recent[close_col].quantile(0.85))
+        local_low = float(recent[close_col].quantile(0.15))
     else:
         # list of dicts
         if len(candles) < lookback:
@@ -213,8 +213,9 @@ def calculate_local_range(candles, lookback=30):
                 'range_size': None
             }
         recent_candles = candles[-lookback:]
-        local_high = max(c.get('close', c.get('Close', 0)) for c in recent_candles)
-        local_low = min(c.get('close', c.get('Close', 0)) for c in recent_candles)
+        closes = [c.get('close', c.get('Close', 0)) for c in recent_candles]
+        local_high = float(np.percentile(closes, 85))
+        local_low = float(np.percentile(closes, 15))
     range_size = local_high - local_low
     return {
         'local_range_high': round(local_high, 2),
