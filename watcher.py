@@ -1261,8 +1261,8 @@ def format_debug_report(status_data):
         lr_low = status_data['local_range_low']
         if lr_high and lr_low:
             msg += f"<b>📐 Локальный диапазон (30 св.):</b>\n"
-            msg += f"├ 🔵 High: <code>${lr_high:.2f}</code>\n"
-            msg += f"└ 🔵 Low: <code>${lr_low:.2f}</code>\n\n"
+            msg += f"├ 🔵 High: <code>${lr_high:.3f}</code>\n"
+            msg += f"└ 🔵 Low: <code>${lr_low:.3f}</code>\n\n"
     
     # Impulse Context v5.2
     if 'impulse_context' in status_data:
@@ -1912,7 +1912,7 @@ def run_analysis_cycle():
         if not breakout_above and not breakout_below:
             status_data['status'] = 'range_internal'
             status_data['reason'] = (
-                f'Цена внутри локального диапазона [{local_low:.2f} - {local_high:.2f}]. Нет закрепления за границей.'
+                f'Цена внутри локального диапазона [{local_low:.3f} - {local_high:.3f}]. Нет закрепления за границей.'
             )
             send_debug_notification(status_data)
             return

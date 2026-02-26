@@ -218,10 +218,10 @@ def calculate_local_range(candles, lookback=30):
         local_low = float(np.percentile(closes, 20))
     range_size = local_high - local_low
     return {
-        'local_range_high': round(local_high, 2),
-        'local_range_low': round(local_low, 2),
+        'local_range_high': round(local_high, 3),
+        'local_range_low': round(local_low, 3),
         'lookback': lookback,
-        'range_size': round(range_size, 2)
+        'range_size': round(range_size, 3)
     }
 
 
