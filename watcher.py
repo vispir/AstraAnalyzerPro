@@ -1256,6 +1256,14 @@ def format_debug_report(status_data):
         msg += f"├ High: ${status_data['global_high']:.2f}\n"
         msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
+    if 'local_range_high' in status_data and 'local_range_low' in status_data:
+        lr_high = status_data['local_range_high']
+        lr_low = status_data['local_range_low']
+        if lr_high and lr_low:
+            msg += f"<b>📐 Локальный диапазон (30 св.):</b>\n"
+            msg += f"├ 🔵 High: <code>${lr_high:.2f}</code>\n"
+            msg += f"└ 🔵 Low: <code>${lr_low:.2f}</code>\n\n"
+    
     # Impulse Context v5.2
     if 'impulse_context' in status_data:
         ic = status_data['impulse_context']
@@ -1729,6 +1737,12 @@ def run_analysis_cycle():
         'status': 'unknown',
         'reason': ''
     }
+    
+    # Локальный диапазон для debug отчёта
+    _lr = analysis.get('local_range') or {}
+    if _lr.get('local_range_high') and _lr.get('local_range_low'):
+        status_data['local_range_high'] = _lr['local_range_high']
+        status_data['local_range_low'] = _lr['local_range_low']
     
     # ========================================================================
     # ФАЗА 2: ФИЛЬТРЫ GATEKEEPER v6.0 (CONFIRMED SIGNALS)
