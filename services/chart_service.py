@@ -343,7 +343,7 @@ class ChartService:
             key_levels = advanced.get('key_levels', {})
             structure_points = advanced.get('structure_points', {})
             
-            # High_250 / Low_250 — хай и лоу как в детекторе (Strong/Weak), как на фронте
+            # High_250 — структурный хай (Strong/Weak), как в детекторе
             high_250 = key_levels.get('High_250')
             high_type = key_levels.get('High_Type', 'High')
             if high_250 and high_250 > 0 and price_min <= high_250 <= price_max:
@@ -377,22 +377,22 @@ class ChartService:
                     )
                 )
             
-            # DH (Daily High)
-            dh = key_levels.get('DH')
-            if dh and dh > 0:
-                fig.add_hline(
-                    y=dh,
-                    line_color="#E91E63",  # Розовый
-                    line_width=2.5,
-                    line_dash="solid",
-                    annotation_text="DH",
-                    annotation_position="left",
-                    annotation=dict(
-                        font=dict(size=11, color="white", family="Arial Black"),
-                        bgcolor="#E91E63",
-                        opacity=0.9
-                    )
-                )
+            # DH (отключено — всегда выше видимых свечей, шум для Gemini)
+            # dh = key_levels.get('DH')
+            # if dh and dh > 0:
+            #     fig.add_hline(
+            #         y=dh,
+            #         line_color="#E91E63",
+            #         line_width=2.5,
+            #         line_dash="solid",
+            #         annotation_text="DH",
+            #         annotation_position="left",
+            #         annotation=dict(
+            #             font=dict(size=11, color="white", family="Arial Black"),
+            #             bgcolor="#E91E63",
+            #             opacity=0.9
+            #         )
+            #     )
             
             # DL (Daily Low)
             dl = key_levels.get('DL')
