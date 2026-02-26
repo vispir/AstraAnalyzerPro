@@ -705,6 +705,16 @@ def check_real_facts(analysis, action):
     if action not in ('BUY', 'SELL'):
         return True, "WAIT не требует фактов"
 
+    # Закрепление закрытием за границей локального диапазона (Range Breakout)
+    local_range = analysis.get('local_range') or {}
+    local_high = local_range.get('local_range_high')
+    local_low = local_range.get('local_range_low')
+    close = safe_float(analysis.get('current_price'), 0)
+    if action == 'BUY' and local_high is not None and close > local_high:
+        return True, "range_breakout_confirmed"
+    if action == 'SELL' and local_low is not None and close < local_low:
+        return True, "range_breakout_confirmed"
+
     real_facts = []
 
     liquidity = analysis.get('liquidity') or []
