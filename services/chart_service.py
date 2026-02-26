@@ -65,8 +65,8 @@ class ChartService:
         Returns:
             MD5 хеш данных
         """
-        # Берем последние 200 свечей для хеширования
-        limit_candles = 200
+        # Берем последние 80 свечей для хеширования
+        limit_candles = 80
         if len(df) > limit_candles:
             df_hash = df.tail(limit_candles).copy()
         else:
@@ -91,6 +91,25 @@ class ChartService:
         # Вычисляем хеш
         hash_string = "|".join(hash_parts)
         return hashlib.md5(hash_string.encode()).hexdigest()
+
+    def _safe_event_time(self, raw_time, df: pd.DataFrame):
+        """
+        Преобразует time из SMC (номер бара или дата) в pd.Timestamp для отрисовки.
+        Если raw_time — число/строка с номером бара (например "581"), берёт дату из df.index.
+        """
+        try:
+            event_time = pd.to_datetime(raw_time)
+            if isinstance(event_time, pd.Timestamp) and event_time.year < 2000:
+                raise ValueError("Looks like bar index")
+            return event_time
+        except Exception:
+            try:
+                bar_idx = int(raw_time)
+                if 0 <= bar_idx < len(df):
+                    return df.index[bar_idx]
+                return df.index[0]
+            except Exception:
+                return df.index[0]
     
     def generate_chart_image(
         self,
@@ -123,9 +142,9 @@ class ChartService:
                 logger.info(f"Returning cached chart image (hash: {data_hash[:8]}...)")
                 return cached_image
             
-            # --- ЛОГИКА 200 СВЕЧЕЙ ---
-            # Берем только последние 200 свечей для отрисовки
-            limit_candles = 200
+            # --- ЛОГИКА 80 СВЕЧЕЙ ---
+            # Берем только последние 80 свечей для отрисовки
+            limit_candles = 80
             if len(df) > limit_candles:
                 df_plot = df.tail(limit_candles).copy()
             else:
@@ -186,7 +205,8 @@ class ChartService:
             if smc_data:
                 self._draw_zones(fig, df_plot, smc_data)     
                 self._draw_structure(fig, df_plot, smc_data) 
-                self._draw_liquidity(fig, df_plot, smc_data) 
+                self._draw_liquidity(fig, df_plot, smc_data)
+                self._draw_local_range(fig, df_plot, smc_data)
 
             # 4. Экспорт
             img_bytes = fig.to_image(format="png", engine="kaleido", scale=2)
@@ -206,40 +226,34 @@ class ChartService:
         """Рисует прямоугольные зоны (Order Blocks, FVG)"""
         last_time = df.index[-1]
         
-        # --- ORDER BLOCKS ---
-        for ob in data.get('order_blocks', []):
-            is_bull = 'BULL' in ob['type']
-            color = self.colors['bull_ob'] if is_bull else self.colors['bear_ob']
-            border = self.colors['candle_up'] if is_bull else self.colors['candle_down']
-            
-            # Начало блока
-            start_t = pd.to_datetime(ob.get('time', df.index[0]))
-            
-            # Рисуем прямоугольник от момента создания до текущей цены
-            fig.add_shape(
-                type="rect",
-                x0=start_t, x1=last_time, 
-                y0=ob['bottom'], y1=ob['top'],
-                fillcolor=color,
-                line=dict(color=border, width=1), # Тонкая рамка
-                layer="below"
-            )
+        # --- ORDER BLOCKS (отключено — данные передаются в JSON, на графике только шум) ---
+        # for ob in data.get('order_blocks', []):
+        #     is_bull = 'BULL' in ob['type']
+        #     color = self.colors['bull_ob'] if is_bull else self.colors['bear_ob']
+        #     border = self.colors['candle_up'] if is_bull else self.colors['candle_down']
+        #     start_t = self._safe_event_time(ob.get('time', df.index[0]), df)
+        #     fig.add_shape(
+        #         type="rect",
+        #         x0=start_t, x1=last_time,
+        #         y0=ob['bottom'], y1=ob['top'],
+        #         fillcolor=color,
+        #         line=dict(color=border, width=1),
+        #         layer="below"
+        #     )
 
-        # --- FVG ---
-        for fvg in data.get('fvg', []):
-            is_bull = 'BULL' in fvg['type']
-            color = self.colors['bull_fvg'] if is_bull else self.colors['bear_fvg']
-            
-            start_t = pd.to_datetime(fvg.get('start_time', df.index[0]))
-            
-            fig.add_shape(
-                type="rect",
-                x0=start_t, x1=last_time,
-                y0=fvg['bottom'], y1=fvg['top'],
-                fillcolor=color,
-                line=dict(width=0), # Без границ
-                layer="below"
-            )
+        # --- FVG (отключено — слишком много шума для Gemini Vision) ---
+        # for fvg in data.get('fvg', []):
+        #     is_bull = 'BULL' in fvg['type']
+        #     color = self.colors['bull_fvg'] if is_bull else self.colors['bear_fvg']
+        #     start_t = self._safe_event_time(fvg.get('start_time', df.index[0]), df)
+        #     fig.add_shape(
+        #         type="rect",
+        #         x0=start_t, x1=last_time,
+        #         y0=fvg['bottom'], y1=fvg['top'],
+        #         fillcolor=color,
+        #         line=dict(width=0),
+        #         layer="below"
+        #     )
 
     def _draw_structure(self, fig, df, data):
         """
@@ -254,8 +268,8 @@ class ChartService:
         def draw_segment(item, label, color, style):
             price = item['price']
             
-            # Получаем время события
-            event_time = pd.to_datetime(item.get('time', df.index[0]))
+            # Получаем время события (time может быть номером бара или датой)
+            event_time = self._safe_event_time(item.get('time', df.index[0]), df)
             
             # ОБРЕЗКА: Рисуем линию только если она попадает в видимую зону (или чуть раньше)
             start_t = max(event_time, visible_start_time)
@@ -461,6 +475,51 @@ class ChartService:
                         opacity=0.7
                     )
                 )
+
+    def _draw_local_range(self, fig, df, data):
+        """Рисует границы локального диапазона Range Breakout"""
+        local_range = data.get('local_range')
+        if not local_range:
+            return
+
+        range_high = local_range.get('local_range_high')
+        range_low = local_range.get('local_range_low')
+        last_time = df.index[-1]
+        first_time = df.index[0]
+
+        if range_high and range_high > 0:
+            fig.add_shape(
+                type="line",
+                x0=first_time, x1=last_time,
+                y0=range_high, y1=range_high,
+                line=dict(color="#2196F3", width=2.5, dash="solid")
+            )
+            fig.add_annotation(
+                x=last_time, y=range_high,
+                text="Range HIGH",
+                showarrow=False,
+                xanchor="left",
+                font=dict(color="#2196F3", size=11, family="Arial Black"),
+                bgcolor=self.colors['bg'],
+                opacity=0.9
+            )
+
+        if range_low and range_low > 0:
+            fig.add_shape(
+                type="line",
+                x0=first_time, x1=last_time,
+                y0=range_low, y1=range_low,
+                line=dict(color="#2196F3", width=2.5, dash="solid")
+            )
+            fig.add_annotation(
+                x=last_time, y=range_low,
+                text="Range LOW",
+                showarrow=False,
+                xanchor="left",
+                font=dict(color="#2196F3", size=11, family="Arial Black"),
+                bgcolor=self.colors['bg'],
+                opacity=0.9
+            )
 
     def save_to_file(self, df, filename, smc_data=None):
         """Утилита для отладки: сохраняет PNG на диск"""
