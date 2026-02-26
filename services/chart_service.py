@@ -295,58 +295,87 @@ class ChartService:
                 opacity=0.8
             )
 
-        # BOS
-        for bos in data.get('bos', []):
-            is_bull = 'BULL' in bos.get('type', '')
-            color = self.colors['structure_bull'] if is_bull else self.colors['structure_bear']
-            draw_segment(bos, "BOS", color, "solid")
+        # BOS (отключено — слишком много шума для Gemini Vision)
+        # for bos in data.get('bos', []):
+        #     is_bull = 'BULL' in bos.get('type', '')
+        #     color = self.colors['structure_bull'] if is_bull else self.colors['structure_bear']
+        #     draw_segment(bos, "BOS", color, "solid")
 
-        # CHOCH
-        for choch in data.get('choch', []):
-            # Оранжевый/Желтый для CHOCH
-            color = "#FFAB00" 
-            draw_segment(choch, "CHoCH", color, "dash")
+        # CHOCH (отключено)
+        # for choch in data.get('choch', []):
+        #     color = "#FFAB00"
+        #     draw_segment(choch, "CHoCH", color, "dash")
 
     def _draw_liquidity(self, fig, df, data):
         """Рисует уровни ликвидности (EQH/EQL) с ограничением длины"""
         last_time = df.index[-1]
         
-        # Ограничиваем длину линий (последние 30 свечей)
-        lookback_idx = max(0, len(df) - 30)
-        start_t = df.index[lookback_idx]
-        
-        levels = data.get('eqh', []) + data.get('eql', [])
-        
-        for lvl in levels:
-            price = lvl['price']
-            is_eqh = 'HIGHS' in lvl.get('type', '')
-            label = "EQH ($)" if is_eqh else "EQL ($)"
-            
-            # Цвет: Золотой/Оранжевый
-            color = "#FFD700" if is_eqh else "#FF9100"
-            
-            fig.add_shape(
-                type="line",
-                x0=start_t, x1=last_time,
-                y0=price, y1=price,
-                line=dict(color=color, width=2, dash="dot")
-            )
-            
-            fig.add_annotation(
-                x=last_time, y=price,
-                text=label,
-                showarrow=False,
-                xanchor="left",
-                font=dict(color=color, size=9),
-                bgcolor=self.colors['bg'],
-                opacity=0.8
-            )
+        # EQH/EQL (отключено — шум для Gemini Vision)
+        # lookback_idx = max(0, len(df) - 30)
+        # start_t = df.index[lookback_idx]
+        # levels = data.get('eqh', []) + data.get('eql', [])
+        # for lvl in levels:
+        #     price = lvl['price']
+        #     is_eqh = 'HIGHS' in lvl.get('type', '')
+        #     label = "EQH ($)" if is_eqh else "EQL ($)"
+        #     color = "#FFD700" if is_eqh else "#FF9100"
+        #     fig.add_shape(
+        #         type="line",
+        #         x0=start_t, x1=last_time,
+        #         y0=price, y1=price,
+        #         line=dict(color=color, width=2, dash="dot")
+        #     )
+        #     fig.add_annotation(
+        #         x=last_time, y=price,
+        #         text=label,
+        #         showarrow=False,
+        #         xanchor="left",
+        #         font=dict(color=color, size=9),
+        #         bgcolor=self.colors['bg'],
+        #         opacity=0.8
+        #     )
         
         # --- ADVANCED SMC LEVELS ---
         if 'advanced' in data:
             advanced = data['advanced']
+            price_min = df['Low'].min()
+            price_max = df['High'].max()
             key_levels = advanced.get('key_levels', {})
             structure_points = advanced.get('structure_points', {})
+            
+            # High_250 / Low_250 — хай и лоу как в детекторе (Strong/Weak), как на фронте
+            high_250 = key_levels.get('High_250')
+            high_type = key_levels.get('High_Type', 'High')
+            if high_250 and high_250 > 0 and price_min <= high_250 <= price_max:
+                fig.add_hline(
+                    y=high_250,
+                    line_color="#E91E63",
+                    line_width=2.5,
+                    line_dash="solid",
+                    annotation_text=f"High ({high_type})",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=11, color="white", family="Arial Black"),
+                        bgcolor="#E91E63",
+                        opacity=0.9
+                    )
+                )
+            low_250 = key_levels.get('Low_250')
+            low_type = key_levels.get('Low_Type', 'Low')
+            if low_250 and low_250 > 0 and price_min <= low_250 <= price_max:
+                fig.add_hline(
+                    y=low_250,
+                    line_color="#C2185B",
+                    line_width=2.5,
+                    line_dash="solid",
+                    annotation_text=f"Low ({low_type})",
+                    annotation_position="left",
+                    annotation=dict(
+                        font=dict(size=11, color="white", family="Arial Black"),
+                        bgcolor="#C2185B",
+                        opacity=0.9
+                    )
+                )
             
             # DH (Daily High)
             dh = key_levels.get('DH')
@@ -384,7 +413,7 @@ class ChartService:
             
             # PDH (Previous Day High)
             pdh = key_levels.get('PDH')
-            if pdh and pdh > 0:
+            if pdh and pdh > 0 and price_min <= pdh <= price_max:
                 fig.add_hline(
                     y=pdh,
                     line_color="#9C27B0",  # Фиолетовый
@@ -401,7 +430,7 @@ class ChartService:
             
             # PDL (Previous Day Low)
             pdl = key_levels.get('PDL')
-            if pdl and pdl > 0:
+            if pdl and pdl > 0 and price_min <= pdl <= price_max:
                 fig.add_hline(
                     y=pdl,
                     line_color="#673AB7",  # Темно-фиолетовый
