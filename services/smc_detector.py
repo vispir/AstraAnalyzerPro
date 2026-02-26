@@ -175,8 +175,9 @@ def sanitize_for_json(obj: Any) -> Any:
 
 def calculate_local_range(candles, lookback=30):
     """
-    Расчёт локального диапазона (Range Breakout).
-    candles: list of dicts (high/low) или pandas.DataFrame с колонками High/Low или high/low.
+    Расчёт локального диапазона (Range Breakout) по закрытиям свечей.
+    Границы диапазона = max(close) и min(close), чтобы закрепление (close) и диапазон были в одной логике (тела, не тени).
+    candles: list of dicts (close) или pandas.DataFrame с колонкой Close/close.
     lookback: количество свечей для анализа (20-40).
 
     Returns:
@@ -199,10 +200,9 @@ def calculate_local_range(candles, lookback=30):
                 'range_size': None
             }
         recent = candles.tail(lookback)
-        high_col = 'High' if 'High' in recent.columns else 'high'
-        low_col = 'Low' if 'Low' in recent.columns else 'low'
-        local_high = float(recent[high_col].max())
-        local_low = float(recent[low_col].min())
+        close_col = 'Close' if 'Close' in recent.columns else 'close'
+        local_high = float(recent[close_col].max())
+        local_low = float(recent[close_col].min())
     else:
         # list of dicts
         if len(candles) < lookback:
@@ -213,8 +213,8 @@ def calculate_local_range(candles, lookback=30):
                 'range_size': None
             }
         recent_candles = candles[-lookback:]
-        local_high = max(c.get('high', c.get('High', 0)) for c in recent_candles)
-        local_low = min(c.get('low', c.get('Low', 0)) for c in recent_candles)
+        local_high = max(c.get('close', c.get('Close', 0)) for c in recent_candles)
+        local_low = min(c.get('close', c.get('Close', 0)) for c in recent_candles)
     range_size = local_high - local_low
     return {
         'local_range_high': round(local_high, 2),
