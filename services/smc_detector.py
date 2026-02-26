@@ -175,10 +175,11 @@ def sanitize_for_json(obj: Any) -> Any:
 
 def calculate_local_range(candles, lookback=30):
     """
-    Расчёт локального диапазона (Range Breakout) по закрытиям свечей.
-    Границы диапазона = max(close) и min(close), чтобы закрепление (close) и диапазон были в одной логике (тела, не тени).
-    candles: list of dicts (close) или pandas.DataFrame с колонкой Close/close.
-    lookback: количество свечей для анализа (20-40).
+    Расчёт локального диапазона (Range Breakout) только по open и close (без теней).
+    Границы = max и min среди всех цен открытия и закрытия за последние lookback свечей.
+    Закрепление (close за границей) проверяется отдельно в фильтре.
+    candles: list of dicts (open, close) или pandas.DataFrame с колонками Open/Close.
+    lookback: количество свечей (фиксировано 30).
 
     Returns:
         dict: local_range_high, local_range_low, lookback, range_size
@@ -200,9 +201,11 @@ def calculate_local_range(candles, lookback=30):
                 'range_size': None
             }
         recent = candles.tail(lookback)
+        open_col = 'Open' if 'Open' in recent.columns else 'open'
         close_col = 'Close' if 'Close' in recent.columns else 'close'
-        local_high = float(recent[close_col].quantile(0.80))
-        local_low = float(recent[close_col].quantile(0.20))
+        all_prices = recent[open_col].tolist() + recent[close_col].tolist()
+        local_high = float(max(all_prices))
+        local_low = float(min(all_prices))
     else:
         # list of dicts
         if len(candles) < lookback:
@@ -213,9 +216,11 @@ def calculate_local_range(candles, lookback=30):
                 'range_size': None
             }
         recent_candles = candles[-lookback:]
+        opens = [c.get('open', c.get('Open', 0)) for c in recent_candles]
         closes = [c.get('close', c.get('Close', 0)) for c in recent_candles]
-        local_high = float(np.percentile(closes, 80))
-        local_low = float(np.percentile(closes, 20))
+        all_prices = opens + closes
+        local_high = float(max(all_prices))
+        local_low = float(min(all_prices))
     range_size = local_high - local_low
     return {
         'local_range_high': round(local_high, 3),

@@ -1901,22 +1901,32 @@ def run_analysis_cycle():
     # ========================================================================
 
     # Range Breakout: проверка закрепления за локальным диапазоном (телом свечи)
+    # Если диапазон аномально широкий (> MAX_LOCAL_RANGE_ATR × ATR), не блокируем вызов LLM
+    MAX_LOCAL_RANGE_ATR = 2.0
     local_range = analysis.get('local_range') or {}
     local_high = local_range.get('local_range_high')
     local_low = local_range.get('local_range_low')
     if local_high is not None and local_low is not None:
-        last_candle = candles[-1] if candles else {}
-        close = safe_float(last_candle.get('close'), 0)
-        breakout_above = close > local_high
-        breakout_below = close < local_low
-        if not breakout_above and not breakout_below:
-            status_data['status'] = 'range_internal'
-            status_data['reason'] = (
-                f'Цена внутри локального диапазона [{local_low:.3f} - {local_high:.3f}]. Нет закрепления за границей.'
+        range_size = local_range.get('range_size') or (local_high - local_low)
+        atr_m15 = atr_m15_initial or 0.0
+        if atr_m15 > 0 and range_size > MAX_LOCAL_RANGE_ATR * atr_m15:
+            logger.info(
+                f"📐 Локальный диапазон слишком широкий (range_size={range_size:.2f} > {MAX_LOCAL_RANGE_ATR}×ATR={MAX_LOCAL_RANGE_ATR * atr_m15:.2f}), "
+                "фильтр Range Breakout не применяется — разрешаем вызов LLM"
             )
-            send_debug_notification(status_data)
-            return
-        logger.info(f"✅ Range Breakout: закрепление {'выше' if breakout_above else 'ниже'} диапазона")
+        else:
+            last_candle = candles[-1] if candles else {}
+            close = safe_float(last_candle.get('close'), 0)
+            breakout_above = close > local_high
+            breakout_below = close < local_low
+            if not breakout_above and not breakout_below:
+                status_data['status'] = 'range_internal'
+                status_data['reason'] = (
+                    f'Цена внутри локального диапазона [{local_low:.3f} - {local_high:.3f}]. Нет закрепления за границей.'
+                )
+                send_debug_notification(status_data)
+                return
+            logger.info(f"✅ Range Breakout: закрепление {'выше' if breakout_above else 'ниже'} диапазона")
     else:
         logger.warning("⚠️ local_range не найден, пропускаем фильтр")
 
