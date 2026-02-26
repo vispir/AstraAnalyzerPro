@@ -2302,6 +2302,7 @@ def run_analysis_cycle():
             if 'time' in df.columns:
                 df['time'] = pd.to_datetime(df['time'])
                 df = df.set_index('time')
+            df = df.reset_index(drop=True)
             b64 = chart_service.generate_chart_image(df, smc_data=analysis, title="XAUUSD M15")
             chart_images_b64['M15'] = b64
             logger.info("✅ Скриншот M15 сгенерирован")
