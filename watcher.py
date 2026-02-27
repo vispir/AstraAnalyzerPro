@@ -1281,7 +1281,29 @@ def format_debug_report(status_data):
         else:
             msg += "└ —\n\n"
     else:
-        msg += "└ Нет активного диапазона\n\n"
+        reason = status_data.get('local_range_no_reason')
+        reason_text = None
+        if reason == 'too_few_candles':
+            n = status_data.get('local_range_consolidation_candles')
+            reason_text = f"Детектор: консолидация только {n} свечей (< 5) — цена уже в движении" if n is not None else "Детектор: мало свечей консолидации"
+        elif reason == 'high_volatility':
+            reason_text = "Детектор: высокая волатильность в окне"
+        elif reason == 'no_range':
+            reason_text = "Детектор: диапазон не найден"
+        elif reason == 'range_too_wide':
+            sz = status_data.get('local_range_size_rejected')
+            lim = status_data.get('local_range_atr_limit')
+            reason_text = f"Диапазон шире 2×ATR (size {sz} > {lim})" if sz is not None and lim is not None else "Диапазон шире 2×ATR — не сохранён"
+        elif reason == 'price_too_far':
+            reason_text = "Цена ушла дальше 3 ширин диапазона — деактивирован"
+        elif reason == 'expired_24h':
+            reason_text = "Диапазон истёк (24h без касания)"
+        elif reason == 'new_range_formed':
+            reason_text = "Новый диапазон сформирован (перекрытие < 30%)"
+        msg += "└ Нет активного диапазона\n"
+        if reason_text:
+            msg += f"<i>{escape_html(reason_text)}</i>\n"
+        msg += "\n"
     
     # Impulse Context v5.2
     if 'impulse_context' in status_data:
@@ -1946,6 +1968,7 @@ def run_analysis_cycle():
             if current_price > rh + 3 * range_width or current_price < rl - 3 * range_width:
                 db_service.deactivate_range(rid, 'price_too_far')
                 active_range = None
+                status_data['local_range_no_reason'] = 'price_too_far'
                 logger.info("📐 Диапазон деактивирован: цена слишком далеко (price_too_far)")
 
         # (б) Прошло более 24 часов с last_touch_at
@@ -1959,6 +1982,7 @@ def run_analysis_cycle():
                     if (datetime.now(timezone.utc) - last_touch).total_seconds() > 24 * 3600:
                         db_service.deactivate_range(rid, 'expired_24h')
                         active_range = None
+                        status_data['local_range_no_reason'] = 'expired_24h'
                         logger.info("📐 Диапазон деактивирован: истёк 24h (expired_24h)")
                 except Exception:
                     pass
@@ -1974,18 +1998,24 @@ def run_analysis_cycle():
                 if overlap_pct < 0.30:
                     db_service.deactivate_range(rid, 'new_range_formed')
                     active_range = None
+                    status_data['local_range_no_reason'] = 'new_range_formed'
                     logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
     if not active_range:
         new_range = analysis.get('local_range') or {}
         no_reason = new_range.get('no_range_reason')
+        status_data['local_range_no_reason'] = None  # причина отсутствия диапазона в БД (для отчёта)
         if new_range is None or no_reason == 'high_volatility':
             logger.info("⚠️ Консолидации нет (высокая волатильность), Range фильтр пропущен")
+            status_data['local_range_no_reason'] = 'high_volatility'
         else:
             n_high = new_range.get('local_range_high')
             n_low = new_range.get('local_range_low')
             if n_high is None or n_low is None:
                 logger.info("⚠️ Локальный диапазон не найден, Range фильтр пропущен")
+                status_data['local_range_no_reason'] = no_reason or 'no_range'
+                if no_reason == 'too_few_candles':
+                    status_data['local_range_consolidation_candles'] = new_range.get('consolidation_candles')
             else:
                 range_size_new = new_range.get('range_size') or (n_high - n_low)
                 atr_m15 = atr_m15_initial or 0.0
@@ -1994,6 +2024,9 @@ def run_analysis_cycle():
                         f"⚠️ Локальный диапазон слишком широкий (range_size={range_size_new:.2f} > {MAX_LOCAL_RANGE_ATR}×ATR), "
                         "Range фильтр пропущен"
                     )
+                    status_data['local_range_no_reason'] = 'range_too_wide'
+                    status_data['local_range_size_rejected'] = round(range_size_new, 2)
+                    status_data['local_range_atr_limit'] = round(MAX_LOCAL_RANGE_ATR * atr_m15, 2)
                 else:
                     saved = db_service.save_range(n_high, n_low, symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
                     if saved:
