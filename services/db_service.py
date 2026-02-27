@@ -641,5 +641,154 @@ class DBService:
             logger.error(f"❌ Ошибка обновления SL сигнала {signal_id}: {e}")
             return False
 
+    # ----------------------------------------------------------------------
+    # Методы для работы с локальными диапазонами (local_ranges)
+    # ----------------------------------------------------------------------
+
+    def get_active_range(self, symbol: str = 'XAUUSD', timeframe: str = 'M15'):
+        """
+        Возвращает АКТИВНЫЙ локальный диапазон для инструмента/таймфрейма
+        (is_active = true) или None, если диапазона нет.
+        """
+        if not self.url:
+            logger.warning("⚠️ get_active_range: SUPABASE_URL не настроен")
+            return None
+
+        target_url = (
+            f"{self.url}/rest/v1/local_ranges"
+            f"?symbol=eq.{symbol}&timeframe=eq.{timeframe}"
+            f"&is_active=eq.true&select=*"
+            f"&order=created_at.desc&limit=1"
+        )
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if rows:
+                return rows[0]
+            return None
+        except Exception as e:
+            logger.error(f"❌ get_active_range error: {e}")
+            return None
+
+    def save_range(self, range_high: float, range_low: float,
+                   symbol: str = 'XAUUSD', timeframe: str = 'M15'):
+        """
+        Деактивирует все старые диапазоны для инструмента/таймфрейма
+        и создаёт новый активный диапазон.
+        """
+        if not self.url:
+            logger.warning("⚠️ save_range: SUPABASE_URL не настроен")
+            return None
+
+        # 1) Деактивируем старые диапазоны
+        try:
+            deactivate_url = (
+                f"{self.url}/rest/v1/local_ranges"
+                f"?symbol=eq.{symbol}&timeframe=eq.{timeframe}"
+                f"&is_active=eq.true"
+            )
+            deactivate_payload = {
+                "is_active": False,
+                "death_reason": "replaced",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            requests.patch(
+                deactivate_url,
+                json=deactivate_payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ save_range: ошибка деактивации старых диапазонов: {e}")
+
+        # 2) Создаём новый диапазон
+        range_size = (range_high - range_low) if range_high is not None and range_low is not None else None
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "range_high": range_high,
+            "range_low": range_low,
+            "range_size": range_size,
+            "is_active": True,
+        }
+
+        try:
+            target_url = f"{self.url}/rest/v1/local_ranges"
+            # Для получения id новой записи нам нужна полная репрезентация
+            headers = {
+                "apikey": self.key,
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            }
+            response = requests.post(target_url, json=payload, headers=headers)
+            response.raise_for_status()
+            rows = response.json()
+            new_range = rows[0] if isinstance(rows, list) and rows else rows
+            logger.info(
+                f"📐 Новый локальный диапазон сохранён в Supabase: {symbol} {timeframe} "
+                f"[{range_low} - {range_high}] size={range_size}"
+            )
+            return new_range
+        except Exception as e:
+            logger.error(f"❌ save_range: ошибка создания диапазона: {e}")
+            return None
+
+    def update_range_touch(self, range_id: int):
+        """Обновляет last_touch_at для диапазона."""
+        if not self.url or not range_id:
+            return False
+        target_url = f"{self.url}/rest/v1/local_ranges?id=eq.{range_id}"
+        payload = {"last_touch_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"❌ update_range_touch error (id={range_id}): {e}")
+            return False
+
+    def deactivate_range(self, range_id: int, death_reason: str):
+        """Деактивирует диапазон (is_active = false) с указанием причины."""
+        if not self.url or not range_id:
+            return False
+        target_url = f"{self.url}/rest/v1/local_ranges?id=eq.{range_id}"
+        payload = {
+            "is_active": False,
+            "death_reason": death_reason,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"📐 Диапазон {range_id} деактивирован (reason={death_reason})")
+            return True
+        except Exception as e:
+            logger.error(f"❌ deactivate_range error (id={range_id}): {e}")
+            return False
+
 # Создаем экземпляр сервиса
 db_service = DBService()

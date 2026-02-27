@@ -173,60 +173,85 @@ def sanitize_for_json(obj: Any) -> Any:
         return obj
 
 
+def _calc_local_range_from_series(opens, closes, lookback):
+    """
+    Вспомогательная логика: фильтрация импульсных свечей, проверка консолидации,
+    расчёт границ по open+close. opens/closes — списки или массивы одинаковой длины.
+    Возвращает (local_high, local_low, range_size, no_range_reason).
+    """
+    if not opens or not closes or len(opens) != len(closes):
+        return None, None, None, 'insufficient_data'
+    bodies = np.abs(np.array(closes, dtype=float) - np.array(opens, dtype=float))
+    atr_local = float(np.mean(bodies))
+    if atr_local <= 0:
+        atr_local = 1e-9
+    # ШАГ 1 — фильтрация импульсных свечей
+    mask = bodies <= 1.5 * atr_local
+    if np.sum(mask) < 10:
+        mask = np.ones(len(bodies), dtype=bool)
+    o_f = np.array(opens, dtype=float)[mask]
+    c_f = np.array(closes, dtype=float)[mask]
+    # ШАГ 2 — проверка плотности (консолидация)
+    std_dev = float(np.std(c_f))
+    if std_dev > 1.0 * atr_local:
+        return None, None, None, 'high_volatility'
+    # ШАГ 3 — границы по open+close отфильтрованных
+    all_prices = np.concatenate([o_f, c_f])
+    local_high = float(np.max(all_prices))
+    local_low = float(np.min(all_prices))
+    range_size = local_high - local_low
+    return local_high, local_low, range_size, None
+
+
 def calculate_local_range(candles, lookback=30):
     """
     Расчёт локального диапазона (Range Breakout) только по open и close (без теней).
-    Границы = max и min среди всех цен открытия и закрытия за последние lookback свечей.
-    Закрепление (close за границей) проверяется отдельно в фильтре.
-    candles: list of dicts (open, close) или pandas.DataFrame с колонками Open/Close.
-    lookback: количество свечей (фиксировано 30).
-
-    Returns:
-        dict: local_range_high, local_range_low, lookback, range_size
+    ШАГ 1: исключаем импульсные свечи (body > 1.5*atr_local); если осталось < 10 — не фильтруем.
+    ШАГ 2: если std(close) по отфильтрованным > 1.0*atr_local — консолидации нет, возврат no_range_reason='high_volatility'.
+    ШАГ 3: границы = max и min среди open+close отфильтрованных свечей.
     """
+    empty = {
+        'local_range_high': None,
+        'local_range_low': None,
+        'lookback': lookback,
+        'range_size': None,
+        'no_range_reason': None,
+    }
     if candles is None:
+        return empty
+    # DataFrame (из analyze)
+    if hasattr(candles, 'tail'):
+        if len(candles) < lookback:
+            empty['no_range_reason'] = 'insufficient_candles'
+            return empty
+        recent = candles.tail(lookback)
+        open_col = 'Open' if 'Open' in recent.columns else 'open'
+        close_col = 'Close' if 'Close' in recent.columns else 'close'
+        opens = recent[open_col].tolist()
+        closes = recent[close_col].tolist()
+    else:
+        # list of dicts
+        if len(candles) < lookback:
+            empty['no_range_reason'] = 'insufficient_candles'
+            return empty
+        recent_candles = candles[-lookback:]
+        opens = [float(c.get('open', c.get('Open', 0))) for c in recent_candles]
+        closes = [float(c.get('close', c.get('Close', 0))) for c in recent_candles]
+    local_high, local_low, range_size, no_range_reason = _calc_local_range_from_series(opens, closes, lookback)
+    if no_range_reason is not None:
         return {
             'local_range_high': None,
             'local_range_low': None,
             'lookback': lookback,
-            'range_size': None
+            'range_size': None,
+            'no_range_reason': no_range_reason,
         }
-    # DataFrame (из analyze)
-    if hasattr(candles, 'tail'):
-        if len(candles) < lookback:
-            return {
-                'local_range_high': None,
-                'local_range_low': None,
-                'lookback': lookback,
-                'range_size': None
-            }
-        recent = candles.tail(lookback)
-        open_col = 'Open' if 'Open' in recent.columns else 'open'
-        close_col = 'Close' if 'Close' in recent.columns else 'close'
-        all_prices = recent[open_col].tolist() + recent[close_col].tolist()
-        local_high = float(max(all_prices))
-        local_low = float(min(all_prices))
-    else:
-        # list of dicts
-        if len(candles) < lookback:
-            return {
-                'local_range_high': None,
-                'local_range_low': None,
-                'lookback': lookback,
-                'range_size': None
-            }
-        recent_candles = candles[-lookback:]
-        opens = [c.get('open', c.get('Open', 0)) for c in recent_candles]
-        closes = [c.get('close', c.get('Close', 0)) for c in recent_candles]
-        all_prices = opens + closes
-        local_high = float(max(all_prices))
-        local_low = float(min(all_prices))
-    range_size = local_high - local_low
     return {
         'local_range_high': round(local_high, 3),
         'local_range_low': round(local_low, 3),
         'lookback': lookback,
-        'range_size': round(range_size, 3)
+        'range_size': round(range_size, 3),
+        'no_range_reason': None,
     }
 
 

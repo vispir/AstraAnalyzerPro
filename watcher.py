@@ -706,9 +706,11 @@ def check_real_facts(analysis, action):
         return True, "WAIT не требует фактов"
 
     # Закрепление закрытием за границей локального диапазона (Range Breakout)
-    local_range = analysis.get('local_range') or {}
-    local_high = local_range.get('local_range_high')
-    local_low = local_range.get('local_range_low')
+    # Используем active_range из БД (приоритет) или fallback на local_range из детектора
+    active_range = analysis.get('active_range') or {}
+    local_range = active_range if active_range else (analysis.get('local_range') or {})
+    local_high = safe_float(local_range.get('range_high') or local_range.get('local_range_high'), None)
+    local_low = safe_float(local_range.get('range_low') or local_range.get('local_range_low'), None)
     close = safe_float(analysis.get('current_price'), 0)
     if action == 'BUY' and local_high is not None and close > local_high:
         return True, "range_breakout_confirmed"
@@ -1155,7 +1157,11 @@ def format_debug_report(status_data):
         'trade_cancelled_no_fill': '⏱',
         'trade_limit_reached': '🛑',
         'hunter_memory_skip': '🧠',
-        'range_internal': '⚪'
+        'range_internal': '⚪',
+        'range_breakout_wait_confirmation': '⏳',
+        'range_breakout_no_structure': '⚠️',
+        'range_breakout_overheated': '🌡️',
+        'range_breakout_doji': '🕯️'
     }
     
     status_texts = {
@@ -1189,7 +1195,11 @@ def format_debug_report(status_data):
         'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут',
         'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен',
         'hunter_memory_skip': 'Цена мало изменилась — вызов LLM пропущен (память охотника)',
-        'range_internal': '⚪ Цена внутри диапазона (нет пробоя)'
+        'range_internal': '⚪ Цена внутри диапазона (нет пробоя)',
+        'range_breakout_wait_confirmation': '⏳ Range Breakout: ждём второй свечи',
+        'range_breakout_no_structure': '⚠️ Range Breakout без BOS/CHoCH — скип',
+        'range_breakout_overheated': 'Range Breakout: перегрев — цена слишком далеко от уровня',
+        'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы'
     }
     
     status = status_data.get('status', 'unknown')
@@ -1900,39 +1910,192 @@ def run_analysis_cycle():
     # ОСТАЛЬНЫЕ ФИЛЬТРЫ
     # ========================================================================
 
-    # Range Breakout: проверка закрепления за локальным диапазоном (телом свечи)
-    # Если диапазон аномально широкий (> MAX_LOCAL_RANGE_ATR × ATR), не блокируем вызов LLM
+    # ---------- Range Manager (локальный диапазон из БД + двухсвечное закрепление) ----------
+    RANGE_SYMBOL = 'XAUUSD'
+    RANGE_TIMEFRAME = 'M15'
     MAX_LOCAL_RANGE_ATR = 2.0
-    local_range = analysis.get('local_range') or {}
-    local_high = local_range.get('local_range_high')
-    local_low = local_range.get('local_range_low')
-    if local_high is not None and local_low is not None:
-        range_size = local_range.get('range_size') or (local_high - local_low)
-        atr_m15 = atr_m15_initial or 0.0
-        if atr_m15 > 0 and range_size > MAX_LOCAL_RANGE_ATR * atr_m15:
-            logger.info(
-                f"📐 Локальный диапазон слишком широкий (range_size={range_size:.2f} > {MAX_LOCAL_RANGE_ATR}×ATR={MAX_LOCAL_RANGE_ATR * atr_m15:.2f}), "
-                "фильтр Range Breakout не применяется — разрешаем вызов LLM"
-            )
+    status_data['active_range'] = None
+    status_data['is_range_breakout_confirmed'] = False
+    status_data['breakout_direction'] = None
+
+    active_range = None
+    try:
+        active_range = db_service.get_active_range(symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
+    except Exception as e:
+        logger.warning(f"⚠️ get_active_range error: {e}")
+
+    if active_range:
+        range_width = safe_float(active_range.get('range_size'), 0) or 0
+        rh = safe_float(active_range.get('range_high'), 0)
+        rl = safe_float(active_range.get('range_low'), 0)
+        if range_width <= 0 and rh and rl:
+            range_width = rh - rl
+        rid = active_range.get('id')
+
+        # (а) Цена ушла дальше 3-х ширин от ближайшей границы
+        if range_width > 0:
+            if current_price > rh + 3 * range_width or current_price < rl - 3 * range_width:
+                db_service.deactivate_range(rid, 'price_too_far')
+                active_range = None
+                logger.info("📐 Диапазон деактивирован: цена слишком далеко (price_too_far)")
+
+        # (б) Прошло более 24 часов с last_touch_at
+        if active_range:
+            last_touch_raw = active_range.get('last_touch_at') or active_range.get('created_at')
+            if last_touch_raw:
+                try:
+                    last_touch = datetime.fromisoformat(str(last_touch_raw).replace('Z', '+00:00'))
+                    if last_touch.tzinfo is None:
+                        last_touch = last_touch.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - last_touch).total_seconds() > 24 * 3600:
+                        db_service.deactivate_range(rid, 'expired_24h')
+                        active_range = None
+                        logger.info("📐 Диапазон деактивирован: истёк 24h (expired_24h)")
+                except Exception:
+                    pass
+
+        # (в) Новый диапазон из детектора не перекрывается со старым > 30%
+        if active_range and range_width > 0:
+            new_range = analysis.get('local_range') or {}
+            new_high = new_range.get('local_range_high')
+            new_low = new_range.get('local_range_low')
+            if new_high is not None and new_low is not None:
+                overlap = max(0, min(new_high, rh) - max(new_low, rl))
+                overlap_pct = overlap / range_width
+                if overlap_pct < 0.30:
+                    db_service.deactivate_range(rid, 'new_range_formed')
+                    active_range = None
+                    logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
+
+    if not active_range:
+        new_range = analysis.get('local_range') or {}
+        no_reason = new_range.get('no_range_reason')
+        if new_range is None or no_reason == 'high_volatility':
+            logger.info("⚠️ Консолидации нет (высокая волатильность), Range фильтр пропущен")
         else:
-            last_candle = candles[-1] if candles else {}
-            close = safe_float(last_candle.get('close'), 0)
-            breakout_above = close > local_high
-            breakout_below = close < local_low
-            if not breakout_above and not breakout_below:
-                status_data['status'] = 'range_internal'
-                status_data['reason'] = (
-                    f'Цена внутри локального диапазона [{local_low:.3f} - {local_high:.3f}]. Нет закрепления за границей.'
+            n_high = new_range.get('local_range_high')
+            n_low = new_range.get('local_range_low')
+            if n_high is None or n_low is None:
+                logger.info("⚠️ Локальный диапазон не найден, Range фильтр пропущен")
+            else:
+                range_size_new = new_range.get('range_size') or (n_high - n_low)
+                atr_m15 = atr_m15_initial or 0.0
+                if atr_m15 > 0 and range_size_new > MAX_LOCAL_RANGE_ATR * atr_m15:
+                    logger.info(
+                        f"⚠️ Локальный диапазон слишком широкий (range_size={range_size_new:.2f} > {MAX_LOCAL_RANGE_ATR}×ATR), "
+                        "Range фильтр пропущен"
+                    )
+                else:
+                    saved = db_service.save_range(n_high, n_low, symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
+                    if saved:
+                        active_range = saved
+                        logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
+
+    status_data['active_range'] = active_range
+
+    if active_range:
+        range_high = safe_float(active_range.get('range_high'), 0)
+        range_low = safe_float(active_range.get('range_low'), 0)
+        status_data['local_range_high'] = range_high
+        status_data['local_range_low'] = range_low
+
+        prev_candle = candles[-2] if candles and len(candles) >= 2 else {}
+        curr_candle = candles[-1] if candles else {}
+        prev_close = safe_float(prev_candle.get('close'), 0)
+        curr_close = safe_float(curr_candle.get('close'), 0)
+
+        breakout_up = (prev_close > range_high and curr_close > range_high)
+        breakout_down = (prev_close < range_low and curr_close < range_low)
+
+        if breakout_up or breakout_down:
+            # ФИЛЬТР 1 — перегрев: подтверждение слишком далеко от границы
+            atr_m15 = atr_m15_initial or 0.0
+            if atr_m15 > 0:
+                if breakout_up:
+                    distance = curr_close - range_high
+                else:
+                    distance = range_low - curr_close
+                if distance > 1.5 * atr_m15:
+                    status_data['status'] = 'range_breakout_overheated'
+                    status_data['reason'] = (
+                        f"Range Breakout: подтверждение слишком далеко от уровня "
+                        f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
+                    )
+                    logger.warning(f"⚠️ {status_data['reason']}")
+                    send_debug_notification(status_data)
+                    return
+
+            # ФИЛЬТР 2 — доджи: тело свечи подтверждения слишком маленькое
+            if atr_m15 > 0:
+                curr_open = safe_float(
+                    curr_candle.get('open', curr_candle.get('Open', 0))
                 )
+                candle_body = abs(curr_close - curr_open)
+                body_threshold = 0.3 * atr_m15
+                if candle_body < body_threshold:
+                    status_data['status'] = 'range_breakout_doji'
+                    status_data['reason'] = (
+                        f"Range Breakout: свеча подтверждения — доджи "
+                        f"(тело {candle_body:.2f} < 30% ATR={body_threshold:.2f}) — нет силы"
+                    )
+                    logger.warning(f"⚠️ {status_data['reason']}")
+                    send_debug_notification(status_data)
+                    return
+
+            db_service.update_range_touch(active_range['id'])
+            status_data['is_range_breakout_confirmed'] = True
+            status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
+            logger.info(f"✅ Range Breakout ПОДТВЕРЖДЁН двумя свечами: {'BUY' if breakout_up else 'SELL'}")
+            # Пробой диапазона сам по себе является триггером для LLM
+            is_near = True
+        else:
+            only_curr_above = curr_close > range_high and prev_close <= range_high
+            only_curr_below = curr_close < range_low and prev_close >= range_low
+            if only_curr_above or only_curr_below:
+                db_service.update_range_touch(active_range['id'])
+                status_data['status'] = 'range_breakout_wait_confirmation'
+                status_data['reason'] = 'Range Breakout: пробой есть, ждём закрепления второй свечой'
                 send_debug_notification(status_data)
                 return
-            logger.info(f"✅ Range Breakout: закрепление {'выше' if breakout_above else 'ниже'} диапазона")
-    else:
-        logger.warning("⚠️ local_range не найден, пропускаем фильтр")
+            db_service.update_range_touch(active_range['id'])
+            status_data['status'] = 'range_internal'
+            status_data['reason'] = (
+                f'Цена внутри локального диапазона [{range_low:.3f} - {range_high:.3f}]. Нет закрепления за границей.'
+            )
+            send_debug_notification(status_data)
+            return
 
+        # ШАГ 5 — после подтверждения пробоя: проверка BOS/CHoCH
+        has_bos = (
+            len(analysis.get('swing_bos', []) or []) > 0
+            or len(analysis.get('internal_bos', []) or []) > 0
+        )
+        has_choch = (
+            len(analysis.get('swing_choch', []) or []) > 0
+            or len(analysis.get('internal_choch', []) or []) > 0
+        )
+        if not has_bos and not has_choch:
+            status_data['status'] = 'range_breakout_no_structure'
+            status_data['reason'] = 'Range Breakout подтверждён, но нет BOS/CHoCH — скип'
+            logger.warning("⚠️ Range Breakout подтверждён, но нет BOS/CHoCH — скип")
+            send_debug_notification(status_data)
+            return
+    else:
+        status_data['local_range_high'] = status_data.get('local_range_high')
+        status_data['local_range_low'] = status_data.get('local_range_low')
+
+    # Локальный флаг: подтверждён ли Range Breakout (двумя свечами)
+    is_range_breakout_confirmed = status_data.get('is_range_breakout_confirmed', False)
+    
     # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break)
     # v8.5: триггер LLM также при цене близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low)
-    if not is_near and not is_near_key_levels and not is_breakout_impulse and not has_swing_break_confirmed:
+    if (
+        not is_near
+        and not is_near_key_levels
+        and not is_breakout_impulse
+        and not has_swing_break_confirmed
+        and not is_range_breakout_confirmed
+    ):
         status_data['status'] = 'not_near_structure'
         status_data['reason'] = (
             f'Цена ${current_price:.2f} далеко от SMC структур (OB/FVG) и от ключевых уровней. '
@@ -1957,6 +2120,7 @@ def run_analysis_cycle():
         is_breakout_impulse or has_breakout or has_swing_break_confirmed or has_internal_break_confirmed
         or (has_equilibrium_breakout and has_internal_break_confirmed)
         or proximity_ok
+        or is_range_breakout_confirmed
     )
     if current_zone == "EQUILIBRIUM" and (has_equilibrium_breakout and has_internal_break_confirmed):
         logger.info(
@@ -1970,8 +2134,8 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # NEUTRAL требует Swing (пропускаем при импульсе)
-    if swing_trend == "NEUTRAL" and not is_breakout_impulse:
+    # NEUTRAL требует Swing (пропускаем при импульсе, но допускаем Range Breakout)
+    if swing_trend == "NEUTRAL" and not is_breakout_impulse and not is_range_breakout_confirmed:
         # v6.0: Требуем confirmed swing break
         if not has_swing_break_confirmed:
             status_data['status'] = 'neutral_no_swing'
@@ -1983,7 +2147,7 @@ def run_analysis_cycle():
     has_strong_swing = any('SWING' in s for s in swing_signals)
     has_strong_internal = any('INT' in s or 'OB' in s for s in internal_signals)
     
-    if not all_signals and not is_breakout_impulse:
+    if not all_signals and not is_breakout_impulse and not is_range_breakout_confirmed:
         status_data['status'] = 'weak_patterns'
         status_data['reason'] = 'Нет SMC паттернов'
         send_debug_notification(status_data)
@@ -2046,10 +2210,10 @@ def run_analysis_cycle():
     # 5. ИЛИ цена близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low) — идея Роберта
     
     has_any_confirmed = (
-        has_swing_bos_confirmed or 
-        has_swing_choch_confirmed or 
-        has_int_bos_confirmed or 
-        has_int_choch_confirmed
+        has_swing_bos_confirmed 
+        or has_swing_choch_confirmed 
+        or has_int_bos_confirmed 
+        or has_int_choch_confirmed
     )
     
     # v8.5: близость к SMC или ключевым уровням — достаточное условие для вызова LLM (без обязательного confirmed)
@@ -2058,7 +2222,12 @@ def run_analysis_cycle():
     # v7.5.2 FIX: Impulse/Reversal режимы тоже требуют хотя бы internal confirmed
     impulse_needs_confirmation = (is_breakout_impulse or is_reversal_setup) and not has_internal_break_confirmed
     
-    if not has_any_confirmed and not (is_breakout_impulse or is_reversal_setup) and not allow_llm_by_proximity:
+    if (
+        not has_any_confirmed
+        and not (is_breakout_impulse or is_reversal_setup)
+        and not allow_llm_by_proximity
+        and not is_range_breakout_confirmed
+    ):
         status_data['status'] = 'no_confirmed_signal'
         status_data['reason'] = (
             f'⏳ Нет CONFIRMED сигналов (confirmed_total={confirmed_count}).\n'
@@ -2307,6 +2476,10 @@ def run_analysis_cycle():
         'current_price': current_price,
         'atr_m15': atr_m15,
         'invalidation_levels': invalidation,
+        # Range Manager: активный диапазон из БД и флаги пробоя
+        'active_range': status_data.get('active_range'),
+        'is_range_breakout_confirmed': status_data.get('is_range_breakout_confirmed', False),
+        'breakout_direction': status_data.get('breakout_direction'),
     }
     if htf_context:
         analysis_light['htf_context'] = htf_context
@@ -2327,7 +2500,16 @@ def run_analysis_cycle():
                 df['time'] = pd.to_datetime(df['time'])
                 df = df.set_index('time')
             df = df.reset_index(drop=True)
-            b64 = chart_service.generate_chart_image(df, smc_data=analysis, title="XAUUSD M15")
+            smc_data_for_chart = {**analysis}
+            if status_data.get('active_range'):
+                ar = status_data['active_range']
+                smc_data_for_chart['local_range'] = {
+                    'local_range_high': ar.get('range_high'),
+                    'local_range_low': ar.get('range_low'),
+                    'range_size': ar.get('range_size'),
+                    'lookback': 30,
+                }
+            b64 = chart_service.generate_chart_image(df, smc_data=smc_data_for_chart, title="XAUUSD M15")
             chart_images_b64['M15'] = b64
             logger.info("✅ Скриншот M15 сгенерирован")
         except Exception as e:
