@@ -2440,6 +2440,106 @@ def run_analysis_cycle():
     invalidation = get_invalidation_levels(analysis_with_price, buffer=0.5)
     if atr_m15 > 0:
         logger.info(f"✓ ATR(14) M15 = {atr_m15:.2f} | Invalidation BUY<={invalidation.get('invalidation_buy')} SELL>={invalidation.get('invalidation_sell')}")
+
+    # ========================================================================
+    # Range Breakout: подсказки SL/TP для LLM (на основе активного диапазона)
+    # ========================================================================
+    range_breakout_context = None
+    if status_data.get('is_range_breakout_confirmed') and status_data.get('active_range'):
+        try:
+            active_range_rb = status_data.get('active_range') or {}
+            direction_rb = status_data.get('breakout_direction')
+            rh = safe_float(active_range_rb.get('range_high'), 0.0)
+            rl = safe_float(active_range_rb.get('range_low'), 0.0)
+            buf = 0.3 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
+            entry_hint = current_price  # ориентировочный вход — текущая цена при пробое
+
+            suggested_sl = None
+            if direction_rb == 'BUY' and rh:
+                suggested_sl = rh - buf if buf > 0 else rh
+            elif direction_rb == 'SELL' and rl:
+                suggested_sl = rl + buf if buf > 0 else rl
+
+            # Подбор целевого уровня TP по ключевым уровням и структуре
+            suggested_tp = None
+            suggested_rr = None
+
+            # Риск в деньгах по подсказанному SL
+            risk_amount_rb = None
+            if suggested_sl is not None:
+                risk_amount_rb = abs(entry_hint - suggested_sl)
+            elif atr_m15 > 0:
+                risk_amount_rb = atr_m15
+
+            adv = analysis.get('advanced') or {}
+            kl_adv = adv.get('key_levels', {}) if isinstance(adv, dict) else {}
+            sp_adv = adv.get('structure_points', {}) if isinstance(adv, dict) else {}
+
+            levels_candidates = []
+
+            def _add_level(val):
+                try:
+                    v = float(val)
+                    if v > 0:
+                        levels_candidates.append(v)
+                except (TypeError, ValueError):
+                    pass
+
+            if direction_rb == 'BUY':
+                # Ключевые уровни сверху: свинг-хай, High_250, DH/PDH, EQ если выше цены
+                _add_level(sp_adv.get('nearest_swing_high'))
+                _add_level(kl_adv.get('High_250'))
+                _add_level(kl_adv.get('DH'))
+                _add_level(kl_adv.get('PDH'))
+                _add_level(kl_adv.get('Equilibrium_Price'))
+                upper_levels = [lv for lv in levels_candidates if lv > entry_hint]
+                tp_candidate = min(upper_levels) if upper_levels else None
+                if tp_candidate:
+                    suggested_tp = tp_candidate
+            elif direction_rb == 'SELL':
+                # Ключевые уровни снизу: свинг-лоу, Low_250, DL/PDL, EQ если ниже цены
+                _add_level(sp_adv.get('nearest_swing_low'))
+                _add_level(kl_adv.get('Low_250'))
+                _add_level(kl_adv.get('DL'))
+                _add_level(kl_adv.get('PDL'))
+                _add_level(kl_adv.get('Equilibrium_Price'))
+                lower_levels = [lv for lv in levels_candidates if lv < entry_hint]
+                tp_candidate = max(lower_levels) if lower_levels else None
+                if tp_candidate:
+                    suggested_tp = tp_candidate
+
+            # Если есть риск и TP, оцениваем R:R; при слишком маленьком R подсказка TP сдвигается на 1.5R
+            if risk_amount_rb and risk_amount_rb > 0 and direction_rb in ('BUY', 'SELL'):
+                if suggested_tp is not None:
+                    if direction_rb == 'BUY':
+                        suggested_rr = (suggested_tp - entry_hint) / risk_amount_rb
+                    else:
+                        suggested_rr = (entry_hint - suggested_tp) / risk_amount_rb
+                # Если TP отсутствует или R:R слишком мал — предлагаем минимум 1.5R от entry_hint
+                if suggested_tp is None or (suggested_rr is not None and suggested_rr < 1.5):
+                    if direction_rb == 'BUY':
+                        suggested_tp = entry_hint + 1.5 * risk_amount_rb
+                    else:
+                        suggested_tp = entry_hint - 1.5 * risk_amount_rb
+                    suggested_rr = 1.5
+
+            range_breakout_context = {
+                'is_confirmed': True,
+                'direction': direction_rb,
+                'range_high': rh,
+                'range_low': rl,
+                'atr_m15': atr_m15,
+                'entry_hint': entry_hint,
+                'suggested_sl': suggested_sl,
+                'suggested_tp': suggested_tp,
+                'suggested_rr': suggested_rr,
+            }
+            logger.info(
+                f"📐 Range Breakout context: dir={direction_rb}, "
+                f"SL≈{suggested_sl}, TP≈{suggested_tp}, RR≈{suggested_rr}"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка расчёта Range Breakout контекста для LLM: {e}")
     
     # Создаем легкую версию analysis без массивов all_* (они только для визуализации)
     analysis_light = {
@@ -2480,6 +2580,8 @@ def run_analysis_cycle():
         'active_range': status_data.get('active_range'),
         'is_range_breakout_confirmed': status_data.get('is_range_breakout_confirmed', False),
         'breakout_direction': status_data.get('breakout_direction'),
+        # Подсказки для Range Breakout (SL/TP/entry)
+        'range_breakout_context': range_breakout_context,
     }
     if htf_context:
         analysis_light['htf_context'] = htf_context
@@ -3080,6 +3182,17 @@ def run_trade_manager_cycle():
         _entry_filled_notification_sent.discard(trade_id)
         _recommendation_history.pop(trade_id, None)
         _trade_tp1_reached.discard(trade_id)
+        # Определяем тип закрытия для сообщения (визуально; логика в БД не меняется)
+        close_label = "Stop Loss"
+        # Порог безубытка тот же, что в блоке 1R/BE
+        be_threshold = entry_price * 0.0005  # ~0.05% от цены
+        # Безубыток (SL ≈ entry)
+        if abs(stop_loss - entry_price) <= be_threshold:
+            close_label = "BE (безубыток)"
+        # 1R (SL ≈ entry ± risk_amount), только если это не BE
+        elif risk_amount > 0 and abs(abs(stop_loss - entry_price) - risk_amount) <= be_threshold:
+            close_label = "1R"
+
         send_debug_notification({
             'status': 'trade_closed_sl',
             'reason': f'Цена достигла SL. Сделка закрыта по уровню SL. PnL={result_pnl:.2f}',
@@ -3093,7 +3206,7 @@ def run_trade_manager_cycle():
         user_ids_sl = db_service.get_all_active_users()
         if user_ids_sl:
             msg_sl = (
-                f"🛑 <b>Сделка закрыта: Stop Loss</b>\n"
+                f"🛑 <b>Сделка закрыта: {close_label}</b>\n"
                 f"id={trade_id} | {signal_type} | entry={entry_price:.2f} → close={close_price_sl:.2f} (уровень SL)\n"
                 f"PnL={result_pnl:.2f}\n"
                 f"Данные сохранены в БД для анализа и обучения моделей."
@@ -3237,6 +3350,16 @@ def run_trade_manager_cycle():
             'current_price': current_price,
             'signal_type': signal_type
         })
+        # Уведомление в Astra Signal Bot (менеджерский бот)
+        users_be = db_service.get_all_active_users()
+        if users_be:
+            msg_be = (
+                f"🔒 <b>ASTRA Manager:</b> SL переведён в BE по правилу 1R.\n\n"
+                f"id={trade_id} | {signal_type}\n"
+                f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
+                f"TP: {take_profit:.2f}"
+            )
+            telegram_service.broadcast_deals_only(users_be, msg_be)
         sl_is_be = True  # чтобы блок 70% не дублировал
 
     if progress_ratio >= 0.7 and not sl_is_be:
@@ -3259,6 +3382,16 @@ def run_trade_manager_cycle():
             'current_price': current_price,
             'signal_type': signal_type
         })
+        users_be_progress = db_service.get_all_active_users()
+        if users_be_progress:
+            msg_be_progress = (
+                f"🔒 <b>ASTRA Manager:</b> SL переведён в BE.\n\n"
+                f"id={trade_id} | {signal_type}\n"
+                f"Цена прошла {progress_ratio*100:.1f}% пути до TP.\n"
+                f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
+                f"TP: {take_profit:.2f}"
+            )
+            telegram_service.broadcast_deals_only(users_be_progress, msg_be_progress)
         # После перевода в BE продолжаем менеджмент (вдруг есть LLM-триггеры)
 
     # 3.2b. При 1R+5%: если SL уже в BE, переводим SL на уровень 1R (гарантированный плюс, защита если LLM не сработает)
@@ -3280,6 +3413,16 @@ def run_trade_manager_cycle():
                 'trade_id': trade_id, 'entry': entry_price, 'old_sl': stop_loss, 'new_sl': sl_1r_level,
                 'tp': take_profit, 'current_price': current_price, 'signal_type': signal_type
             })
+            users_lock = db_service.get_all_active_users()
+            if users_lock:
+                msg_lock = (
+                    f"🔒 <b>ASTRA Manager:</b> SL перенесён на уровень 1R.\n\n"
+                    f"id={trade_id} | {signal_type}\n"
+                    f"Цена прошла 1R+{MANAGER_1R_LOCK_MARGIN*100:.0f}%.\n"
+                    f"SL: {stop_loss:.2f} → {sl_1r_level:.2f}\n"
+                    f"TP: {take_profit:.2f}"
+                )
+                telegram_service.broadcast_deals_only(users_lock, msg_lock)
 
     # Гибрид: обновляем макс. прогресс к TP и проверяем откат (закрытие при откате от 70%+ если LLM уже рекомендовал закрыть)
     _manager_max_progress[trade_id] = max(_manager_max_progress.get(trade_id, 0.0), progress_ratio)

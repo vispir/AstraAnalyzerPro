@@ -171,6 +171,27 @@ INVALIDATION LEVELS:
 </invalidation_and_atr>
 """
     
+    # Range Breakout контекст (подсказки SL/TP), если есть
+    rbc = technical_data.get("range_breakout_context") if isinstance(technical_data, dict) else None
+    if rbc:
+        prompt += f"""
+<range_breakout_context>
+When 'is_confirmed' is true, the system has detected a confirmed Range Breakout and precomputed recommended levels:
+- direction: BUY or SELL (matches breakout_direction)
+- entry_hint: approximate entry near current price at confirmation
+- suggested_sl: Stop Loss placed just beyond the broken range boundary with ~0.3×ATR buffer
+- suggested_tp: Take Profit near the next key level in breakout direction or at least 1.5R from entry_hint
+- suggested_rr: approximate R:R based on entry_hint, suggested_sl and suggested_tp
+
+Use these as the BASELINE for your trade plan in Range Breakout scenarios:
+- Do NOT place SL closer to price than suggested_sl (it MUST stay beyond the broken range boundary).
+- You MAY refine TP based on liquidity/structure, but do not reduce R:R below 1.2 and prefer R:R ≥ 1.5.
+
+JSON:
+{json.dumps(rbc, indent=2)}
+</range_breakout_context>
+"""
+    
     # Технические данные
     prompt += f"""
 <raw_technical_data>
@@ -536,8 +557,8 @@ class LLMService:
     "ТВОЯ ЗАДАЧА:\n"
     "1. Подтвердить качество пробоя по скриншоту (нет ли возврата назад)\n"
     "2. Найти точку входа: ближайший OB, FVG или ретест границы диапазона\n"
-    "3. SL: за противоположную границу диапазона или ближайший OB\n"
-    "4. TP: следующий ключевой уровень (EQH/EQL, DH/DL, Swing High/Low)\n"
+    "3. SL: за противоположную границу диапазона или ближайший OB. При наличии секции <range_breakout_context> используй suggested_sl как базовый уровень (за границей диапазона с буфером ≈0.3×ATR) и НЕ ставь SL ближе к цене, чем suggested_sl.\n"
+    "4. TP: следующий ключевой уровень (EQH/EQL, DH/DL, Swing High/Low). При наличии suggested_tp используй его как базовый таргет и можешь слегка скорректировать по структуре, сохраняя адекватное R:R (предпочтительно ≥ 1.5, минимум 1.2).\n"
     "\n"
     "BUY: обе свечи закрылись ВЫШЕ local_range_high → искать вход на покупку\n"
     "SELL: обе свечи закрылись НИЖЕ local_range_low → искать вход на продажу\n"
@@ -552,6 +573,7 @@ class LLMService:
     "- Сразу за точкой входа виден сильный встречный уровень\n"
     "\n"
     "Если пробой качественный — давай сигнал с confidence >= 65%.\n"
+    "В режиме Range Breakout по умолчанию ты даёшь BUY или SELL (с entry/SL/TP). WAIT — только исключение при наличии хотя бы одного из: ложный пробой по скриншоту, R:R < 1.5, сильный встречный уровень сразу за входом. Без этих фактов — всегда давай направленный сигнал (BUY или SELL), не WAIT.\n"
     "БОНУС КАЧЕСТВА: Если свеча подтверждения своей тенью касалась пробитого уровня (ретест), но закрылась за его пределами — это идеальное подтверждение. Повышай confidence на 5-10% при наличии ретеста.\n"
     "\n"
     "ВАЖНО: В executive_summary ВСЕГДА упоминай локальный диапазон явно —\n"
