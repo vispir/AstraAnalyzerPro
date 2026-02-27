@@ -1266,13 +1266,22 @@ def format_debug_report(status_data):
         msg += f"├ High: ${status_data['global_high']:.2f}\n"
         msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
-    if 'local_range_high' in status_data and 'local_range_low' in status_data:
-        lr_high = status_data['local_range_high']
-        lr_low = status_data['local_range_low']
-        if lr_high and lr_low:
-            msg += f"<b>📐 Локальный диапазон (30 св.):</b>\n"
-            msg += f"├ 🔵 High: <code>${lr_high:.3f}</code>\n"
-            msg += f"└ 🔵 Low: <code>${lr_low:.3f}</code>\n\n"
+    # Локальный диапазон из БД — всегда в отчёте (живёт до 24h / смены диапазона)
+    msg += "<b>📐 Локальный диапазон (БД):</b>\n"
+    ar = status_data.get('active_range')
+    if ar:
+        rh = ar.get('range_high')
+        rl = ar.get('range_low')
+        if rh is not None and rl is not None:
+            try:
+                msg += f"├ High: <code>${float(rh):.3f}</code>\n"
+                msg += f"└ Low: <code>${float(rl):.3f}</code>\n\n"
+            except (TypeError, ValueError):
+                msg += "└ —\n\n"
+        else:
+            msg += "└ —\n\n"
+    else:
+        msg += "└ Нет активного диапазона\n\n"
     
     # Impulse Context v5.2
     if 'impulse_context' in status_data:
@@ -2182,6 +2191,16 @@ def run_analysis_cycle():
             override_cooldown = True
             override_reasons.append("📊 Breakout + internal confirmed")
         
+        # КРИТЕРИЙ 5: Range Breakout подтверждён (две свечи за границей) — главный приоритет
+        if is_range_breakout_confirmed:
+            override_cooldown = True
+            override_reasons.append("📐 Range Breakout подтверждён")
+        
+        # КРИТЕРИЙ 6: Цена у OB/FVG или ключевых уровней (Proximity)
+        if is_near or is_near_key_levels:
+            override_cooldown = True
+            override_reasons.append("🎯 Proximity (OB/FVG/ключевые уровни)")
+        
         if override_cooldown:
             # OVERRIDE! Игнорируем кулдаун - критическое событие
             logger.warning(f"🔓 COOLDOWN OVERRIDE: {' | '.join(override_reasons)}")
@@ -2192,9 +2211,9 @@ def run_analysis_cycle():
             status_data['status'] = 'cooldown'
             status_data['reason'] = (
                 f'⏳ Кулдаун активен.\n'
-                f'Confirmed signals: {confirmed_count}\n'
-                f'Swing confirmed: BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed}\n'
-                f'Override требует: Swing confirmed ИЛИ {OVERRIDE_MIN_CONFIRMED}+ confirmed ИЛИ сильный импульс'
+                f'Confirmed: {confirmed_count} | Swing BOS={has_swing_bos_confirmed}, CHoCH={has_swing_choch_confirmed}\n'
+                f'Override: Range Breakout подтверждён ИЛИ Proximity (OB/FVG/уровни) ИЛИ Swing confirmed ИЛИ '
+                f'{OVERRIDE_MIN_CONFIRMED}+ confirmed ИЛИ сильный импульс'
             )
             send_debug_notification(status_data)
             return
