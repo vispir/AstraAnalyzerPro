@@ -205,24 +205,34 @@ def _calc_local_range_from_series(opens, closes, lookback):
 
 def calculate_local_range(candles, lookback=30):
     """
-    Детектор локального диапазона консолидации "как человек".
-    
+    Детектор локального диапазона консолидации "как человек рисует прямоугольник".
+
     Алгоритм:
-    1. Идём от последней свечи НАЗАД по candles.
-    2. Считаем atr_local = mean(abs(close - open)) по последним `lookback` свечам
-       (по умолчанию 30) — только для калибровки порога импульса.
-    3. Идя назад, считаем тело каждой свечи. Если abs(close - open) > 1.5 * atr_local —
-       считаем её импульсной и останавливаемся. Всё, что ЛЕВЕЕ, в диапазон не входит.
-    4. Свечи от текущей до первой импульсной назад образуют "свечи консолидации".
-    5. Если свечей консолидации < 5 — диапазона нет (too_few_candles).
-    6. Если свечей консолидации > 60 — берём только последние 60 (ближе к текущему моменту).
-    7. Проверка плотности: std_dev(close) по свечам консолидации.
-       Если std_dev > 1.0 * atr_local — диапазона нет (high_volatility).
-    8. Границы диапазона: max/min по open+close свечей консолидации.
-    
-    lookback используется ТОЛЬКО для расчёта atr_local (калибровка порога),
-    а не для выбора окна консолидации.
+    1. ATR = mean(|close - open|) по последним `lookback` свечам.
+    2. Каждая свеча помечается как «маленькая» (тело < SMALL_BODY_RATIO × ATR)
+       или «импульсная/большая».
+    3. Скользящее окно по последним MAX_HISTORY свечам (начиная с самой свежей).
+       Для каждого окна размером от MIN_WINDOW до MAX_WINDOW:
+         - Нужно ≥ MIN_SMALL_CANDLES маленьких свечей И ≥ SMALL_RATIO × размер окна.
+         - Границы диапазона = max/min по open+close ТОЛЬКО маленьких свечей.
+           (Большие свечи не растягивают прямоугольник.)
+         - Ширина диапазона ≤ MAX_RANGE_ATR × ATR.
+         - Текущая цена должна быть не дальше MAX_PROXIMITY_ATR × ATR от диапазона.
+    4. Берётся ПЕРВОЕ (самое свежее) квалифицирующее окно.
+       Диапазон остаётся действительным даже если цена уже вышла за его границы
+       (это и есть сигнал для торговли по закреплению).
     """
+    # ── параметры ──────────────────────────────────────────────────────────────
+    SMALL_BODY_RATIO  = 0.9   # тело < ratio × ATR → свеча «маленькая»
+    MIN_WINDOW        = 8     # минимальный размер окна (свечей)
+    MAX_WINDOW        = 60    # максимальный размер окна
+    MIN_SMALL_CANDLES = 6     # минимум маленьких свечей в окне (абсолют)
+    SMALL_RATIO       = 0.55  # минимальная доля маленьких свечей в окне
+    MAX_RANGE_ATR     = 2.5   # максимальная ширина диапазона в ATR
+    MAX_HISTORY       = 150   # сколько свечей истории просматриваем
+    MAX_PROXIMITY_ATR = 5.0   # максимальное расстояние диапазона от текущей цены
+    # ──────────────────────────────────────────────────────────────────────────
+
     result = {
         'local_range_high': None,
         'local_range_low': None,
@@ -237,89 +247,118 @@ def calculate_local_range(candles, lookback=30):
         logger.info("⚠️ Консолидации нет: too_few_candles (candles is None)")
         return result
 
-    # Подготовка данных: поддерживаем и DataFrame, и list of dicts
+    # ── подготовка массивов ────────────────────────────────────────────────────
     if hasattr(candles, 'tail'):  # pandas.DataFrame
         df = candles
         n = len(df)
         if n < 1:
             result['no_range_reason'] = 'too_few_candles'
-            logger.info("⚠️ Консолидации нет: too_few_candles (no candles in DataFrame)")
+            logger.info("⚠️ Консолидации нет: too_few_candles (empty DataFrame)")
             return result
-        open_col = 'Open' if 'Open' in df.columns else 'open'
+        open_col  = 'Open'  if 'Open'  in df.columns else 'open'
         close_col = 'Close' if 'Close' in df.columns else 'close'
-        all_opens = np.array(df[open_col].astype(float).values, dtype=float)
+        all_opens  = np.array(df[open_col].astype(float).values,  dtype=float)
         all_closes = np.array(df[close_col].astype(float).values, dtype=float)
-    else:  # предполагаем list of dicts
+    else:
         seq = candles or []
         n = len(seq)
         if n < 1:
             result['no_range_reason'] = 'too_few_candles'
-            logger.info("⚠️ Консолидации нет: too_few_candles (empty candles list)")
+            logger.info("⚠️ Консолидации нет: too_few_candles (empty list)")
             return result
-        all_opens = np.array(
-            [float(c.get('open', c.get('Open', 0.0))) for c in seq],
-            dtype=float
-        )
-        all_closes = np.array(
-            [float(c.get('close', c.get('Close', 0.0))) for c in seq],
-            dtype=float
-        )
+        all_opens  = np.array([float(c.get('open',  c.get('Open',  0.0))) for c in seq], dtype=float)
+        all_closes = np.array([float(c.get('close', c.get('Close', 0.0))) for c in seq], dtype=float)
 
-    # Шаг 2 — atr_local по последним `lookback` свечам (или меньше, если данных мало)
-    window = min(n, max(1, lookback))
-    bodies_window = np.abs(all_closes[-window:] - all_opens[-window:])
-    atr_local = float(np.mean(bodies_window)) if window > 0 else 0.0
-    if atr_local <= 0:
-        atr_local = 1e-9  # защита от деления на ноль и нулевой волатильности
+    # ── ATR ────────────────────────────────────────────────────────────────────
+    win = min(n, max(1, lookback))
+    atr_local = float(np.mean(np.abs(all_closes[-win:] - all_opens[-win:]))) or 1e-9
 
-    # Шаг 3–4 — идём от последней свечи назад, собираем свечи консолидации
-    consolidation_indices: List[int] = []
-    for idx in range(n - 1, -1, -1):
-        body = abs(all_closes[idx] - all_opens[idx])
-        if body > 1.5 * atr_local:
-            # Импульсная свеча — всё левее не входит в диапазон
-            break
-        consolidation_indices.append(idx)
+    current_price   = float(all_closes[-1])
+    all_bodies      = np.abs(all_closes - all_opens)
+    small_mask_full = all_bodies < SMALL_BODY_RATIO * atr_local  # bool-маска по всем свечам
+    history_start   = max(0, n - MAX_HISTORY)
 
-    cons_count = len(consolidation_indices)
-    if cons_count < 5:
-        result['consolidation_candles'] = cons_count
+    # ── скользящее окно: ищем самое свежее квалифицирующее окно ───────────────
+    best = None
+    for end_idx in range(n - 1, history_start - 1, -1):
+        for win_size in range(MIN_WINDOW, MAX_WINDOW + 1):
+            start_idx = end_idx - win_size + 1
+            if start_idx < history_start:
+                break
+
+            sm          = small_mask_full[start_idx:end_idx + 1]
+            small_count = int(np.sum(sm))
+
+            if small_count < MIN_SMALL_CANDLES:
+                continue
+            if small_count < SMALL_RATIO * win_size:
+                continue
+
+            # границы только по маленьким свечам
+            s_opens  = all_opens [start_idx:end_idx + 1][sm]
+            s_closes = all_closes[start_idx:end_idx + 1][sm]
+            prices   = np.concatenate([s_opens, s_closes])
+            w_high   = float(np.max(prices))
+            w_low    = float(np.min(prices))
+            w_range  = w_high - w_low
+
+            if w_range > MAX_RANGE_ATR * atr_local:
+                continue
+
+            # текущая цена должна быть близко к диапазону (или внутри него)
+            if current_price > w_high:
+                dist = current_price - w_high
+            elif current_price < w_low:
+                dist = w_low - current_price
+            else:
+                dist = 0.0
+            if dist > MAX_PROXIMITY_ATR * atr_local:
+                continue
+
+            best = {
+                'high':        round(w_high,  3),
+                'low':         round(w_low,   3),
+                'range':       round(w_range, 3),
+                'small_count': small_count,
+                'win_size':    win_size,
+                'start_idx':   start_idx,
+                'end_idx':     end_idx,
+            }
+            break  # нашли окно для этого end_idx — не пробуем более широкие
+
+        if best is not None:
+            break  # нашли самое свежее окно — дальше не ищем
+
+    if best is None:
         result['no_range_reason'] = 'too_few_candles'
-        logger.info(f"⚠️ Консолидации нет: too_few_candles (консолидация {cons_count} свечей)")
+        result['consolidation_candles'] = 0
+        logger.info("⚠️ Консолидации нет: не найдено подходящего окна консолидации")
         return result
 
-    # Шаг 6 — ограничиваем максимальное число свечей консолидации 60 (самые свежие)
-    if cons_count > 60:
-        consolidation_indices = consolidation_indices[:60]
-        cons_count = 60
+    result['local_range_high']     = best['high']
+    result['local_range_low']      = best['low']
+    result['range_size']           = best['range']
+    result['consolidation_candles'] = best['small_count']
+    result['no_range_reason']      = None
 
-    cons_opens = all_opens[consolidation_indices]
-    cons_closes = all_closes[consolidation_indices]
+    # ── проверка: не пробили ли последние свечи уже найденный диапазон ─────────
+    # (информация для Range Manager — не аннулируем диапазон, просто логируем)
+    last_closes = all_closes[best['end_idx']:n]  # свечи от конца окна до текущей
+    candles_above = int(np.sum(last_closes > best['high']))
+    candles_below = int(np.sum(last_closes < best['low']))
+    if candles_above > 0 or candles_below > 0:
+        direction = 'вверх' if candles_above >= candles_below else 'вниз'
+        logger.info(
+            f"🔍 Консолидация: окно {best['win_size']} св. ({best['small_count']} маленьких), "
+            f"диапазон [{best['low']:.3f} - {best['high']:.3f}] | "
+            f"⚠️ цена уже вышла {direction} ({candles_above} св. выше, {candles_below} св. ниже границ)"
+        )
+    else:
+        logger.info(
+            f"🔍 Консолидация: окно {best['win_size']} св. ({best['small_count']} маленьких), "
+            f"диапазон [{best['low']:.3f} - {best['high']:.3f}] | цена внутри диапазона"
+        )
 
-    # Шаг 7 — проверка плотности
-    std_dev = float(np.std(cons_closes))
-    if std_dev > 1.0 * atr_local:
-        result['consolidation_candles'] = cons_count
-        result['no_range_reason'] = 'high_volatility'
-        logger.info(f"⚠️ Консолидации нет: high_volatility (std_dev={std_dev:.5f} > atr_local={atr_local:.5f})")
-        return result
-
-    # Шаг 8 — границы по open+close свечей консолидации (без теней)
-    all_prices = np.concatenate([cons_opens, cons_closes])
-    local_high = float(np.max(all_prices))
-    local_low = float(np.min(all_prices))
-    range_size = local_high - local_low
-
-    result['local_range_high'] = round(local_high, 3)
-    result['local_range_low'] = round(local_low, 3)
-    result['range_size'] = round(range_size, 3)
-    result['consolidation_candles'] = cons_count
-    result['no_range_reason'] = None
-
-    logger.info(
-        f"🔍 Консолидация: {cons_count} свечей, диапазон "
-        f"[{result['local_range_low']:.3f} - {result['local_range_high']:.3f}]"
-    )
     return result
 
 

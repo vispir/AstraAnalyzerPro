@@ -1944,7 +1944,7 @@ def run_analysis_cycle():
     # ---------- Range Manager (локальный диапазон из БД + двухсвечное закрепление) ----------
     RANGE_SYMBOL = 'XAUUSD'
     RANGE_TIMEFRAME = 'M15'
-    MAX_LOCAL_RANGE_ATR = 2.0
+    MAX_LOCAL_RANGE_ATR = 2.5  # согласовано с MAX_RANGE_ATR в calculate_local_range
     status_data['active_range'] = None
     status_data['is_range_breakout_confirmed'] = False
     status_data['breakout_direction'] = None
@@ -2005,33 +2005,38 @@ def run_analysis_cycle():
         new_range = analysis.get('local_range') or {}
         no_reason = new_range.get('no_range_reason')
         status_data['local_range_no_reason'] = None  # причина отсутствия диапазона в БД (для отчёта)
-        if new_range is None or no_reason == 'high_volatility':
-            logger.info("⚠️ Консолидации нет (высокая волатильность), Range фильтр пропущен")
-            status_data['local_range_no_reason'] = 'high_volatility'
+
+        n_high = new_range.get('local_range_high') if new_range else None
+        n_low  = new_range.get('local_range_low')  if new_range else None
+
+        if n_high is None or n_low is None:
+            # Детектор не нашёл диапазон (too_few_candles или пустой результат)
+            cons_cnt = new_range.get('consolidation_candles') if new_range else None
+            status_data['local_range_no_reason'] = no_reason or 'no_range'
+            status_data['local_range_consolidation_candles'] = cons_cnt
+            logger.info(
+                f"⚠️ Локальный диапазон не найден ({no_reason or 'no_range'}"
+                + (f", {cons_cnt} св. консолидации" if cons_cnt is not None else "")
+                + "), Range фильтр пропущен"
+            )
         else:
-            n_high = new_range.get('local_range_high')
-            n_low = new_range.get('local_range_low')
-            if n_high is None or n_low is None:
-                logger.info("⚠️ Локальный диапазон не найден, Range фильтр пропущен")
-                status_data['local_range_no_reason'] = no_reason or 'no_range'
-                if no_reason == 'too_few_candles':
-                    status_data['local_range_consolidation_candles'] = new_range.get('consolidation_candles')
+            range_size_new = new_range.get('range_size') or (n_high - n_low)
+            atr_m15 = atr_m15_initial or 0.0
+            # Детектор уже фильтрует по MAX_RANGE_ATR=2.5 внутри; здесь второй рубеж не нужен,
+            # но оставляем на случай рассогласования данных
+            if atr_m15 > 0 and range_size_new > MAX_LOCAL_RANGE_ATR * atr_m15:
+                logger.info(
+                    f"⚠️ Локальный диапазон слишком широкий (range_size={range_size_new:.2f} > "
+                    f"{MAX_LOCAL_RANGE_ATR}×ATR={MAX_LOCAL_RANGE_ATR * atr_m15:.2f}), Range фильтр пропущен"
+                )
+                status_data['local_range_no_reason'] = 'range_too_wide'
+                status_data['local_range_size_rejected'] = round(range_size_new, 2)
+                status_data['local_range_atr_limit'] = round(MAX_LOCAL_RANGE_ATR * atr_m15, 2)
             else:
-                range_size_new = new_range.get('range_size') or (n_high - n_low)
-                atr_m15 = atr_m15_initial or 0.0
-                if atr_m15 > 0 and range_size_new > MAX_LOCAL_RANGE_ATR * atr_m15:
-                    logger.info(
-                        f"⚠️ Локальный диапазон слишком широкий (range_size={range_size_new:.2f} > {MAX_LOCAL_RANGE_ATR}×ATR), "
-                        "Range фильтр пропущен"
-                    )
-                    status_data['local_range_no_reason'] = 'range_too_wide'
-                    status_data['local_range_size_rejected'] = round(range_size_new, 2)
-                    status_data['local_range_atr_limit'] = round(MAX_LOCAL_RANGE_ATR * atr_m15, 2)
-                else:
-                    saved = db_service.save_range(n_high, n_low, symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
-                    if saved:
-                        active_range = saved
-                        logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
+                saved = db_service.save_range(n_high, n_low, symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
+                if saved:
+                    active_range = saved
+                    logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
 
     status_data['active_range'] = active_range
 
