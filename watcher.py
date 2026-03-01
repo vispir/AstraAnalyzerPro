@@ -2002,6 +2002,31 @@ def run_analysis_cycle():
                     logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
     if not active_range:
+        # Нет активного — ищем подходящий старый диапазон (цена вернулась в зону)
+        try:
+            inactive_ranges = db_service.get_recent_inactive_ranges(
+                symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
+            )
+            atr_m15 = atr_m15_initial or 0.0
+            for old_range in inactive_ranges:
+                r_high = safe_float(old_range.get('range_high'), 0)
+                r_low = safe_float(old_range.get('range_low'), 0)
+                r_size = safe_float(old_range.get('range_size'), 0) or (r_high - r_low if (r_high and r_low) else 0)
+                buffer = 0.5 * atr_m15
+                price_in_zone = (r_low - buffer) <= current_price <= (r_high + buffer)
+                if price_in_zone and r_size > 0:
+                    if db_service.reactivate_range(old_range['id']):
+                        active_range = dict(old_range)
+                        active_range['is_active'] = True
+                        logger.info(
+                            f"🔄 Воскрешён старый диапазон [{r_low:.3f} - {r_high:.3f}] "
+                            f"(создан {old_range.get('created_at', '?')}), цена вернулась в зону"
+                        )
+                    break
+        except Exception as e:
+            logger.warning(f"⚠️ get_recent_inactive_ranges / reactivate error: {e}")
+
+    if not active_range:
         new_range = analysis.get('local_range') or {}
         no_reason = new_range.get('no_range_reason')
         status_data['local_range_no_reason'] = None  # причина отсутствия диапазона в БД (для отчёта)

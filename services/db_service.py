@@ -2,7 +2,7 @@ import os
 import math
 import requests
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -788,6 +788,88 @@ class DBService:
             return True
         except Exception as e:
             logger.error(f"❌ deactivate_range error (id={range_id}): {e}")
+            return False
+
+    def get_recent_inactive_ranges(
+        self, symbol: str = 'XAUUSD', timeframe: str = 'M15', hours: int = 72
+    ) -> list:
+        """
+        Возвращает деактивированные диапазоны за последние N часов.
+        Исключает: death_reason='expired_24h';
+        исключает death_reason='replaced_by_breakout' если старше 24 часов.
+        Воскрешать можно только: price_too_far, new_range_formed,
+        или replaced_by_breakout если updated_at в пределах 24h.
+        Сортировка: сначала свежие (updated_at DESC). Лимит: 10 записей.
+        """
+        if not self.url:
+            return []
+        now = datetime.now(timezone.utc)
+        from_dt = now - timedelta(hours=hours)
+        from_iso = from_dt.isoformat()
+        cutoff_24h = (now - timedelta(hours=24)).isoformat()
+
+        target_url = (
+            f"{self.url}/rest/v1/local_ranges"
+            f"?symbol=eq.{symbol}&timeframe=eq.{timeframe}"
+            f"&is_active=eq.false"
+            f"&updated_at=gte.{from_iso}"
+            f"&select=*"
+            f"&order=updated_at.desc"
+            f"&limit=10"
+        )
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            rows = response.json() or []
+        except Exception as e:
+            logger.warning(f"⚠️ get_recent_inactive_ranges error: {e}")
+            return []
+
+        out = []
+        for r in rows:
+            reason = r.get('death_reason')
+            if reason == 'expired_24h':
+                continue
+            if reason == 'replaced_by_breakout':
+                updated = r.get('updated_at')
+                if updated and str(updated) < cutoff_24h:
+                    continue
+            out.append(r)
+        return out
+
+    def reactivate_range(self, range_id: int):
+        """
+        Переактивирует старый диапазон:
+        is_active=True, death_reason=null, last_touch_at=now, updated_at=now.
+        """
+        if not self.url or not range_id:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        target_url = f"{self.url}/rest/v1/local_ranges?id=eq.{range_id}"
+        payload = {
+            "is_active": True,
+            "death_reason": None,
+            "last_touch_at": now,
+            "updated_at": now
+        }
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"📐 Диапазон {range_id} реактивирован (воскрешён)")
+            return True
+        except Exception as e:
+            logger.error(f"❌ reactivate_range error (id={range_id}): {e}")
             return False
 
 # Создаем экземпляр сервиса
