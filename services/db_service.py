@@ -641,6 +641,57 @@ class DBService:
             logger.error(f"❌ Ошибка обновления SL сигнала {signal_id}: {e}")
             return False
 
+    def get_signal_entry_notified(self, signal_id: int) -> bool:
+        """
+        Возвращает True, если по сигналу уже было отправлено уведомление «Вход достигнут».
+        Используется Manager-агентом, чтобы не дублировать сообщение после рестарта процесса.
+        """
+        if not self.url or not signal_id:
+            return False
+        target_url = f"{self.url}/rest/v1/signals?select=entry_notified&id=eq.{signal_id}&limit=1"
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data and len(data) > 0:
+                return bool(data[0].get("entry_notified", False))
+            return False
+        except Exception as e:
+            logger.warning(f"⚠️ get_signal_entry_notified({signal_id}): {e}")
+            return False
+
+    def mark_entry_notified(self, signal_id: int) -> bool:
+        """
+        Помечает сигнал как уже уведомлённый по входу (entry_notified = true).
+        Используется Manager-агентом после отправки «Вход достигнут», чтобы не слать дубль.
+        """
+        if not self.url or not signal_id:
+            return False
+        target_url = f"{self.url}/rest/v1/signals?id=eq.{signal_id}"
+        payload = {
+            "entry_notified": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Сигнал {signal_id} помечен entry_notified=True")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления entry_notified для сигнала {signal_id}: {e}")
+            return False
+
     # ----------------------------------------------------------------------
     # Методы для работы с локальными диапазонами (local_ranges)
     # ----------------------------------------------------------------------

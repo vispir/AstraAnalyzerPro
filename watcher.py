@@ -3327,8 +3327,13 @@ def run_trade_manager_cycle():
         return
 
     _entry_pending_notification_sent.discard(trade_id)  # вход прокнул — снимаем с учёта одноразового уведомления
-    # Один раз в Astra Signal Bot: цена входа достигнута, сделка активирована
-    if trade_id not in _entry_filled_notification_sent:
+    # Один раз в Astra Signal Bot: цена входа достигнута, сделка активирована (проверяем БД — без дубля после рестарта)
+    already_notified_in_db = False
+    try:
+        already_notified_in_db = db_service.get_signal_entry_notified(trade_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось прочитать entry_notified для сигнала {trade_id}: {e}")
+    if (trade_id not in _entry_filled_notification_sent) and not already_notified_in_db:
         _entry_filled_notification_sent.add(trade_id)
         user_ids_filled = db_service.get_all_active_users()
         if user_ids_filled:
@@ -3338,6 +3343,7 @@ def run_trade_manager_cycle():
                 f"Текущая цена: {current_price:.2f}. Менеджер ведёт сделку (SL/TP)."
             )
             telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
+        db_service.mark_entry_notified(trade_id)
     logger.info(
         f"💼 Manager: активная сделка id={trade_id}, type={signal_type}, "
         f"entry={entry_price:.2f}, sl={stop_loss:.2f}, tp={take_profit:.2f}, "
