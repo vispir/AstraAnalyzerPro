@@ -1084,8 +1084,14 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
     
     elif verdict and verdict['action'] == 'WAIT':
         # Форматируем WAIT сигнал с полными данными (полный executive_summary как для BUY/SELL)
+        # Включаем как текст LLM, так и техническую причину, по которой система отклонила сделку
         full_reason = parsed_data.get('executive_summary', '') if parsed_data else ''
-        reason = escape_html(full_reason or verdict.get('reason', '') or 'Ожидание лучшей возможности')
+        system_reason = verdict.get('reason', '')
+        if full_reason and system_reason:
+            combined_reason = f"{full_reason}\n\nТехническая причина WAIT: {system_reason}"
+        else:
+            combined_reason = full_reason or system_reason or 'Ожидание лучшей возможности'
+        reason = escape_html(combined_reason)
         confidence = verdict.get('confidence', 0)
         low_conf_override = verdict.get('low_confidence_override', False)
         original_action = escape_html(verdict.get('original_action'))
@@ -2140,22 +2146,42 @@ def run_analysis_cycle():
                     send_debug_notification(status_data)
                     return
     
-            # ФИЛЬТР 2 — доджи: тело свечи подтверждения (signal_candle) слишком маленькое
-            if atr_m15 > 0:
-                signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
-                candle_body = abs(signal_close - signal_open)
-                body_threshold = 0.3 * atr_m15
-                if candle_body < body_threshold:
-                    status_data['status'] = 'range_breakout_doji'
-                    status_data['reason'] = (
-                        f"Range Breakout: свеча подтверждения — доджи "
-                        f"(тело {candle_body:.2f} < 30% ATR={body_threshold:.2f}) — нет силы"
+            # ФИЛЬТР 2 — доджи: тело ≤ 3 пунктов (или min(30% ATR, 3.0))
+            body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+            signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+            candle_body = abs(signal_close - signal_open)
+            signal_is_doji = candle_body < body_threshold
+
+            # Трёхсвечное подтверждение: 1-я за границей, 2-я доджи за границей, 3-я за границей → LLM в любом случае
+            three_candle_ok = False
+            if signal_is_doji and candles and len(candles) >= 4:
+                c4 = candles[-4]
+                c4_close = safe_float(c4.get('close', c4.get('Close', 0)))
+                c4_out_up = c4_close > range_high
+                c4_out_down = c4_close < range_low
+                breakout_open = safe_float(breakout_c.get('open', breakout_c.get('Open', 0)))
+                breakout_body = abs(breakout_close - breakout_open)
+                breakout_is_doji = breakout_body < body_threshold
+                if breakout_up and c4_out_up and breakout_is_doji:
+                    three_candle_ok = True
+                if breakout_down and c4_out_down and breakout_is_doji:
+                    three_candle_ok = True
+                if three_candle_ok:
+                    logger.info(
+                        f"✅ ПРОБОЙ ПОДТВЕРЖДЁН (3 свечи): 1-я и 2-я (доджи) и 3-я за границей — вызываем LLM"
                     )
-                    logger.warning(f"⚠️ {status_data['reason']}")
-                    send_debug_notification(status_data)
-                    return
-    
-            # ✅ Истинный пробой — деактивируем старый диапазон, следующий цикл создаст новый
+
+            if signal_is_doji and not three_candle_ok:
+                status_data['status'] = 'range_breakout_doji'
+                status_data['reason'] = (
+                    f"Range Breakout: свеча подтверждения — доджи "
+                    f"(тело {candle_body:.2f} < {body_threshold:.2f} пт) — ждём третью свечу за границей"
+                )
+                logger.warning(f"⚠️ {status_data['reason']}")
+                send_debug_notification(status_data)
+                return
+
+            # ✅ Истинный пробой (2 свечи или 3 свечи с доджи) — деактивируем старый диапазон
             try:
                 db_service.deactivate_range(active_range['id'], 'replaced_by_breakout')
                 logger.info(
@@ -2167,6 +2193,58 @@ def run_analysis_cycle():
     
             status_data['is_range_breakout_confirmed'] = True
             status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
+
+            # Wick-профиль последних 2–3 свечей пробоя для LLM (длины теней и тела)
+            try:
+                def _rb_wick_profile(cndl):
+                    o = safe_float(cndl.get('open', cndl.get('Open', 0)))
+                    h = safe_float(cndl.get('high', cndl.get('High', 0)))
+                    l = safe_float(cndl.get('low', cndl.get('Low', 0)))
+                    c = safe_float(cndl.get('close', cndl.get('Close', 0)))
+                    body = abs(c - o)
+                    upper = max(h - max(o, c), 0.0)
+                    lower = max(min(o, c) - l, 0.0)
+                    # Порог «длинной» тени: не меньше тела и базового порога по ATR/пунктам
+                    if atr_m15 and atr_m15 > 0:
+                        wick_threshold = max(body, 0.3 * atr_m15, 3.0)
+                    else:
+                        wick_threshold = max(body, 3.0)
+                    return {
+                        'open': o,
+                        'high': h,
+                        'low': l,
+                        'close': c,
+                        'body': body,
+                        'upper_wick': upper,
+                        'lower_wick': lower,
+                        'long_upper': upper > wick_threshold,
+                        'long_lower': lower > wick_threshold,
+                    }
+
+                # Для 2-свечного сценария: breakout_c (1-я) и signal_c (2-я).
+                # Для 3-свечного: candles[-4] (1-я), breakout_c (2-я, доджи), signal_c (3-я).
+                first_c = breakout_c
+                second_c = signal_c
+                third_c = None
+                pattern = 'two_candle'
+                if three_candle_ok and candles and len(candles) >= 4:
+                    first_c = candles[-4]
+                    second_c = breakout_c
+                    third_c = signal_c
+                    pattern = 'three_candle_doji'
+
+                rb_wicks = {
+                    'pattern': pattern,
+                    'direction': 'BUY' if breakout_up else 'SELL',
+                    'first': _rb_wick_profile(first_c) if first_c else None,
+                    'second': _rb_wick_profile(second_c) if second_c else None,
+                }
+                if third_c:
+                    rb_wicks['third'] = _rb_wick_profile(third_c)
+                status_data['range_breakout_wicks'] = rb_wicks
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка расчёта wick-профиля Range Breakout: {e}")
+
             logger.info(
                 f"✅ ПРОБОЙ ПОДТВЕРЖДЁН {direction_txt}: две свечи за границей {boundary:.3f} | "
                 f"breakout={breakout_close:.3f}, signal={signal_close:.3f}"
@@ -2671,6 +2749,8 @@ def run_analysis_cycle():
                 'suggested_sl': suggested_sl,
                 'suggested_tp': suggested_tp,
                 'suggested_rr': suggested_rr,
+                # Wick-профиль свечей пробоя (first/second/third) из status_data, если он был рассчитан
+                'candle_wicks': status_data.get('range_breakout_wicks'),
             }
             logger.info(
                 f"📐 Range Breakout context: dir={direction_rb}, "
@@ -2849,7 +2929,7 @@ def run_analysis_cycle():
                 logger.info(f"✅ Task 8 Trade limits: {limit_reason}")
 
         # Fix #8: Sweep freshness gate — для моделей со свипом требуем свежий свип (≤10 бар M15)
-        if is_confirmed and model_name in ('LIQUIDITY_SWEEP_REVERSAL', 'RANGE_SWEEP'):
+        if is_confirmed and model_name == 'LIQUIDITY_SWEEP_REVERSAL':
             logger.info(f"🔍 Fix #8: Проверка свежести свипа для модели {model_name}...")
             liquidity_list = analysis.get('liquidity') or []
             if llm_action == 'BUY':
