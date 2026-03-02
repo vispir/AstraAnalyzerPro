@@ -1230,7 +1230,7 @@ def format_debug_report(status_data):
     
     if status_data.get('price', 0) > 0:
         msg += "<b>💹 Рыночные данные:</b>\n"
-        msg += f"├ Цена: <code>${status_data['price']:.2f}</code>\n"
+        msg += f"├ Цена: <code>${status_data['price']:.2f}</code> (Open)\n"
         # ATR и SL×ATR только для торгового сигнала (BUY/SELL)
         if status_data.get('status') == 'signal_sent':
             atr_val = status_data.get('atr_m15') or 0
@@ -1623,8 +1623,20 @@ def run_analysis_cycle():
     zones = advanced.get('zones', {})
     key_levels = advanced.get('key_levels', {})
     
-    # Получаем текущую цену для валидации диапазона
-    current_price = safe_float(candles[-1].get('close', 0), 0.0)
+    # Опорные свечи и текущая цена для анализа
+    current_candle = candles[-1] if candles else {}
+    signal_candle = candles[-2] if candles and len(candles) >= 2 else {}
+    breakout_candle = candles[-3] if candles and len(candles) >= 3 else {}
+    
+    # v8.x: используем цену ОТКРЫТИЯ новой свечи как опорную (стабильна в течение бара)
+    current_price = safe_float(
+        current_candle.get('open', current_candle.get('Open', 0)),
+        0.0
+    )
+    # Пробрасываем актуальную цену в analysis, чтобы все последующие расчёты
+    # использовали одно и то же значение current_price
+    if isinstance(analysis, dict):
+        analysis['current_price'] = current_price
     
     # ДИАГНОСТИКА: Логируем, что пришло из детектора
     if zones:
@@ -1944,7 +1956,7 @@ def run_analysis_cycle():
     # ---------- Range Manager (локальный диапазон из БД + двухсвечное закрепление) ----------
     RANGE_SYMBOL = 'XAUUSD'
     RANGE_TIMEFRAME = 'M15'
-    MAX_LOCAL_RANGE_ATR = 2.5  # согласовано с MAX_RANGE_ATR в calculate_local_range
+    MAX_LOCAL_RANGE_ATR = 2.0  # согласовано с MAX_RANGE_ATR в calculate_local_range
     status_data['active_range'] = None
     status_data['is_range_breakout_confirmed'] = False
     status_data['breakout_direction'] = None
@@ -2064,27 +2076,40 @@ def run_analysis_cycle():
                     logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
 
     status_data['active_range'] = active_range
-
+    
     if active_range:
         range_high = safe_float(active_range.get('range_high'), 0)
         range_low = safe_float(active_range.get('range_low'), 0)
         status_data['local_range_high'] = range_high
         status_data['local_range_low'] = range_low
-
-        prev_candle = candles[-2] if candles and len(candles) >= 2 else {}
-        curr_candle = candles[-1] if candles else {}
-        prev_close = safe_float(prev_candle.get('close'), 0)
-        curr_close = safe_float(curr_candle.get('close'), 0)
-
-        breakout_up   = (prev_close > range_high and curr_close > range_high)
-        breakout_down = (prev_close < range_low  and curr_close < range_low)
-
-        # ── Ложный пробой: предыдущая свеча вышла за границу, текущая вернулась ──
-        prev_above = prev_close > range_high and curr_close <= range_high
-        prev_below = prev_close < range_low  and curr_close >= range_low
-        if prev_above or prev_below:
+    
+        # Рабочие свечи для анализа диапазона:
+        # - breakout_candle: первая свеча потенциального пробоя (полностью закрыта)
+        # - signal_candle: вторая свеча (подтверждение / отмена пробоя)
+        # - current_candle: новая, только что открывшаяся свеча (используется только по open)
+        if candles and len(candles) >= 3:
+            breakout_c = candles[-3]
+            signal_c = candles[-2]
+        elif candles and len(candles) >= 2:
+            # Недостаточно истории для двух свечей пробоя — считаем, что пробоя нет
+            breakout_c = candles[-2]
+            signal_c = candles[-2]
+        else:
+            breakout_c = {}
+            signal_c = {}
+    
+        breakout_close = safe_float(breakout_c.get('close'), 0)
+        signal_close = safe_float(signal_c.get('close'), 0)
+    
+        breakout_up   = (breakout_close > range_high and signal_close > range_high)
+        breakout_down = (breakout_close < range_low  and signal_close < range_low)
+    
+        # ── Ложный пробой (FAKEOUT): первая свеча вышла за границу, вторая вернулась внутрь ──
+        fakeout_up = breakout_close > range_high and signal_close <= range_high
+        fakeout_down = breakout_close < range_low and signal_close >= range_low
+        if fakeout_up or fakeout_down:
             db_service.update_range_touch(active_range['id'])
-            direction_txt = 'вверх' if prev_above else 'вниз'
+            direction_txt = 'вверх' if fakeout_up else 'вниз'
             logger.info(
                 f"↩️ Ложный пробой {direction_txt}: цена вернулась в диапазон "
                 f"[{range_low:.3f} - {range_high:.3f}], ждём следующей попытки"
@@ -2096,15 +2121,15 @@ def run_analysis_cycle():
             )
             send_debug_notification(status_data)
             return
-
+    
         if breakout_up or breakout_down:
             boundary = range_high if breakout_up else range_low
             direction_txt = 'BUY (вверх)' if breakout_up else 'SELL (вниз)'
-
+    
             # ФИЛЬТР 1 — перегрев: подтверждение слишком далеко от границы
             atr_m15 = atr_m15_initial or 0.0
             if atr_m15 > 0:
-                distance = (curr_close - range_high) if breakout_up else (range_low - curr_close)
+                distance = (signal_close - range_high) if breakout_up else (range_low - signal_close)
                 if distance > 1.5 * atr_m15:
                     status_data['status'] = 'range_breakout_overheated'
                     status_data['reason'] = (
@@ -2114,11 +2139,11 @@ def run_analysis_cycle():
                     logger.warning(f"⚠️ {status_data['reason']}")
                     send_debug_notification(status_data)
                     return
-
-            # ФИЛЬТР 2 — доджи: тело свечи подтверждения слишком маленькое
+    
+            # ФИЛЬТР 2 — доджи: тело свечи подтверждения (signal_candle) слишком маленькое
             if atr_m15 > 0:
-                curr_open = safe_float(curr_candle.get('open', curr_candle.get('Open', 0)))
-                candle_body = abs(curr_close - curr_open)
+                signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+                candle_body = abs(signal_close - signal_open)
                 body_threshold = 0.3 * atr_m15
                 if candle_body < body_threshold:
                     status_data['status'] = 'range_breakout_doji'
@@ -2129,7 +2154,7 @@ def run_analysis_cycle():
                     logger.warning(f"⚠️ {status_data['reason']}")
                     send_debug_notification(status_data)
                     return
-
+    
             # ✅ Истинный пробой — деактивируем старый диапазон, следующий цикл создаст новый
             try:
                 db_service.deactivate_range(active_range['id'], 'replaced_by_breakout')
@@ -2139,34 +2164,35 @@ def run_analysis_cycle():
                 )
             except Exception as _e:
                 logger.warning(f"⚠️ deactivate_range(replaced_by_breakout) error: {_e}")
-
+    
             status_data['is_range_breakout_confirmed'] = True
             status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
             logger.info(
                 f"✅ ПРОБОЙ ПОДТВЕРЖДЁН {direction_txt}: две свечи за границей {boundary:.3f} | "
-                f"prev={prev_close:.3f}, curr={curr_close:.3f}"
+                f"breakout={breakout_close:.3f}, signal={signal_close:.3f}"
             )
             # Пробой диапазона сам по себе является триггером для LLM
             is_near = True
         else:
-            only_curr_above = curr_close > range_high and prev_close <= range_high
-            only_curr_below = curr_close < range_low  and prev_close >= range_low
-            if only_curr_above or only_curr_below:
-                direction_txt = 'вверх' if only_curr_above else 'вниз'
-                boundary = range_high if only_curr_above else range_low
+            # Первый пробой: вторая свеча вышла за границу, первая ещё была внутри
+            only_signal_above = signal_close > range_high and breakout_close <= range_high
+            only_signal_below = signal_close < range_low and breakout_close >= range_low
+            if only_signal_above or only_signal_below:
+                direction_txt = 'вверх' if only_signal_above else 'вниз'
+                boundary = range_high if only_signal_above else range_low
                 db_service.update_range_touch(active_range['id'])
                 logger.info(
-                    f"⏳ Первый пробой {direction_txt}: prev_close={prev_close:.3f}, "
-                    f"curr_close={curr_close:.3f}, граница={boundary:.3f} — ждём второй свечи"
+                    f"⏳ Первый пробой {direction_txt}: breakout={breakout_close:.3f}, "
+                    f"signal={signal_close:.3f}, граница={boundary:.3f} — ждём второй свечи"
                 )
                 status_data['status'] = 'range_breakout_wait_confirmation'
                 status_data['reason'] = (
-                    f'⏳ Первый пробой {direction_txt}: curr={curr_close:.3f}, '
+                    f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
                     f'граница={boundary:.3f} — ждём закрепления второй свечой'
                 )
                 send_debug_notification(status_data)
                 return
-
+    
             # Цена внутри диапазона (не первый пробой)
             db_service.update_range_touch(active_range['id'])
             logger.info(
