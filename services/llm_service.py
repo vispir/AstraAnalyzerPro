@@ -149,6 +149,18 @@ Do NOT take M15 entries against strong HTF trend unless there is clear reversal 
 {json.dumps(htf_context, indent=2)}
 </htf_context>
 """
+
+    # История локальных диапазонов (если передана)
+    recent_local_ranges = technical_data.get("recent_local_ranges") if isinstance(technical_data, dict) else None
+    if recent_local_ranges:
+        prompt += f"""
+<local_ranges_history>
+These are recent LOCAL consolidation ranges on M15 (now inactive). Each range is a rectangle where price previously
+consolidated and then left. You can use their highs and lows as realistic TP candidates (liquidity zones) AFTER you
+validate the current Range Breakout and overall context. They are optional targets, not mandatory.
+{json.dumps(recent_local_ranges, indent=2)}
+</local_ranges_history>
+"""
     
     # Блок инвалидации и ATR (если передан)
     if invalidation_data:
@@ -164,12 +176,16 @@ RULES:
 - For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
-- Entry: use CURRENT_PRICE for market execution, or a limit within 0.1% of it.
+- Entry: найди ЛОГИЧНУЮ точку входа рядом с CURRENT_PRICE:
+  • ретест пробитой границы диапазона (range_high/low), или
+  • ближайший OB/FVG по направлению пробоя,
+  • но НЕ дальше чем 0.5×ATR или примерно 0.3% от CURRENT_PRICE.
+  Если явного уровня рядом нет, используй CURRENT_PRICE.
 - Minimum R:R = 1.2. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.2 → WAIT.
 INVALIDATION LEVELS:
 {json.dumps(inv_levels, indent=2)}
 </invalidation_and_atr>
-"""
+"""        
     
     # Range Breakout контекст (подсказки SL/TP), если есть
     rbc = technical_data.get("range_breakout_context") if isinstance(technical_data, dict) else None
@@ -579,6 +595,11 @@ class LLMService:
     "- TP должен давать R:R ≥ 1.5 (минимум 1.2).\n"
     "- Если ближайший уровень даёт R:R < 1.5 — ищи следующий уровень дальше.\n"
     "- Если нет уровня с R:R ≥ 1.5 — рекомендуй WAIT.\n"
+    "Если рассматриваешь TP на экстремальном high/low (вик/strong high/low текущего дня или сессии):\n"
+    "- Ставь TP на такой хай/лоу ТОЛЬКО ПРИ ВЫСОКОЙ УВЕРЕННОСТИ, что цена реально дойдёт до этого уровня.\n"
+    "- Если уверенности нет, НЕ используй вик/strong high/low как TP.\n"
+    "- В условиях неопределённости отдавай приоритет реалистичным целям: уровням из <local_ranges_history>,\n"
+    "  ближайшим телам (close) ключевых свечей и SMC-уровням, которые дают R:R ≥ 1.5.\n"
     "\n"
     "ИСКЛЮЧЕНИЕ — исторический максимум/минимум:\n"
     "Если цена на историческом хае и нет видимых уровней выше —\n"
@@ -735,12 +756,19 @@ class LLMService:
     '    "final_tp": Float,\n'
     '    "final_tp1": Float (optional — first target for 50% of position, nearest level; if omitted, single TP used),\n'
     '    "tp_logic": "LIQUIDITY_TARGET" | "OB_TARGET" | "FVG_TARGET" | "FIXED_RR",\n'
+    '    "entry_quality": "GOOD" | "OK" | "RISKY",\n'
+    '    "entry_warning": "NONE" | "LATE_ENTRY" | "FAR_FROM_LEVEL" | "WEAK_STRUCTURE" | "AGAINST_HTF_TREND",\n'
     '    "invalidation_condition": "What price action invalidates this trade"\n'
     "  }\n"
     "}\n"
     "```\n"
     "CRITICAL: Always specify signal.model (which of the 4 models applies) and signal.model_completeness (which required elements are present/missing). If no complete model applies → model: \"NONE\" → action: \"WAIT\".\n"
-    "Entry (final_entry) must be within 0.1% of current price for market execution.\n"
+    "Entry (final_entry) должен быть БЛИЗКО к CURRENT_PRICE: в пределах 0.5×ATR или примерно 0.3% от него.\n"
+    "Не выбирай точку входа слишком далеко от текущей цены, даже если уровень выглядит привлекательным.\n"
+    "Если вход формально валиден, но поздний/сомнительный (далеко от уровня, слабая структура, против HTF тренда),\n"
+    "всё равно давай BUY/SELL при выполнении правил Range Breakout, НО заполняй trade_plan.entry_quality и\n"
+    "trade_plan.entry_warning, чтобы описать риск качества входа. НЕ переводить такой сигнал в WAIT только\n"
+    "из-за entry_warning, если остальные правила (R:R, invalidation, структура) соблюдены.\n"
     "If any confluence field is false, action MUST be WAIT.\n"
     "\n"
     "## For WAIT:\n"

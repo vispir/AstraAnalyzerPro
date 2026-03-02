@@ -553,6 +553,10 @@ def extract_llm_verdict(parsed):
     confluence = parsed.get('confluence') or {}
     math_log = parsed.get('math_debug_log') or {}
     calculated_rr = safe_float(math_log.get('calculated_rr'), None)
+
+    # Качество входа (entry_quality / entry_warning) из trade_plan
+    entry_quality = trade_plan.get('entry_quality', 'OK')
+    entry_warning = trade_plan.get('entry_warning', 'NONE')
     
     # КРИТИЧЕСКАЯ ПРОВЕРКА: если confidence < 55, преобразуем в WAIT (Fix.txt: Confidence < 55 = WAIT)
     low_confidence_override = False
@@ -580,6 +584,8 @@ def extract_llm_verdict(parsed):
         'model_completeness': model_completeness,
         'confluence': confluence,
         'calculated_rr': calculated_rr,
+        'entry_quality': entry_quality,
+        'entry_warning': entry_warning,
     }
 
 
@@ -1026,6 +1032,8 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
         setup_grade = escape_html(signal_data.get('setup_grade', 'N/A'))
         tp_logic = escape_html(trade_plan.get('tp_logic', 'N/A'))
         invalidation = escape_html(trade_plan.get('invalidation_condition', 'N/A'))
+        entry_quality = escape_html(verdict.get('entry_quality', 'OK'))
+        entry_warning = escape_html(verdict.get('entry_warning', 'NONE'))
         
         # Эмодзи для грейда сетапа
         grade_emoji = {
@@ -1080,6 +1088,8 @@ def _format_signal_internal(parsed_data, verdict, ai_response=''):
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>⚠️ Не является финансовым советом</i>"
         )
+        if entry_warning and entry_warning != 'NONE':
+            msg += f"\n⚠️ Качество входа: {entry_quality} | {entry_warning}\n"
         return msg
     
     elif verdict and verdict['action'] == 'WAIT':
@@ -2082,6 +2092,34 @@ def run_analysis_cycle():
                     logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
 
     status_data['active_range'] = active_range
+    # История локальных диапазонов для LLM (до 4 уникальных прямоугольников за последние 72 часа)
+    recent_local_ranges_for_llm = []
+    try:
+        inactive_ranges_for_llm = db_service.get_recent_inactive_ranges(
+            symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
+        ) or []
+        seen_keys = set()
+        for r in inactive_ranges_for_llm:
+            rh_llm = safe_float(r.get('range_high'), 0.0)
+            rl_llm = safe_float(r.get('range_low'), 0.0)
+            if rh_llm <= 0 or rl_llm <= 0:
+                continue
+            key = (round(rh_llm, 3), round(rl_llm, 3))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            recent_local_ranges_for_llm.append({
+                'range_high': rh_llm,
+                'range_low': rl_llm,
+                'range_size': safe_float(r.get('range_size'), rh_llm - rl_llm),
+                'death_reason': r.get('death_reason'),
+                'updated_at': str(r.get('updated_at') or r.get('created_at') or ''),
+            })
+            if len(recent_local_ranges_for_llm) >= 4:
+                break
+    except Exception as e:
+        logger.warning(f"⚠️ get_recent_inactive_ranges for LLM error: {e}")
+    status_data['recent_local_ranges'] = recent_local_ranges_for_llm
     
     if active_range:
         range_high = safe_float(active_range.get('range_high'), 0)
@@ -2800,6 +2838,8 @@ def run_analysis_cycle():
         'breakout_direction': status_data.get('breakout_direction'),
         # Подсказки для Range Breakout (SL/TP/entry)
         'range_breakout_context': range_breakout_context,
+        # История недавних локальных диапазонов для поиска реалистичных TP (уникальные прямоугольники)
+        'recent_local_ranges': status_data.get('recent_local_ranges') or [],
     }
     if htf_context:
         analysis_light['htf_context'] = htf_context
