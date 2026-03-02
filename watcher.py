@@ -2207,21 +2207,7 @@ def run_analysis_cycle():
             send_debug_notification(status_data)
             return
 
-        # ШАГ 5 — после подтверждения пробоя: проверка BOS/CHoCH
-        has_bos = (
-            len(analysis.get('swing_bos', []) or []) > 0
-            or len(analysis.get('internal_bos', []) or []) > 0
-        )
-        has_choch = (
-            len(analysis.get('swing_choch', []) or []) > 0
-            or len(analysis.get('internal_choch', []) or []) > 0
-        )
-        if not has_bos and not has_choch:
-            status_data['status'] = 'range_breakout_no_structure'
-            status_data['reason'] = 'Range Breakout подтверждён, но нет BOS/CHoCH — скип'
-            logger.warning("⚠️ Range Breakout подтверждён, но нет BOS/CHoCH — скип")
-            send_debug_notification(status_data)
-            return
+        # Range Breakout подтверждён — BOS/CHoCH не требуются, идём к вызову LLM
     else:
         status_data['local_range_high'] = status_data.get('local_range_high')
         status_data['local_range_low'] = status_data.get('local_range_low')
