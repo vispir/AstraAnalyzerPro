@@ -1532,6 +1532,7 @@ def run_analysis_cycle():
     - Проверка confirmed=True в каждом сигнале
     - Защита от wick breaks
     """
+    global _breakout_confirmed_previous_cycle
     logger.info("📡 [TRIGGER] Цикл анализа v8.0 запущен")
     
     # ========================================================================
@@ -2050,7 +2051,6 @@ def run_analysis_cycle():
     if not active_range:
         # Проблема 4: только что подтвердили пробой — не воскрешать старый диапазон, не создавать новый; дать приоритет вызову LLM
         if _breakout_confirmed_previous_cycle:
-            global _breakout_confirmed_previous_cycle
             _breakout_confirmed_previous_cycle = False
             skip_range_creation_this_cycle = True
             status_data['is_range_breakout_confirmed'] = True
@@ -2347,7 +2347,6 @@ def run_analysis_cycle():
                     logger.warning(f"⚠️ deactivate_range(replaced_by_breakout) error: {_e}")
 
                 # Проблема 4: следующий цикл не воскрешать старый диапазон — приоритет вызову LLM
-                global _breakout_confirmed_previous_cycle
                 _breakout_confirmed_previous_cycle = True
 
                 status_data['is_range_breakout_confirmed'] = True
