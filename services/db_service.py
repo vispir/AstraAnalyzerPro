@@ -3,6 +3,7 @@ import math
 import requests
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -759,7 +760,7 @@ class DBService:
         except Exception as e:
             logger.error(f"❌ save_range: ошибка деактивации старых диапазонов: {e}")
 
-        # 2) Создаём новый диапазон
+        # 2) Создаём новый диапазон (candles_inside=0 — Проблема 3; в Supabase: ALTER TABLE local_ranges ADD COLUMN IF NOT EXISTS candles_inside INTEGER DEFAULT 0;)
         range_size = (range_high - range_low) if range_high is not None and range_low is not None else None
         payload = {
             "symbol": symbol,
@@ -768,6 +769,7 @@ class DBService:
             "range_low": range_low,
             "range_size": range_size,
             "is_active": True,
+            "candles_inside": 0,
         }
 
         try:
@@ -792,12 +794,17 @@ class DBService:
             logger.error(f"❌ save_range: ошибка создания диапазона: {e}")
             return None
 
-    def update_range_touch(self, range_id: int):
-        """Обновляет last_touch_at для диапазона."""
+    def update_range_touch(self, range_id: int, new_candles_inside: Optional[int] = None):
+        """
+        Обновляет last_touch_at для диапазона.
+        Если передан new_candles_inside (например current+1), обновляет и candles_inside (колонка в Supabase).
+        """
         if not self.url or not range_id:
             return False
         target_url = f"{self.url}/rest/v1/local_ranges?id=eq.{range_id}"
         payload = {"last_touch_at": datetime.now(timezone.utc).isoformat()}
+        if new_candles_inside is not None:
+            payload["candles_inside"] = new_candles_inside
         try:
             response = requests.patch(
                 target_url,

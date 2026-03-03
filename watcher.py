@@ -98,11 +98,13 @@ _entry_pending_notification_sent = set()
 # Менеджер: для каких trade_id уже отправлено одноразовое уведомление «цена входа достигнута, сделка активирована» (Astra Signal Bot)
 _entry_filled_notification_sent = set()
 
-# Task 7: Cooldown after stop loss (prevent cascade entries)
+# Range Manager: в прошлом цикле подтвердили пробой активного диапазона — не воскрешать старый диапазон (Проблема 4)
+_breakout_confirmed_previous_cycle = False
+
+# Task 7: Cooldown after stop loss (prevent cascade entries). 30 min для BUY/SELL после закрытия по SL.
 _last_stop_loss_time = {}
 _last_stop_loss_structure = {}
-COOLDOWN_BARS_M15 = 8
-COOLDOWN_MINUTES_AFTER_SL = COOLDOWN_BARS_M15 * 15
+COOLDOWN_MINUTES_AFTER_SL = 30
 
 # Task 8: Trade limits — 3 total per day; 2 per direction per SESSION (Fix: за сессию)
 # Лимит 3/3 сбрасывается в 02:00 по Астрахани (UTC+4), чтобы не тратить лимит на сделки после полуночи до открытия следующего торгового дня
@@ -1161,6 +1163,7 @@ def format_debug_report(status_data):
         'signal_sent': '✅', 'wait_decision': '⚖️',
         'impulse_override': '⚡', 'reversal_mode': '🔄',
         'proximity_trigger': '🎯',  # v8.5: Вызов LLM по близости к OB/FVG/ликвидности/ключевым уровням
+        'range_breakout_trigger': '📐',  # Подтверждённый пробой локального диапазона
         'smc_sweet_spot': '🎯',  # v8.0: Идеальный SMC сетап
         'no_confirmed_signal': '⏳',  # v6.0: Нет уверенного пробоя
         'impulse_no_confirmation': '⚠️',  # v7.5.2: Impulse/Reversal без internal confirmed
@@ -1177,7 +1180,12 @@ def format_debug_report(status_data):
         'range_breakout_wait_confirmation': '⏳',
         'range_breakout_no_structure': '⚠️',
         'range_breakout_overheated': '🌡️',
-        'range_breakout_doji': '🕯️'
+        'range_breakout_doji': '🕯️',
+        'range_no_touch': '⚠️',
+        'range_rejection_doji': '🕯️',
+        'range_rejection_overheated': '🌡️',
+        'range_rejection_confirmed': '↩️',
+        'range_rejection_trigger': '↩️',
     }
     
     status_texts = {
@@ -1195,6 +1203,7 @@ def format_debug_report(status_data):
         'impulse_override': '⚡ IMPULSE MODE: Сильный импульс',
         'reversal_mode': '🔄 REVERSAL MODE: Поиск разворота',
         'proximity_trigger': '🎯 PROXIMITY: Близость к OB/FVG/ликвидности/ключевым уровням — вызов LLM',  # v8.5
+        'range_breakout_trigger': '📐 RANGE BREAKOUT: Подтверждённый пробой локального диапазона — вызов LLM',
         'smc_sweet_spot': '🎯 SMC SWEET SPOT: Идеальный сетап',  # v8.0
         'no_confirmed_signal': 'SKIP - Нет CONFIRMED пробоя (LLM не вызван)',  # v6.0
         'impulse_no_confirmation': 'SKIP - Impulse/Reversal без internal confirmed',  # v7.5.2
@@ -1215,7 +1224,12 @@ def format_debug_report(status_data):
         'range_breakout_wait_confirmation': '⏳ Range Breakout: ждём второй свечи',
         'range_breakout_no_structure': '⚠️ Range Breakout без BOS/CHoCH — скип',
         'range_breakout_overheated': 'Range Breakout: перегрев — цена слишком далеко от уровня',
-        'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы'
+        'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы',
+        'range_no_touch': '⚠️ В диапазоне не закрылись 2 свечи — пробой пропущен',
+        'range_rejection_doji': '🕯️ Range Rejection: доджи',
+        'range_rejection_overheated': '🌡️ Range Rejection: перегрев',
+        'range_rejection_confirmed': '↩️ Range Rejection подтверждён',
+        'range_rejection_trigger': '↩️ RANGE REJECTION: Отбой от границы диапазона — вызов LLM',
     }
     
     status = status_data.get('status', 'unknown')
@@ -1976,6 +1990,9 @@ def run_analysis_cycle():
     status_data['active_range'] = None
     status_data['is_range_breakout_confirmed'] = False
     status_data['breakout_direction'] = None
+    status_data['is_range_rejection_confirmed'] = False
+    status_data['rejection_direction'] = None
+    status_data['rejection_level'] = None
 
     active_range = None
     try:
@@ -2029,32 +2046,41 @@ def run_analysis_cycle():
                     status_data['local_range_no_reason'] = 'new_range_formed'
                     logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
+    skip_range_creation_this_cycle = False  # Проблема 4: после подтверждённого пробоя один цикл не создаём новый диапазон
     if not active_range:
-        # Нет активного — ищем подходящий старый диапазон (цена вернулась в зону)
-        try:
-            inactive_ranges = db_service.get_recent_inactive_ranges(
-                symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
-            )
-            atr_m15 = atr_m15_initial or 0.0
-            for old_range in inactive_ranges:
-                r_high = safe_float(old_range.get('range_high'), 0)
-                r_low = safe_float(old_range.get('range_low'), 0)
-                r_size = safe_float(old_range.get('range_size'), 0) or (r_high - r_low if (r_high and r_low) else 0)
-                buffer = 0.5 * atr_m15
-                price_in_zone = (r_low - buffer) <= current_price <= (r_high + buffer)
-                if price_in_zone and r_size > 0:
-                    if db_service.reactivate_range(old_range['id']):
-                        active_range = dict(old_range)
-                        active_range['is_active'] = True
-                        logger.info(
-                            f"🔄 Воскрешён старый диапазон [{r_low:.3f} - {r_high:.3f}] "
-                            f"(создан {old_range.get('created_at', '?')}), цена вернулась в зону"
-                        )
-                    break
-        except Exception as e:
-            logger.warning(f"⚠️ get_recent_inactive_ranges / reactivate error: {e}")
+        # Проблема 4: только что подтвердили пробой — не воскрешать старый диапазон, не создавать новый; дать приоритет вызову LLM
+        if _breakout_confirmed_previous_cycle:
+            global _breakout_confirmed_previous_cycle
+            _breakout_confirmed_previous_cycle = False
+            skip_range_creation_this_cycle = True
+            status_data['is_range_breakout_confirmed'] = True
+            logger.info("✅ Пробой активного диапазона подтверждён — старые диапазоны игнорируются")
+        else:
+            # Нет активного — ищем подходящий старый диапазон (цена вернулась в зону)
+            try:
+                inactive_ranges = db_service.get_recent_inactive_ranges(
+                    symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
+                )
+                atr_m15 = atr_m15_initial or 0.0
+                for old_range in inactive_ranges:
+                    r_high = safe_float(old_range.get('range_high'), 0)
+                    r_low = safe_float(old_range.get('range_low'), 0)
+                    r_size = safe_float(old_range.get('range_size'), 0) or (r_high - r_low if (r_high and r_low) else 0)
+                    buffer = 0.5 * atr_m15
+                    price_in_zone = (r_low - buffer) <= current_price <= (r_high + buffer)
+                    if price_in_zone and r_size > 0:
+                        if db_service.reactivate_range(old_range['id']):
+                            active_range = dict(old_range)
+                            active_range['is_active'] = True
+                            logger.info(
+                                f"🔄 Воскрешён старый диапазон [{r_low:.3f} - {r_high:.3f}] "
+                                f"(создан {old_range.get('created_at', '?')}), цена вернулась в зону"
+                            )
+                        break
+            except Exception as e:
+                logger.warning(f"⚠️ get_recent_inactive_ranges / reactivate error: {e}")
 
-    if not active_range:
+    if not active_range and not skip_range_creation_this_cycle:
         new_range = analysis.get('local_range') or {}
         no_reason = new_range.get('no_range_reason')
         status_data['local_range_no_reason'] = None  # причина отсутствия диапазона в БД (для отчёта)
@@ -2126,7 +2152,7 @@ def run_analysis_cycle():
         range_low = safe_float(active_range.get('range_low'), 0)
         status_data['local_range_high'] = range_high
         status_data['local_range_low'] = range_low
-    
+
         # Рабочие свечи для анализа диапазона:
         # - breakout_candle: первая свеча потенциального пробоя (полностью закрыта)
         # - signal_candle: вторая свеча (подтверждение / отмена пробоя)
@@ -2144,194 +2170,290 @@ def run_analysis_cycle():
     
         breakout_close = safe_float(breakout_c.get('close'), 0)
         signal_close = safe_float(signal_c.get('close'), 0)
+
+        # Проблема 3: считаем только закрытия завершённых свечей внутри диапазона (именно close, не open)
+        # signal_close = close последней завершённой свечи (candles[-2]); один цикл = одна свеча M15
+        if candles and len(candles) >= 2 and range_low <= signal_close <= range_high:
+            candles_inside = (active_range.get('candles_inside') or 0) + 1
+            db_service.update_range_touch(active_range['id'], candles_inside)
+            active_range['candles_inside'] = candles_inside
     
         breakout_up   = (breakout_close > range_high and signal_close > range_high)
         breakout_down = (breakout_close < range_low  and signal_close < range_low)
-    
-        # ── Ложный пробой (FAKEOUT): первая свеча вышла за границу, вторая вернулась внутрь ──
-        fakeout_up = breakout_close > range_high and signal_close <= range_high
-        fakeout_down = breakout_close < range_low and signal_close >= range_low
-        if fakeout_up or fakeout_down:
-            db_service.update_range_touch(active_range['id'])
-            direction_txt = 'вверх' if fakeout_up else 'вниз'
-            logger.info(
-                f"↩️ Ложный пробой {direction_txt}: цена вернулась в диапазон "
-                f"[{range_low:.3f} - {range_high:.3f}], ждём следующей попытки"
-            )
-            status_data['status'] = 'range_internal'
+
+        # Проблема 3: пробой валиден только если минимум 2 свечи закрылись внутри диапазона (не «галлюцинация»)
+        price_was_inside = (active_range.get('candles_inside') or 0) >= 2
+        skip_range_breakout = False
+        if not price_was_inside:
+            status_data['status'] = 'range_no_touch'
             status_data['reason'] = (
-                f'↩️ Ложный пробой {direction_txt} — цена вернулась в диапазон '
-                f'[{range_low:.3f} - {range_high:.3f}]. Ждём следующей попытки.'
+                f'Диапазон [{range_low:.3f} - {range_high:.3f}]: меньше 2 свечей закрылись внутри — пробой невалиден'
             )
-            send_debug_notification(status_data)
-            return
-    
-        if breakout_up or breakout_down:
-            boundary = range_high if breakout_up else range_low
-            direction_txt = 'BUY (вверх)' if breakout_up else 'SELL (вниз)'
-    
-            # ФИЛЬТР 1 — перегрев: подтверждение слишком далеко от границы
+            logger.warning(
+                f"⚠️ Range пробой пропущен: в диапазоне [{range_low:.3f} - {range_high:.3f}] не закрылись 2 свечи"
+            )
+            skip_range_breakout = True
+
+        # ---------- RANGE REJECTION: отбой от границы снаружи (цена не жила внутри) ----------
+        if skip_range_breakout and candles and len(candles) >= 4:
             atr_m15 = atr_m15_initial or 0.0
-            if atr_m15 > 0:
-                distance = (signal_close - range_high) if breakout_up else (range_low - signal_close)
-                if distance > 1.5 * atr_m15:
-                    status_data['status'] = 'range_breakout_overheated'
+            c4 = candles[-4]
+            signal_high = safe_float(signal_c.get('high', signal_c.get('High', 0)))
+            signal_low = safe_float(signal_c.get('low', signal_c.get('Low', 0)))
+            breakout_high = safe_float(breakout_c.get('high', breakout_c.get('High', 0)))
+            breakout_low = safe_float(breakout_c.get('low', breakout_c.get('Low', 0)))
+            c4_high = safe_float(c4.get('high', c4.get('High', 0)))
+            c4_low = safe_float(c4.get('low', c4.get('Low', 0)))
+            # Подход к границе снаружи: хотя бы одна из 3 свечей дотянулась до зоны
+            approach_sell = (
+                signal_high >= range_low - 0.5 * atr_m15
+                or breakout_high >= range_low - 0.5 * atr_m15
+                or c4_high >= range_low - 0.5 * atr_m15
+            )
+            approach_buy = (
+                signal_low <= range_high + 0.5 * atr_m15
+                or breakout_low <= range_high + 0.5 * atr_m15
+                or c4_low <= range_high + 0.5 * atr_m15
+            )
+            two_closes_sell = signal_close < range_low and breakout_close < range_low
+            two_closes_buy = signal_close > range_high and breakout_close > range_high
+            rejection_sell = approach_sell and two_closes_sell
+            rejection_buy = approach_buy and two_closes_buy
+            if rejection_sell:
+                if current_price <= range_low - 1.5 * atr_m15:
+                    status_data['status'] = 'range_rejection_overheated'
                     status_data['reason'] = (
-                        f"Range Breakout: подтверждение слишком далеко от уровня "
-                        f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
+                        f"Range Rejection: цена слишком далеко от range_low "
+                        f"({current_price:.2f} <= {range_low - 1.5 * atr_m15:.2f})"
+                    )
+                    send_debug_notification(status_data)
+                    return
+                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+                candle_body = abs(signal_close - signal_open)
+                if candle_body < body_threshold:
+                    status_data['status'] = 'range_rejection_doji'
+                    status_data['reason'] = f"Range Rejection: свеча подтверждения — доджи (тело {candle_body:.2f} < {body_threshold:.2f})"
+                    send_debug_notification(status_data)
+                    return
+                status_data['is_range_rejection_confirmed'] = True
+                status_data['rejection_direction'] = 'SELL'
+                status_data['rejection_level'] = range_low
+                is_near = True
+                logger.info(f"↩️ Range Rejection подтверждён: SELL от уровня {range_low}")
+            elif rejection_buy:
+                if current_price >= range_high + 1.5 * atr_m15:
+                    status_data['status'] = 'range_rejection_overheated'
+                    status_data['reason'] = (
+                        f"Range Rejection: цена слишком далеко от range_high "
+                        f"({current_price:.2f} >= {range_high + 1.5 * atr_m15:.2f})"
+                    )
+                    send_debug_notification(status_data)
+                    return
+                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+                candle_body = abs(signal_close - signal_open)
+                if candle_body < body_threshold:
+                    status_data['status'] = 'range_rejection_doji'
+                    status_data['reason'] = f"Range Rejection: свеча подтверждения — доджи (тело {candle_body:.2f} < {body_threshold:.2f})"
+                    send_debug_notification(status_data)
+                    return
+                status_data['is_range_rejection_confirmed'] = True
+                status_data['rejection_direction'] = 'BUY'
+                status_data['rejection_level'] = range_high
+                is_near = True
+                logger.info(f"↩️ Range Rejection подтверждён: BUY от уровня {range_high}")
+    
+        if not skip_range_breakout:
+            # ── Ложный пробой (FAKEOUT): первая свеча вышла за границу, вторая вернулась внутрь ──
+            fakeout_up = breakout_close > range_high and signal_close <= range_high
+            fakeout_down = breakout_close < range_low and signal_close >= range_low
+            if fakeout_up or fakeout_down:
+                db_service.update_range_touch(active_range['id'])
+                direction_txt = 'вверх' if fakeout_up else 'вниз'
+                logger.info(
+                    f"↩️ Ложный пробой {direction_txt}: цена вернулась в диапазон "
+                    f"[{range_low:.3f} - {range_high:.3f}], ждём следующей попытки"
+                )
+                status_data['status'] = 'range_internal'
+                status_data['reason'] = (
+                    f'↩️ Ложный пробой {direction_txt} — цена вернулась в диапазон '
+                    f'[{range_low:.3f} - {range_high:.3f}]. Ждём следующей попытки.'
+                )
+                send_debug_notification(status_data)
+                return
+
+            if breakout_up or breakout_down:
+                boundary = range_high if breakout_up else range_low
+                direction_txt = 'BUY (вверх)' if breakout_up else 'SELL (вниз)'
+
+                # ФИЛЬТР 1 — перегрев: подтверждение слишком далеко от границы
+                atr_m15 = atr_m15_initial or 0.0
+                if atr_m15 > 0:
+                    distance = (signal_close - range_high) if breakout_up else (range_low - signal_close)
+                    if distance > 1.5 * atr_m15:
+                        status_data['status'] = 'range_breakout_overheated'
+                        status_data['reason'] = (
+                            f"Range Breakout: подтверждение слишком далеко от уровня "
+                            f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
+                        )
+                        logger.warning(f"⚠️ {status_data['reason']}")
+                        send_debug_notification(status_data)
+                        return
+
+                # ФИЛЬТР 2 — доджи: тело ≤ 3 пунктов (или min(30% ATR, 3.0))
+                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+                candle_body = abs(signal_close - signal_open)
+                signal_is_doji = candle_body < body_threshold
+
+                # Трёхсвечное подтверждение: 1-я за границей, 2-я доджи за границей, 3-я за границей → LLM в любом случае
+                three_candle_ok = False
+                if signal_is_doji and candles and len(candles) >= 4:
+                    c4 = candles[-4]
+                    c4_close = safe_float(c4.get('close', c4.get('Close', 0)))
+                    c4_out_up = c4_close > range_high
+                    c4_out_down = c4_close < range_low
+                    breakout_open = safe_float(breakout_c.get('open', breakout_c.get('Open', 0)))
+                    breakout_body = abs(breakout_close - breakout_open)
+                    breakout_is_doji = breakout_body < body_threshold
+                    if breakout_up and c4_out_up and breakout_is_doji:
+                        three_candle_ok = True
+                    if breakout_down and c4_out_down and breakout_is_doji:
+                        three_candle_ok = True
+                    if three_candle_ok:
+                        logger.info(
+                            f"✅ ПРОБОЙ ПОДТВЕРЖДЁН (3 свечи): 1-я и 2-я (доджи) и 3-я за границей — вызываем LLM"
+                        )
+
+                if signal_is_doji and not three_candle_ok:
+                    status_data['status'] = 'range_breakout_doji'
+                    status_data['reason'] = (
+                        f"Range Breakout: свеча подтверждения — доджи "
+                        f"(тело {candle_body:.2f} < {body_threshold:.2f} пт) — ждём третью свечу за границей"
                     )
                     logger.warning(f"⚠️ {status_data['reason']}")
                     send_debug_notification(status_data)
                     return
-    
-            # ФИЛЬТР 2 — доджи: тело ≤ 3 пунктов (или min(30% ATR, 3.0))
-            body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
-            signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
-            candle_body = abs(signal_close - signal_open)
-            signal_is_doji = candle_body < body_threshold
 
-            # Трёхсвечное подтверждение: 1-я за границей, 2-я доджи за границей, 3-я за границей → LLM в любом случае
-            three_candle_ok = False
-            if signal_is_doji and candles and len(candles) >= 4:
-                c4 = candles[-4]
-                c4_close = safe_float(c4.get('close', c4.get('Close', 0)))
-                c4_out_up = c4_close > range_high
-                c4_out_down = c4_close < range_low
-                breakout_open = safe_float(breakout_c.get('open', breakout_c.get('Open', 0)))
-                breakout_body = abs(breakout_close - breakout_open)
-                breakout_is_doji = breakout_body < body_threshold
-                if breakout_up and c4_out_up and breakout_is_doji:
-                    three_candle_ok = True
-                if breakout_down and c4_out_down and breakout_is_doji:
-                    three_candle_ok = True
-                if three_candle_ok:
+                # ✅ Истинный пробой (2 свечи или 3 свечи с доджи) — деактивируем старый диапазон
+                try:
+                    db_service.deactivate_range(active_range['id'], 'replaced_by_breakout')
                     logger.info(
-                        f"✅ ПРОБОЙ ПОДТВЕРЖДЁН (3 свечи): 1-я и 2-я (доджи) и 3-я за границей — вызываем LLM"
+                        f"📐 Диапазон [{range_low:.3f} - {range_high:.3f}] пробит и деактивирован "
+                        f"(replaced_by_breakout). Следующий цикл создаст новый."
                     )
+                except Exception as _e:
+                    logger.warning(f"⚠️ deactivate_range(replaced_by_breakout) error: {_e}")
 
-            if signal_is_doji and not three_candle_ok:
-                status_data['status'] = 'range_breakout_doji'
-                status_data['reason'] = (
-                    f"Range Breakout: свеча подтверждения — доджи "
-                    f"(тело {candle_body:.2f} < {body_threshold:.2f} пт) — ждём третью свечу за границей"
-                )
-                logger.warning(f"⚠️ {status_data['reason']}")
-                send_debug_notification(status_data)
-                return
+                # Проблема 4: следующий цикл не воскрешать старый диапазон — приоритет вызову LLM
+                global _breakout_confirmed_previous_cycle
+                _breakout_confirmed_previous_cycle = True
 
-            # ✅ Истинный пробой (2 свечи или 3 свечи с доджи) — деактивируем старый диапазон
-            try:
-                db_service.deactivate_range(active_range['id'], 'replaced_by_breakout')
-                logger.info(
-                    f"📐 Диапазон [{range_low:.3f} - {range_high:.3f}] пробит и деактивирован "
-                    f"(replaced_by_breakout). Следующий цикл создаст новый."
-                )
-            except Exception as _e:
-                logger.warning(f"⚠️ deactivate_range(replaced_by_breakout) error: {_e}")
-    
-            status_data['is_range_breakout_confirmed'] = True
-            status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
+                status_data['is_range_breakout_confirmed'] = True
+                status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
 
-            # Wick-профиль последних 2–3 свечей пробоя для LLM (длины теней и тела)
-            try:
-                def _rb_wick_profile(cndl):
-                    o = safe_float(cndl.get('open', cndl.get('Open', 0)))
-                    h = safe_float(cndl.get('high', cndl.get('High', 0)))
-                    l = safe_float(cndl.get('low', cndl.get('Low', 0)))
-                    c = safe_float(cndl.get('close', cndl.get('Close', 0)))
-                    body = abs(c - o)
-                    upper = max(h - max(o, c), 0.0)
-                    lower = max(min(o, c) - l, 0.0)
-                    # Порог «длинной» тени: не меньше тела и базового порога по ATR/пунктам
-                    if atr_m15 and atr_m15 > 0:
-                        wick_threshold = max(body, 0.3 * atr_m15, 3.0)
-                    else:
-                        wick_threshold = max(body, 3.0)
-                    return {
-                        'open': o,
-                        'high': h,
-                        'low': l,
-                        'close': c,
-                        'body': body,
-                        'upper_wick': upper,
-                        'lower_wick': lower,
-                        'long_upper': upper > wick_threshold,
-                        'long_lower': lower > wick_threshold,
+                # Wick-профиль последних 2–3 свечей пробоя для LLM (длины теней и тела)
+                try:
+                    def _rb_wick_profile(cndl):
+                        o = safe_float(cndl.get('open', cndl.get('Open', 0)))
+                        h = safe_float(cndl.get('high', cndl.get('High', 0)))
+                        l = safe_float(cndl.get('low', cndl.get('Low', 0)))
+                        c = safe_float(cndl.get('close', cndl.get('Close', 0)))
+                        body = abs(c - o)
+                        upper = max(h - max(o, c), 0.0)
+                        lower = max(min(o, c) - l, 0.0)
+                        # Порог «длинной» тени: не меньше тела и базового порога по ATR/пунктам
+                        if atr_m15 and atr_m15 > 0:
+                            wick_threshold = max(body, 0.3 * atr_m15, 3.0)
+                        else:
+                            wick_threshold = max(body, 3.0)
+                        return {
+                            'open': o,
+                            'high': h,
+                            'low': l,
+                            'close': c,
+                            'body': body,
+                            'upper_wick': upper,
+                            'lower_wick': lower,
+                            'long_upper': upper > wick_threshold,
+                            'long_lower': lower > wick_threshold,
+                        }
+
+                    # Для 2-свечного сценария: breakout_c (1-я) и signal_c (2-я).
+                    # Для 3-свечного: candles[-4] (1-я), breakout_c (2-я, доджи), signal_c (3-я).
+                    first_c = breakout_c
+                    second_c = signal_c
+                    third_c = None
+                    pattern = 'two_candle'
+                    if three_candle_ok and candles and len(candles) >= 4:
+                        first_c = candles[-4]
+                        second_c = breakout_c
+                        third_c = signal_c
+                        pattern = 'three_candle_doji'
+
+                    rb_wicks = {
+                        'pattern': pattern,
+                        'direction': 'BUY' if breakout_up else 'SELL',
+                        'first': _rb_wick_profile(first_c) if first_c else None,
+                        'second': _rb_wick_profile(second_c) if second_c else None,
                     }
+                    if third_c:
+                        rb_wicks['third'] = _rb_wick_profile(third_c)
+                    status_data['range_breakout_wicks'] = rb_wicks
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка расчёта wick-профиля Range Breakout: {e}")
 
-                # Для 2-свечного сценария: breakout_c (1-я) и signal_c (2-я).
-                # Для 3-свечного: candles[-4] (1-я), breakout_c (2-я, доджи), signal_c (3-я).
-                first_c = breakout_c
-                second_c = signal_c
-                third_c = None
-                pattern = 'two_candle'
-                if three_candle_ok and candles and len(candles) >= 4:
-                    first_c = candles[-4]
-                    second_c = breakout_c
-                    third_c = signal_c
-                    pattern = 'three_candle_doji'
+                logger.info(
+                    f"✅ ПРОБОЙ ПОДТВЕРЖДЁН {direction_txt}: две свечи за границей {boundary:.3f} | "
+                    f"breakout={breakout_close:.3f}, signal={signal_close:.3f}"
+                )
+                # Пробой диапазона сам по себе является триггером для LLM
+                is_near = True
+            else:
+                # Первый пробой: вторая свеча вышла за границу, первая ещё была внутри
+                only_signal_above = signal_close > range_high and breakout_close <= range_high
+                only_signal_below = signal_close < range_low and breakout_close >= range_low
+                if only_signal_above or only_signal_below:
+                    direction_txt = 'вверх' if only_signal_above else 'вниз'
+                    boundary = range_high if only_signal_above else range_low
+                    db_service.update_range_touch(active_range['id'])
+                    logger.info(
+                        f"⏳ Первый пробой {direction_txt}: breakout={breakout_close:.3f}, "
+                        f"signal={signal_close:.3f}, граница={boundary:.3f} — ждём второй свечи"
+                    )
+                    status_data['status'] = 'range_breakout_wait_confirmation'
+                    status_data['reason'] = (
+                        f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
+                        f'граница={boundary:.3f} — ждём закрепления второй свечой'
+                    )
+                    send_debug_notification(status_data)
+                    return
 
-                rb_wicks = {
-                    'pattern': pattern,
-                    'direction': 'BUY' if breakout_up else 'SELL',
-                    'first': _rb_wick_profile(first_c) if first_c else None,
-                    'second': _rb_wick_profile(second_c) if second_c else None,
-                }
-                if third_c:
-                    rb_wicks['third'] = _rb_wick_profile(third_c)
-                status_data['range_breakout_wicks'] = rb_wicks
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка расчёта wick-профиля Range Breakout: {e}")
-
-            logger.info(
-                f"✅ ПРОБОЙ ПОДТВЕРЖДЁН {direction_txt}: две свечи за границей {boundary:.3f} | "
-                f"breakout={breakout_close:.3f}, signal={signal_close:.3f}"
-            )
-            # Пробой диапазона сам по себе является триггером для LLM
-            is_near = True
-        else:
-            # Первый пробой: вторая свеча вышла за границу, первая ещё была внутри
-            only_signal_above = signal_close > range_high and breakout_close <= range_high
-            only_signal_below = signal_close < range_low and breakout_close >= range_low
-            if only_signal_above or only_signal_below:
-                direction_txt = 'вверх' if only_signal_above else 'вниз'
-                boundary = range_high if only_signal_above else range_low
+                # Цена внутри диапазона (не первый пробой)
                 db_service.update_range_touch(active_range['id'])
                 logger.info(
-                    f"⏳ Первый пробой {direction_txt}: breakout={breakout_close:.3f}, "
-                    f"signal={signal_close:.3f}, граница={boundary:.3f} — ждём второй свечи"
+                    f"⬜ Цена внутри диапазона [{range_low:.3f} - {range_high:.3f}], "
+                    f"ждём пробоя"
                 )
-                status_data['status'] = 'range_breakout_wait_confirmation'
+                status_data['status'] = 'range_internal'
                 status_data['reason'] = (
-                    f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
-                    f'граница={boundary:.3f} — ждём закрепления второй свечой'
+                    f'Цена внутри локального диапазона [{range_low:.3f} - {range_high:.3f}]. '
+                    f'Нет закрепления за границей.'
                 )
                 send_debug_notification(status_data)
                 return
-    
-            # Цена внутри диапазона (не первый пробой)
-            db_service.update_range_touch(active_range['id'])
-            logger.info(
-                f"⬜ Цена внутри диапазона [{range_low:.3f} - {range_high:.3f}], "
-                f"ждём пробоя"
-            )
-            status_data['status'] = 'range_internal'
-            status_data['reason'] = (
-                f'Цена внутри локального диапазона [{range_low:.3f} - {range_high:.3f}]. '
-                f'Нет закрепления за границей.'
-            )
-            send_debug_notification(status_data)
-            return
 
         # Range Breakout подтверждён — BOS/CHoCH не требуются, идём к вызову LLM
     else:
         status_data['local_range_high'] = status_data.get('local_range_high')
         status_data['local_range_low'] = status_data.get('local_range_low')
 
-    # Локальный флаг: подтверждён ли Range Breakout (двумя свечами)
+    # Локальный флаг: подтверждён ли Range Breakout (двумя свечами) или Range Rejection (отбой от границы)
     is_range_breakout_confirmed = status_data.get('is_range_breakout_confirmed', False)
+    is_range_rejection_confirmed = status_data.get('is_range_rejection_confirmed', False)
     
-    # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break)
+    # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break/rejection)
     # v8.5: триггер LLM также при цене близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low)
     if (
         not is_near
@@ -2339,6 +2461,7 @@ def run_analysis_cycle():
         and not is_breakout_impulse
         and not has_swing_break_confirmed
         and not is_range_breakout_confirmed
+        and not is_range_rejection_confirmed
     ):
         status_data['status'] = 'not_near_structure'
         status_data['reason'] = (
@@ -2365,6 +2488,7 @@ def run_analysis_cycle():
         or (has_equilibrium_breakout and has_internal_break_confirmed)
         or proximity_ok
         or is_range_breakout_confirmed
+        or is_range_rejection_confirmed
     )
     if current_zone == "EQUILIBRIUM" and (has_equilibrium_breakout and has_internal_break_confirmed):
         logger.info(
@@ -2378,8 +2502,8 @@ def run_analysis_cycle():
         send_debug_notification(status_data)
         return
     
-    # NEUTRAL требует Swing (пропускаем при импульсе, но допускаем Range Breakout)
-    if swing_trend == "NEUTRAL" and not is_breakout_impulse and not is_range_breakout_confirmed:
+    # NEUTRAL требует Swing (пропускаем при импульсе, но допускаем Range Breakout / Range Rejection)
+    if swing_trend == "NEUTRAL" and not is_breakout_impulse and not is_range_breakout_confirmed and not is_range_rejection_confirmed:
         # v6.0: Требуем confirmed swing break
         if not has_swing_break_confirmed:
             status_data['status'] = 'neutral_no_swing'
@@ -2391,7 +2515,7 @@ def run_analysis_cycle():
     has_strong_swing = any('SWING' in s for s in swing_signals)
     has_strong_internal = any('INT' in s or 'OB' in s for s in internal_signals)
     
-    if not all_signals and not is_breakout_impulse and not is_range_breakout_confirmed:
+    if not all_signals and not is_breakout_impulse and not is_range_breakout_confirmed and not is_range_rejection_confirmed:
         status_data['status'] = 'weak_patterns'
         status_data['reason'] = 'Нет SMC паттернов'
         send_debug_notification(status_data)
@@ -2430,6 +2554,11 @@ def run_analysis_cycle():
         if is_range_breakout_confirmed:
             override_cooldown = True
             override_reasons.append("📐 Range Breakout подтверждён")
+        
+        # КРИТЕРИЙ 5b: Range Rejection подтверждён (отбой от границы снаружи)
+        if is_range_rejection_confirmed:
+            override_cooldown = True
+            override_reasons.append("↩️ Range Rejection подтверждён")
         
         # КРИТЕРИЙ 6: Цена у OB/FVG или ключевых уровней (Proximity)
         if is_near or is_near_key_levels:
@@ -2481,6 +2610,7 @@ def run_analysis_cycle():
         and not (is_breakout_impulse or is_reversal_setup)
         and not allow_llm_by_proximity
         and not is_range_breakout_confirmed
+        and not is_range_rejection_confirmed
     ):
         status_data['status'] = 'no_confirmed_signal'
         status_data['reason'] = (
@@ -2623,6 +2753,13 @@ def run_analysis_cycle():
     elif is_reversal_setup:
         mode_text = "🔄 REVERSAL MODE"
         status_data['status'] = 'reversal_mode'
+    elif is_range_breakout_confirmed:
+        # Проблема 2: в отчёте показывать Range Breakout, а не PROXIMITY, когда триггер — пробой диапазона
+        mode_text = "📐 RANGE BREAKOUT (подтверждённый пробой локального диапазона)"
+        status_data['status'] = 'range_breakout_trigger'
+    elif is_range_rejection_confirmed:
+        mode_text = "↩️ RANGE REJECTION (отбой от границы диапазона снаружи)"
+        status_data['status'] = 'range_rejection_trigger'
     elif allow_llm_by_proximity:
         mode_text = "🎯 PROXIMITY MODE (OB/FVG/ликвидность/ключевые уровни)"
         status_data['status'] = 'proximity_trigger'
@@ -2789,6 +2926,9 @@ def run_analysis_cycle():
                 'suggested_rr': suggested_rr,
                 # Wick-профиль свечей пробоя (first/second/third) из status_data, если он был рассчитан
                 'candle_wicks': status_data.get('range_breakout_wicks'),
+                'is_range_rejection': status_data.get('is_range_rejection_confirmed', False),
+                'rejection_direction': status_data.get('rejection_direction'),
+                'rejection_level': status_data.get('rejection_level'),
             }
             logger.info(
                 f"📐 Range Breakout context: dir={direction_rb}, "
@@ -2796,6 +2936,40 @@ def run_analysis_cycle():
             )
         except Exception as e:
             logger.warning(f"⚠️ Ошибка расчёта Range Breakout контекста для LLM: {e}")
+    elif status_data.get('is_range_rejection_confirmed') and status_data.get('active_range'):
+        # Range Rejection (отбой от границы снаружи) — контекст для LLM
+        try:
+            active_range_rj = status_data.get('active_range') or {}
+            direction_rj = status_data.get('rejection_direction')
+            rej_level = status_data.get('rejection_level')
+            rh = safe_float(active_range_rj.get('range_high'), 0.0)
+            rl = safe_float(active_range_rj.get('range_low'), 0.0)
+            buf = 0.3 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
+            entry_hint = current_price
+            suggested_sl = None
+            if direction_rj == 'BUY' and rej_level is not None:
+                suggested_sl = rej_level - buf if buf > 0 else rej_level
+            elif direction_rj == 'SELL' and rej_level is not None:
+                suggested_sl = rej_level + buf if buf > 0 else rej_level
+            range_breakout_context = {
+                'is_confirmed': False,
+                'is_range_rejection': True,
+                'rejection_direction': direction_rj,
+                'rejection_level': rej_level,
+                'direction': direction_rj,
+                'range_high': rh,
+                'range_low': rl,
+                'atr_m15': atr_m15,
+                'entry_hint': entry_hint,
+                'suggested_sl': suggested_sl,
+                'suggested_tp': None,
+                'suggested_rr': None,
+            }
+            logger.info(
+                f"↩️ Range Rejection context: dir={direction_rj}, level={rej_level}, SL≈{suggested_sl}"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка расчёта Range Rejection контекста для LLM: {e}")
     
     # Создаем легкую версию analysis без массивов all_* (они только для визуализации)
     analysis_light = {
@@ -3446,16 +3620,18 @@ def run_trade_manager_cycle():
         _entry_filled_notification_sent.discard(trade_id)
         _recommendation_history.pop(trade_id, None)
         _trade_tp1_reached.discard(trade_id)
-        # Определяем тип закрытия для сообщения (визуально; логика в БД не меняется)
+        # Определяем тип закрытия для сообщения по факту PnL и уровню закрытия (Проблема 1: при убытке не писать «1R»)
         close_label = "Stop Loss"
-        # Порог безубытка тот же, что в блоке 1R/BE
-        be_threshold = entry_price * 0.0005  # ~0.05% от цены
-        # Безубыток (SL ≈ entry)
-        if abs(stop_loss - entry_price) <= be_threshold:
-            close_label = "BE (безубыток)"
-        # 1R (SL ≈ entry ± risk_amount), только если это не BE
-        elif risk_amount > 0 and abs(abs(stop_loss - entry_price) - risk_amount) <= be_threshold:
-            close_label = "1R"
+        if result_pnl < 0:
+            # Убыток — закрытие по изначальному SL или хуже; всегда «по SL»
+            close_label = "по SL"
+        else:
+            # Нулевой или плюс — смотрим, на каком уровне стоял SL (BE или 1R)
+            be_threshold = entry_price * 0.0005  # ~0.05% от цены
+            if abs(stop_loss - entry_price) <= be_threshold:
+                close_label = "BE (безубыток)"
+            elif risk_amount > 0 and abs(abs(stop_loss - entry_price) - risk_amount) <= be_threshold:
+                close_label = "1R"
 
         send_debug_notification({
             'status': 'trade_closed_sl',
