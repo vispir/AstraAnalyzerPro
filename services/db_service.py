@@ -4,6 +4,7 @@ import requests
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -864,13 +865,15 @@ class DBService:
         now = datetime.now(timezone.utc)
         from_dt = now - timedelta(hours=hours)
         from_iso = from_dt.isoformat()
+        # Кодируем дату для URL: + в timezone иначе интерпретируется как пробел → 400 Bad Request
+        from_iso_encoded = quote(from_iso, safe=".")
         cutoff_24h = (now - timedelta(hours=24)).isoformat()
 
         target_url = (
             f"{self.url}/rest/v1/local_ranges"
             f"?symbol=eq.{symbol}&timeframe=eq.{timeframe}"
             f"&is_active=eq.false"
-            f"&updated_at=gte.{from_iso}"
+            f"&updated_at=gte.{from_iso_encoded}"
             f"&select=*"
             f"&order=updated_at.desc"
             f"&limit=10"
