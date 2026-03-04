@@ -21,25 +21,43 @@ class OandaService:
         """
         Получение свечных данных из OANDA v20.
         Полная совместимость с интерфейсом TwelveData.
+
+        Важно:
+        - Для минут/часов (M1,M5,M15,H1,H4,D1) используем кэш (TTL 30 сек).
+        - Для секундных таймфреймов (например S5) кэш отключён, чтобы Price Monitor
+          всегда работал с актуальной ценой.
         """
-        # Проверяем кэш
-        cache_key = cache_service._generate_key(
-            'candles_oanda',
-            self.symbol,
-            timeframe=timeframe,
-            period=period,
-            limit=limit
-        )
-        cached_data = cache_service.get(cache_key)
-        if cached_data is not None:
-            logger.info(f"✓ Returning cached OANDA candles ({cached_data.get('count', 0)} candles)")
-            return cached_data
+        timeframe_str = str(timeframe).upper() if timeframe is not None else 'M15'
+        use_cache = not timeframe_str.startswith('S')
+
+        # Проверяем кэш (только для минут/часов)
+        cache_key = None
+        if use_cache:
+            cache_key = cache_service._generate_key(
+                'candles_oanda',
+                self.symbol,
+                timeframe=timeframe_str,
+                period=period,
+                limit=limit
+            )
+            cached_data = cache_service.get(cache_key)
+            if cached_data is not None:
+                logger.info(f"✓ Returning cached OANDA candles ({cached_data.get('count', 0)} candles)")
+                return cached_data
 
         try:
             # Мапим таймфреймы под стандарт OANDA
-            # OANDA понимает M1, M5, M15, H1, H4, D, но если будут другие — добавь сюда
-            tf_map = {"M1": "M1", "M5": "M5", "M15": "M15", "H1": "H1", "H4": "H4", "D1": "D"}
-            granularity = tf_map.get(timeframe, "M15")
+            # OANDA понимает S5, M1, M5, M15, H1, H4, D
+            tf_map = {
+                "S5": "S5",
+                "M1": "M1",
+                "M5": "M5",
+                "M15": "M15",
+                "H1": "H1",
+                "H4": "H4",
+                "D1": "D",
+            }
+            granularity = tf_map.get(timeframe_str, "M15")
 
             url = f"{self.base_url}/accounts/{self.account_id}/instruments/{self.symbol}/candles"
             
@@ -103,9 +121,10 @@ class OandaService:
                 "count": len(candles)
             }
 
-            # Сохраняем в кэш
-            cache_service.set(cache_key, result, self.candles_cache_ttl)
-            logger.info(f"✓ Cached OANDA response ({len(candles)} candles)")
+            # Сохраняем в кэш только для минут/часов (не для S5 и других секундных)
+            if use_cache and cache_key is not None:
+                cache_service.set(cache_key, result, self.candles_cache_ttl)
+                logger.info(f"✓ Cached OANDA response ({len(candles)} candles)")
             
             return result
 

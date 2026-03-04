@@ -313,8 +313,9 @@ def price_monitor_loop():
                 time.sleep(5)
                 continue
 
-            # Получаем текущую цену по M1 из OANDA (нужна для логики и для closed_price при закрытии)
-            price_data = oanda_service.get_candles(timeframe="M1", limit=1)
+            # Получаем текущую цену по S5 из OANDA (нужна для логики и для closed_price при закрытии)
+            # Используем секундный таймфрейм S5 для более точного мониторинга
+            price_data = oanda_service.get_candles(timeframe="S5", limit=1)
             candles = price_data.get("candles") if isinstance(price_data, dict) else None
             if not candles:
                 time.sleep(5)
