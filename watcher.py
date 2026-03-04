@@ -100,6 +100,7 @@ _entry_filled_notification_sent = set()
 
 # Range Manager: в прошлом цикле подтвердили пробой активного диапазона — не воскрешать старый диапазон (Проблема 4)
 _breakout_confirmed_previous_cycle = False
+_htf_rejection_watch = None  # хранит спец-сценарий HTF фильтра для последующего Range Rejection
 
 # Task 7: Cooldown after stop loss (prevent cascade entries). 30 min для BUY/SELL после закрытия по SL.
 _last_stop_loss_time = {}
@@ -1186,6 +1187,7 @@ def format_debug_report(status_data):
         'range_rejection_overheated': '🌡️',
         'range_rejection_confirmed': '↩️',
         'range_rejection_trigger': '↩️',
+        'htf_filter_blocked': '🚫',
     }
     
     status_texts = {
@@ -1226,6 +1228,7 @@ def format_debug_report(status_data):
         'range_breakout_overheated': 'Range Breakout: перегрев — цена слишком далеко от уровня',
         'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы',
         'range_no_touch': '⚠️ В диапазоне не закрылись 2 свечи — пробой пропущен',
+        'htf_filter_blocked': '🚫 Range сигнал заблокирован (против H4 тренда)',
         'range_rejection_doji': '🕯️ Range Rejection: доджи',
         'range_rejection_overheated': '🌡️ Range Rejection: перегрев',
         'range_rejection_confirmed': '↩️ Range Rejection подтверждён',
@@ -1304,8 +1307,19 @@ def format_debug_report(status_data):
         rl = ar.get('range_low')
         if rh is not None and rl is not None:
             try:
-                msg += f"├ High: <code>${float(rh):.3f}</code>\n"
-                msg += f"└ Low: <code>${float(rl):.3f}</code>\n\n"
+                rh_f, rl_f = float(rh), float(rl)
+                msg += f"├ High: <code>${rh_f:.3f}</code>\n"
+                msg += f"├ Low: <code>${rl_f:.3f}</code>\n"
+                price = status_data.get('price') or 0
+                if price > 0:
+                    if rl_f <= price <= rh_f:
+                        msg += f"└ Цена: внутри диапазона\n\n"
+                    elif price > rh_f:
+                        msg += f"└ Цена: вне диапазона (выше)\n\n"
+                    else:
+                        msg += f"└ Цена: вне диапазона (ниже)\n\n"
+                else:
+                    msg += "\n"
             except (TypeError, ValueError):
                 msg += "└ —\n\n"
         else:
@@ -1325,7 +1339,7 @@ def format_debug_report(status_data):
             lim = status_data.get('local_range_atr_limit')
             reason_text = f"Диапазон шире 2×ATR (size {sz} > {lim})" if sz is not None and lim is not None else "Диапазон шире 2×ATR — не сохранён"
         elif reason == 'price_too_far':
-            reason_text = "Цена ушла дальше 3 ширин диапазона — деактивирован"
+            reason_text = "Цена ушла дальше 1 ширины диапазона — деактивирован"
         elif reason == 'expired_24h':
             reason_text = "Диапазон истёк (24h без касания)"
         elif reason == 'new_range_formed':
@@ -2009,13 +2023,16 @@ def run_analysis_cycle():
             range_width = rh - rl
         rid = active_range.get('id')
 
-        # (а) Цена ушла дальше 3-х ширин от ближайшей границы
+        # (а) Цена вышла из диапазона: деактивируем, если цена за границей более чем на 1 ширину
+        #     (чтобы в отчёте не показывать «есть диапазон», когда цена уже явно вне его)
         if range_width > 0:
-            if current_price > rh + 3 * range_width or current_price < rl - 3 * range_width:
+            if current_price < rl - range_width or current_price > rh + range_width:
                 db_service.deactivate_range(rid, 'price_too_far')
                 active_range = None
                 status_data['local_range_no_reason'] = 'price_too_far'
-                logger.info("📐 Диапазон деактивирован: цена слишком далеко (price_too_far)")
+                logger.info(
+                    "📐 Диапазон деактивирован: цена вне диапазона (ниже/выше более чем на 1 ширину)"
+                )
 
         # (б) Прошло более 24 часов с last_touch_at
         if active_range:
@@ -2056,27 +2073,49 @@ def run_analysis_cycle():
             status_data['is_range_breakout_confirmed'] = True
             logger.info("✅ Пробой активного диапазона подтверждён — старые диапазоны игнорируются")
         else:
-            # Нет активного — ищем подходящий старый диапазон (цена вернулась в зону)
+            # Воскрешение старых диапазонов: только если две последние закрытые свечи строго внутри [range_low, range_high] (без буфера ATR)
             try:
                 inactive_ranges = db_service.get_recent_inactive_ranges(
                     symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
                 )
-                atr_m15 = atr_m15_initial or 0.0
-                for old_range in inactive_ranges:
-                    r_high = safe_float(old_range.get('range_high'), 0)
-                    r_low = safe_float(old_range.get('range_low'), 0)
-                    r_size = safe_float(old_range.get('range_size'), 0) or (r_high - r_low if (r_high and r_low) else 0)
-                    buffer = 0.5 * atr_m15
-                    price_in_zone = (r_low - buffer) <= current_price <= (r_high + buffer)
-                    if price_in_zone and r_size > 0:
-                        if db_service.reactivate_range(old_range['id']):
-                            active_range = dict(old_range)
-                            active_range['is_active'] = True
-                            logger.info(
-                                f"🔄 Воскрешён старый диапазон [{r_low:.3f} - {r_high:.3f}] "
-                                f"(создан {old_range.get('created_at', '?')}), цена вернулась в зону"
-                            )
-                        break
+                if candles and len(candles) >= 3:
+                    signal_candle = candles[-2]
+                    breakout_candle = candles[-3]
+                    signal_close = safe_float(signal_candle.get('close'), 0)
+                    breakout_close = safe_float(breakout_candle.get('close'), 0)
+
+                    best_for_log = None  # диапазон с макс. количеством свечей внутри для лога
+                    for old_range in inactive_ranges:
+                        r_high = safe_float(old_range.get('range_high'), 0)
+                        r_low = safe_float(old_range.get('range_low'), 0)
+                        r_size = safe_float(old_range.get('range_size'), 0) or (r_high - r_low if (r_high and r_low) else 0)
+                        if r_size <= 0:
+                            continue
+                        rid = old_range.get('id')
+                        # Строго внутри границ [range_low, range_high], без буфера ATR
+                        inside_signal = r_low <= signal_close <= r_high
+                        inside_breakout = r_low <= breakout_close <= r_high
+                        both_inside = inside_signal and inside_breakout
+
+                        if both_inside:
+                            if db_service.reactivate_range(rid):
+                                db_service.update_range_touch(rid, 2)
+                                active_range = dict(old_range)
+                                active_range['is_active'] = True
+                                active_range['candles_inside'] = 2
+                                logger.info(
+                                    f"🔄 Диапазон воскрешён: две свечи закрылись внутри [{r_low:.3f} - {r_high:.3f}]"
+                                )
+                            break
+                        count_inside = (1 if inside_signal else 0) + (1 if inside_breakout else 0)
+                        if best_for_log is None or count_inside > best_for_log[2]:
+                            best_for_log = (r_low, r_high, count_inside)
+                    if not active_range and best_for_log is not None:
+                        r_low, r_high, count_inside = best_for_log
+                        logger.info(
+                            f"⏳ Ожидание воскрешения диапазона [{r_low:.3f} - {r_high:.3f}]: "
+                            f"нужно 2 свечи внутри, пока {count_inside} из 2"
+                        )
             except Exception as e:
                 logger.warning(f"⚠️ get_recent_inactive_ranges / reactivate error: {e}")
 
@@ -2153,6 +2192,39 @@ def run_analysis_cycle():
         status_data['local_range_high'] = range_high
         status_data['local_range_low'] = range_low
 
+        # Спец-сценарий HTF: если ранее Range Breakout был заблокирован против H4 тренда
+        # (_htf_rejection_watch установлен), и цена вернулась к границе диапазона,
+        # рассматриваем это как Range Rejection по направлению H4 (охота за стопами).
+        global _htf_rejection_watch
+        if _htf_rejection_watch:
+            watch_dir = _htf_rejection_watch.get('watch_direction')
+            watch_level = safe_float(_htf_rejection_watch.get('level'), 0.0)
+            trend_htf = _htf_rejection_watch.get('trend')
+            # BUY от нижней границы при H4 UPTREND: цена вернулась выше range_low
+            if watch_dir == 'BUY' and trend_htf == 'UPTREND' and current_price >= range_low > 0:
+                status_data['is_range_rejection_confirmed'] = True
+                status_data['rejection_direction'] = 'BUY'
+                status_data['rejection_level'] = range_low
+                status_data['htf_rejection_watch'] = True
+                is_near = True
+                logger.info(
+                    f"↩️ HTF Range Rejection BUY: цена вернулась выше поддержки range_low={range_low:.3f} при H4 UPTREND "
+                    f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
+                )
+                _htf_rejection_watch = None
+            # SELL от верхней границы при H4 DOWNTREND: цена вернулась ниже range_high
+            elif watch_dir == 'SELL' and trend_htf == 'DOWNTREND' and current_price <= range_high > 0:
+                status_data['is_range_rejection_confirmed'] = True
+                status_data['rejection_direction'] = 'SELL'
+                status_data['rejection_level'] = range_high
+                status_data['htf_rejection_watch'] = True
+                is_near = True
+                logger.info(
+                    f"↩️ HTF Range Rejection SELL: цена вернулась ниже сопротивления range_high={range_high:.3f} при H4 DOWNTREND "
+                    f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
+                )
+                _htf_rejection_watch = None
+
         # Рабочие свечи для анализа диапазона:
         # - breakout_candle: первая свеча потенциального пробоя (полностью закрыта)
         # - signal_candle: вторая свеча (подтверждение / отмена пробоя)
@@ -2228,7 +2300,7 @@ def run_analysis_cycle():
                     )
                     send_debug_notification(status_data)
                     return
-                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
                 signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
                 candle_body = abs(signal_close - signal_open)
                 if candle_body < body_threshold:
@@ -2250,7 +2322,7 @@ def run_analysis_cycle():
                     )
                     send_debug_notification(status_data)
                     return
-                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
                 signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
                 candle_body = abs(signal_close - signal_open)
                 if candle_body < body_threshold:
@@ -2301,8 +2373,8 @@ def run_analysis_cycle():
                         send_debug_notification(status_data)
                         return
 
-                # ФИЛЬТР 2 — доджи: тело ≤ 3 пунктов (или min(30% ATR, 3.0))
-                body_threshold = min(0.3 * atr_m15, 3.0) if atr_m15 > 0 else 3.0
+                # ФИЛЬТР 2 — доджи: тело < 25% ATR
+                body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
                 signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
                 candle_body = abs(signal_close - signal_open)
                 signal_is_doji = candle_body < body_threshold
@@ -2817,6 +2889,51 @@ def run_analysis_cycle():
             logger.warning(f"⚠️ HTF контекст {tf_name} не собран: {e}")
     if htf_context:
         logger.info(f"✓ HTF контекст для LLM: {list(htf_context.keys())}")
+        # HTF фильтр для Range Breakout / Range Rejection:
+        # - при конфликте с H4 трендом блокируем текущий Range-сигнал
+        # - дополнительно ставим флаг _htf_rejection_watch, чтобы в следующем цикле
+        #   рассмотреть отбой (Range Rejection) по направлению H4 тренда
+        h4 = htf_context.get('H4') or {}
+        h4_trend = (h4.get('trend') or 'NEUTRAL').upper()
+        breakout_dir = status_data.get('breakout_direction') or status_data.get('rejection_direction')
+        if breakout_dir:
+            breakout_dir = breakout_dir.upper()
+        global _htf_rejection_watch
+        if h4_trend in ('UPTREND', 'DOWNTREND') and breakout_dir in ('BUY', 'SELL'):
+            if h4_trend == 'UPTREND' and breakout_dir == 'SELL':
+                logger.warning("🚫 Range сигнал заблокирован: SELL против H4 UPTREND")
+                status_data['is_range_breakout_confirmed'] = False
+                status_data['is_range_rejection_confirmed'] = False
+                status_data['status'] = 'htf_filter_blocked'
+                status_data['reason'] = (
+                    "SELL заблокирован: H4 тренд UPTREND. "
+                    "Торгуем только по направлению старшего тренда."
+                )
+                # В следующем цикле, если цена вернётся выше нижней границы диапазона,
+                # рассматриваем Range Rejection BUY от поддержки при H4 UPTREND.
+                level = safe_float(status_data.get('local_range_low') or 0.0)
+                _htf_rejection_watch = {
+                    'trend': h4_trend,
+                    'watch_direction': 'BUY',
+                    'level': level,
+                }
+            elif h4_trend == 'DOWNTREND' and breakout_dir == 'BUY':
+                logger.warning("🚫 Range сигнал заблокирован: BUY против H4 DOWNTREND")
+                status_data['is_range_breakout_confirmed'] = False
+                status_data['is_range_rejection_confirmed'] = False
+                status_data['status'] = 'htf_filter_blocked'
+                status_data['reason'] = (
+                    "BUY заблокирован: H4 тренд DOWNTREND. "
+                    "Торгуем только по направлению старшего тренда."
+                )
+                # В следующем цикле, если цена вернётся ниже верхней границы диапазона,
+                # рассматриваем Range Rejection SELL от сопротивления при H4 DOWNTREND.
+                level = safe_float(status_data.get('local_range_high') or 0.0)
+                _htf_rejection_watch = {
+                    'trend': h4_trend,
+                    'watch_direction': 'SELL',
+                    'level': level,
+                }
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
@@ -2953,6 +3070,7 @@ def run_analysis_cycle():
             range_breakout_context = {
                 'is_confirmed': False,
                 'is_range_rejection': True,
+                'htf_rejection_watch': status_data.get('htf_rejection_watch', False),
                 'rejection_direction': direction_rj,
                 'rejection_level': rej_level,
                 'direction': direction_rj,
@@ -4155,7 +4273,7 @@ def run_trade_manager_cycle():
             f"🛡 ASTRA Manager: LLM рекомендует перевести SL в BE.\n"
             f"Сделка id={trade_id}, type={signal_type}\n"
             f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
-            f"Причина: {mgr_reason}"
+            f"Причина: {escape_html(mgr_reason)}"
         )
         if user_ids:
             telegram_service.broadcast_deals_only(user_ids, msg)
@@ -4181,7 +4299,7 @@ def run_trade_manager_cycle():
             msg = (
                 f"✅ ASTRA Manager: сделка id={trade_id} закрыта по рекомендации LLM при 1R (фиксация прибыли).\n"
                 f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
-                f"Причина: {mgr_reason}\n"
+                f"Причина: {escape_html(mgr_reason)}\n"
                 f"Охотник снова ищет новую сделку."
             )
             if user_ids:
@@ -4227,7 +4345,7 @@ def run_trade_manager_cycle():
                 msg = (
                     f"⚠️ ASTRA Manager: LLM рекомендует ЗАКРЫТЬ сделку id={trade_id} полностью ({count}/{MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER}).\n"
                     f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
-                    f"Причина: {mgr_reason}\n\n"
+                    f"Причина: {escape_html(mgr_reason)}\n\n"
                     f"После {MANAGER_CLOSE_ALL_AUTO_CLOSE_AFTER} рекомендаций (3/3) сделка будет закрыта автоматически."
                 )
                 if user_ids:
@@ -4254,7 +4372,7 @@ def run_trade_manager_cycle():
             msg = (
                 f"✅ ASTRA Manager: сделка id={trade_id} закрыта по рекомендации LLM при 1R (фиксация прибыли).\n"
                 f"type={signal_type}, entry={entry_price:.2f}, close={current_price:.2f}, PnL={result_pnl:.2f}\n"
-                f"Причина: {mgr_reason}\n"
+                f"Причина: {escape_html(mgr_reason)}\n"
                 f"Охотник снова ищет новую сделку."
             )
             if user_ids:
@@ -4292,7 +4410,7 @@ def run_trade_manager_cycle():
                 msg = (
                     f"ℹ️ ASTRA Manager: LLM рекомендует частично закрыть (50%) сделку id={trade_id} ({count_50}/{MANAGER_CLOSE_50_AUTO_CLOSE_AFTER}).\n"
                     f"type={signal_type}, entry={entry_price:.2f}, current={current_price:.2f}\n"
-                    f"Причина: {mgr_reason}\n\n"
+                    f"Причина: {escape_html(mgr_reason)}\n\n"
                     f"После {MANAGER_CLOSE_50_AUTO_CLOSE_AFTER} рекомендаций (3/3) сделка будет закрыта автоматически."
                 )
                 if user_ids:

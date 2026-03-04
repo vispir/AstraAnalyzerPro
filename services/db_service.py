@@ -643,6 +643,42 @@ class DBService:
             logger.error(f"❌ Ошибка обновления SL сигнала {signal_id}: {e}")
             return False
 
+    def get_active_trade(self, symbol: str = 'XAU_USD'):
+        """
+        Возвращает последнюю АКТИВНУЮ торговую сделку (BUY/SELL) со статусом 'active'.
+        Используется price monitor thread и менеджером для защиты от конфликтов.
+        """
+        if not self.url:
+            return None
+
+        # Считаем активными сделки со статусами active / be_set / tp1_reached
+        base_url = (
+            f"{self.url}/rest/v1/signals"
+            f"?select=*"
+            f"&signal_type=in.(BUY,SELL)"
+            f"&status=in.(active,be_set,tp1_reached)"
+            f"&order=timestamp.desc&limit=1"
+        )
+        if symbol:
+            target_url = base_url + f"&symbol=eq.{symbol}"
+        else:
+            target_url = base_url
+
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения активной сделки: {e}")
+            return None
+
     def get_signal_entry_notified(self, signal_id: int) -> bool:
         """
         Возвращает True, если по сигналу уже было отправлено уведомление «Вход достигнут».

@@ -31,8 +31,10 @@ logger = logging.getLogger(__name__)
 # Импорт конфигурации
 from config.settings import FLASK_PORT, FLASK_DEBUG, SYMBOL
 
-# Импорт Telegram сервиса
+# Импорт Telegram сервиса и вспомогательных сервисов
 from services.telegram_service import telegram_service
+from services.db_service import db_service
+from services.oanda_service import oanda_service
 
 # --- ИСПРАВЛЕННЫЙ БЛОК ИМПОРТА WATCHER (Файл в корне) ---
 try:
@@ -272,6 +274,203 @@ def initialize_services():
     
     return services_status
 
+
+def price_monitor_loop():
+    """
+    Фоновый поток Price Monitor: раз в 5 секунд проверяет активную сделку
+    по текущей цене (без LLM) и:
+    - закрывает по SL / TP
+    Логика 1R/BE/1R+5% реализована в Watcher/Manager и здесь не дублируется.
+    """
+    import time
+
+    def _to_float(val, default=0.0):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    logger.info("🧵 Price Monitor thread started (interval = 5s)")
+    while True:
+        try:
+            # Получаем последнюю АКТИВНУЮ торговую сделку (BUY/SELL) для XAU_USD
+            trade = db_service.get_active_trade(symbol="XAU_USD")
+            if not trade:
+                time.sleep(5)
+                continue
+
+            signal_type = (trade.get("signal_type") or "").upper()
+            if signal_type not in ("BUY", "SELL"):
+                time.sleep(5)
+                continue
+
+            entry_price = _to_float(trade.get("entry_price"))
+            stop_loss = _to_float(trade.get("stop_loss"))
+            take_profit = _to_float(trade.get("take_profit"))
+            signal_id = trade.get("id")
+
+            if not signal_id or entry_price == 0 or (stop_loss == 0 and take_profit == 0):
+                time.sleep(5)
+                continue
+
+            # Получаем текущую цену по M1 из OANDA
+            price_data = oanda_service.get_candles(timeframe="M1", limit=1)
+            candles = price_data.get("candles") if isinstance(price_data, dict) else None
+            if not candles:
+                time.sleep(5)
+                continue
+
+            last_candle = candles[-1]
+            current_price = _to_float(last_candle.get("close"))
+            if current_price == 0:
+                time.sleep(5)
+                continue
+
+            # 1. Проверяем достижение цены входа (активация сделки)
+            entry_notified = False
+            try:
+                entry_notified = db_service.get_signal_entry_notified(signal_id)
+            except Exception as e:
+                logger.warning(f"⚠️ Price Monitor: get_signal_entry_notified error for id={signal_id}: {e}")
+            crossed_entry = False
+            if signal_type == "BUY" and current_price >= entry_price > 0:
+                crossed_entry = True
+            elif signal_type == "SELL" and current_price <= entry_price > 0:
+                crossed_entry = True
+            if crossed_entry and not entry_notified:
+                user_ids_filled = db_service.get_all_active_users()
+                if user_ids_filled:
+                    msg_filled = (
+                        f"✅ <b>Вход достигнут — сделка активирована</b>\n\n"
+                        f"id={signal_id} | {signal_type} | цена входа <b>{entry_price:.2f}</b> достигнута.\n"
+                        f"Текущая цена: {current_price:.2f}. Менеджер/монитор ведут сделку (SL/TP)."
+                    )
+                    telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
+                db_service.mark_entry_notified(signal_id)
+
+            # 2. Правила 1R → BE и 1R+5% → SL на 1R (по текущей цене M1)
+            risk_amount = abs(entry_price - stop_loss)
+            be_threshold = entry_price * 0.0005  # ~0.05% от цены
+            sl_is_be = abs(stop_loss - entry_price) <= be_threshold
+            at_1r = False
+            if risk_amount > 0:
+                if signal_type == "BUY":
+                    at_1r = current_price >= entry_price + risk_amount
+                else:
+                    at_1r = current_price <= entry_price - risk_amount
+            if at_1r and not sl_is_be:
+                new_sl = entry_price
+                logger.info(
+                    f"🔒 Price Monitor: достигнут 1R в плюс. Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
+                )
+                db_service.update_signal_sl_and_status(signal_id, new_sl, status=None)
+                # уведомление в сигнальный бот
+                users_be = db_service.get_all_active_users()
+                if users_be:
+                    msg_be = (
+                        f"🔒 <b>ASTRA Monitor:</b> SL переведён в BE по правилу 1R.\n\n"
+                        f"id={signal_id} | {signal_type}\n"
+                        f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
+                        f"TP: {take_profit:.2f}"
+                    )
+                    telegram_service.broadcast_deals_only(users_be, msg_be)
+                stop_loss = new_sl
+                sl_is_be = True
+
+            # 1R+5%: перенос SL на уровень 1R, если уже в BE
+            MANAGER_1R_LOCK_MARGIN = 0.05
+            if risk_amount > 0 and sl_is_be:
+                sl_1r_level = entry_price + risk_amount if signal_type == "BUY" else entry_price - risk_amount
+                at_1r_plus_margin = False
+                if signal_type == "BUY":
+                    at_1r_plus_margin = current_price >= entry_price + risk_amount * (1.0 + MANAGER_1R_LOCK_MARGIN)
+                else:
+                    at_1r_plus_margin = current_price <= entry_price - risk_amount * (1.0 + MANAGER_1R_LOCK_MARGIN)
+                if at_1r_plus_margin and abs(stop_loss - sl_1r_level) > be_threshold:
+                    logger.info(
+                        f"🔒 Price Monitor: цена прошла 1R+{MANAGER_1R_LOCK_MARGIN*100:.0f}%. "
+                        f"Переносим SL на уровень 1R: {stop_loss:.2f} → {sl_1r_level:.2f}."
+                    )
+                    db_service.update_signal_sl_and_status(signal_id, sl_1r_level, status=None)
+                    users_lock = db_service.get_all_active_users()
+                    if users_lock:
+                        msg_lock = (
+                            f"🔒 <b>ASTRA Monitor:</b> SL перенесён на уровень 1R.\n\n"
+                            f"id={signal_id} | {signal_type}\n"
+                            f"SL: {stop_loss:.2f} → {sl_1r_level:.2f}\n"
+                            f"TP: {take_profit:.2f}"
+                        )
+                        telegram_service.broadcast_deals_only(users_lock, msg_lock)
+                    stop_loss = sl_1r_level
+
+            # 3. Проверяем SL / TP для фактического закрытия
+            hit_sl = (
+                (signal_type == "BUY" and current_price <= stop_loss)
+                or (signal_type == "SELL" and current_price >= stop_loss)
+            )
+            hit_tp = (
+                (signal_type == "BUY" and current_price >= take_profit)
+                or (signal_type == "SELL" and current_price <= take_profit)
+            )
+
+            if not (hit_sl or hit_tp):
+                time.sleep(5)
+                continue
+
+            # Защита от двойного срабатывания: перечитаем актуальную активную сделку перед закрытием
+            latest = db_service.get_active_trade(symbol="XAU_USD")
+            if not latest or latest.get("id") != signal_id:
+                time.sleep(5)
+                continue
+
+            # Расчёт фактического PnL
+            if signal_type == "BUY":
+                result_pnl = current_price - entry_price
+            else:
+                result_pnl = entry_price - current_price
+
+            user_ids = db_service.get_all_active_users()
+
+            if hit_sl:
+                logger.info(
+                    f"🛑 Price Monitor: SL hit for trade id={signal_id} "
+                    f"type={signal_type} entry={entry_price:.2f} sl={stop_loss:.2f} price={current_price:.2f}"
+                )
+                db_service.update_signal_result(
+                    signal_id, result_pnl, current_price, status="closed_sl"
+                )
+                msg = (
+                    f"🛑 ASTRA Price Monitor: сделка id={signal_id} закрыта по SL.\n"
+                    f"Тип: {signal_type}\n"
+                    f"Вход: {entry_price:.2f}\n"
+                    f"SL: {stop_loss:.2f}\n"
+                    f"Фактическая цена закрытия: {current_price:.2f}\n"
+                    f"P/L: {result_pnl:.2f}"
+                )
+                telegram_service.broadcast_deals_only(user_ids, msg)
+            elif hit_tp:
+                logger.info(
+                    f"✅ Price Monitor: TP hit for trade id={signal_id} "
+                    f"type={signal_type} entry={entry_price:.2f} tp={take_profit:.2f} price={current_price:.2f}"
+                )
+                db_service.update_signal_result(
+                    signal_id, result_pnl, current_price, status="closed_tp"
+                )
+                msg = (
+                    f"✅ ASTRA Price Monitor: сделка id={signal_id} закрыта по TP 🎯\n"
+                    f"Тип: {signal_type}\n"
+                    f"Вход: {entry_price:.2f}\n"
+                    f"TP: {take_profit:.2f}\n"
+                    f"Фактическая цена закрытия: {current_price:.2f}\n"
+                    f"P/L: {result_pnl:.2f}"
+                )
+                telegram_service.broadcast_deals_only(user_ids, msg)
+
+        except Exception as e:
+            logger.error(f"❌ Price Monitor error: {e}", exc_info=True)
+        finally:
+            time.sleep(5)
+
 if __name__ == '__main__':
     import socket
     logger.info("=" * 60)
@@ -316,6 +515,13 @@ if __name__ == '__main__':
     #         logger.info("🚀 ASTRA WATCHER STARTED IN BACKGROUND")
     #     except Exception as e:
     #         logger.error(f"Failed to start Watcher: {e}")
+
+    # Запускаем фоновый монитор цены (отдельный поток-демон)
+    try:
+        monitor_thread = threading.Thread(target=price_monitor_loop, daemon=True)
+        monitor_thread.start()
+    except Exception as e:
+        logger.error(f"Failed to start Price Monitor thread: {e}")
 
     try:
         hostname = socket.gethostname()
