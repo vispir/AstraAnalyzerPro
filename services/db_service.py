@@ -645,19 +645,20 @@ class DBService:
 
     def get_active_trade(self, symbol: str = 'XAU_USD'):
         """
-        Возвращает последнюю АКТИВНУЮ торговую сделку (BUY/SELL) со статусом 'active'.
-        Используется price monitor thread и менеджером для защиты от конфликтов.
+        Возвращает ровно одну последнюю АКТИВНУЮ сделку (BUY/SELL) по статусам active/be_set/tp1_reached.
+        Сортировка: сначала по timestamp.desc, затем по id.desc — всегда одна запись (limit=1).
+        Используется price monitor и менеджером для защиты от конфликтов.
         """
         if not self.url:
             return None
 
-        # Считаем активными сделки со статусами active / be_set / tp1_reached
         base_url = (
             f"{self.url}/rest/v1/signals"
             f"?select=*"
             f"&signal_type=in.(BUY,SELL)"
             f"&status=in.(active,be_set,tp1_reached)"
-            f"&order=timestamp.desc&limit=1"
+            f"&order=timestamp.desc,id.desc"
+            f"&limit=1"
         )
         if symbol:
             target_url = base_url + f"&symbol=eq.{symbol}"
@@ -674,7 +675,10 @@ class DBService:
             )
             response.raise_for_status()
             data = response.json()
-            return data[0] if data else None
+            # Всегда одна запись; при множестве активных в БД — только самая новая
+            if isinstance(data, list) and len(data) > 0:
+                return data[0]
+            return None
         except Exception as e:
             logger.error(f"❌ Ошибка получения активной сделки: {e}")
             return None

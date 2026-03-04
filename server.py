@@ -313,7 +313,7 @@ def price_monitor_loop():
                 time.sleep(5)
                 continue
 
-            # Получаем текущую цену по M1 из OANDA
+            # Получаем текущую цену по M1 из OANDA (нужна для логики и для closed_price при закрытии)
             price_data = oanda_service.get_candles(timeframe="M1", limit=1)
             candles = price_data.get("candles") if isinstance(price_data, dict) else None
             if not candles:
@@ -326,18 +326,43 @@ def price_monitor_loop():
                 time.sleep(5)
                 continue
 
-            # 1. Проверяем достижение цены входа (активация сделки)
+            # Был ли достигнут entry (сделка активирована)
             entry_notified = False
             try:
                 entry_notified = db_service.get_signal_entry_notified(signal_id)
             except Exception as e:
                 logger.warning(f"⚠️ Price Monitor: get_signal_entry_notified error for id={signal_id}: {e}")
+
+            # Не активирована и старше 24ч → закрыть как cancelled_no_fill без TG
+            if not entry_notified:
+                from datetime import datetime, timezone, timedelta
+                trade_ts_raw = trade.get("timestamp") or trade.get("created_at")
+                if trade_ts_raw:
+                    try:
+                        trade_ts = datetime.fromisoformat(str(trade_ts_raw).replace("Z", "+00:00"))
+                        if trade_ts.tzinfo is None:
+                            trade_ts = trade_ts.replace(tzinfo=timezone.utc)
+                        if (datetime.now(timezone.utc) - trade_ts) > timedelta(hours=24):
+                            db_service.update_signal_result(
+                                signal_id, 0.0, current_price, status="cancelled_no_fill"
+                            )
+                            logger.info(
+                                f"⏳ Price Monitor: сделка id={signal_id} не активирована за 24ч — "
+                                f"закрыта как cancelled_no_fill (без TG)"
+                            )
+                            time.sleep(5)
+                            continue
+                    except Exception:
+                        pass
+
+            # 1. Проверяем достижение цены входа (активация сделки)
             crossed_entry = False
             if signal_type == "BUY" and current_price >= entry_price > 0:
                 crossed_entry = True
             elif signal_type == "SELL" and current_price <= entry_price > 0:
                 crossed_entry = True
             if crossed_entry and not entry_notified:
+                db_service.mark_entry_notified(signal_id)
                 user_ids_filled = db_service.get_all_active_users()
                 if user_ids_filled:
                     msg_filled = (
@@ -346,7 +371,6 @@ def price_monitor_loop():
                         f"Текущая цена: {current_price:.2f}. Менеджер/монитор ведут сделку (SL/TP)."
                     )
                     telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
-                db_service.mark_entry_notified(signal_id)
 
             # 2. Правила 1R → BE и 1R+5% → SL на 1R (по текущей цене M1)
             risk_amount = abs(entry_price - stop_loss)
@@ -364,7 +388,6 @@ def price_monitor_loop():
                     f"🔒 Price Monitor: достигнут 1R в плюс. Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
                 )
                 db_service.update_signal_sl_and_status(signal_id, new_sl, status=None)
-                # уведомление в сигнальный бот
                 users_be = db_service.get_all_active_users()
                 if users_be:
                     msg_be = (
@@ -439,15 +462,16 @@ def price_monitor_loop():
                 db_service.update_signal_result(
                     signal_id, result_pnl, current_price, status="closed_sl"
                 )
-                msg = (
-                    f"🛑 ASTRA Price Monitor: сделка id={signal_id} закрыта по SL.\n"
-                    f"Тип: {signal_type}\n"
-                    f"Вход: {entry_price:.2f}\n"
-                    f"SL: {stop_loss:.2f}\n"
-                    f"Фактическая цена закрытия: {current_price:.2f}\n"
-                    f"P/L: {result_pnl:.2f}"
-                )
-                telegram_service.broadcast_deals_only(user_ids, msg)
+                if user_ids:
+                    msg = (
+                        f"🛑 ASTRA Price Monitor: сделка id={signal_id} закрыта по SL.\n"
+                        f"Тип: {signal_type}\n"
+                        f"Вход: {entry_price:.2f}\n"
+                        f"SL: {stop_loss:.2f}\n"
+                        f"Фактическая цена закрытия: {current_price:.2f}\n"
+                        f"P/L: {result_pnl:.2f}"
+                    )
+                    telegram_service.broadcast_deals_only(user_ids, msg)
             elif hit_tp:
                 logger.info(
                     f"✅ Price Monitor: TP hit for trade id={signal_id} "
@@ -456,15 +480,16 @@ def price_monitor_loop():
                 db_service.update_signal_result(
                     signal_id, result_pnl, current_price, status="closed_tp"
                 )
-                msg = (
-                    f"✅ ASTRA Price Monitor: сделка id={signal_id} закрыта по TP 🎯\n"
-                    f"Тип: {signal_type}\n"
-                    f"Вход: {entry_price:.2f}\n"
-                    f"TP: {take_profit:.2f}\n"
-                    f"Фактическая цена закрытия: {current_price:.2f}\n"
-                    f"P/L: {result_pnl:.2f}"
-                )
-                telegram_service.broadcast_deals_only(user_ids, msg)
+                if user_ids:
+                    msg = (
+                        f"✅ ASTRA Price Monitor: сделка id={signal_id} закрыта по TP 🎯\n"
+                        f"Тип: {signal_type}\n"
+                        f"Вход: {entry_price:.2f}\n"
+                        f"TP: {take_profit:.2f}\n"
+                        f"Фактическая цена закрытия: {current_price:.2f}\n"
+                        f"P/L: {result_pnl:.2f}"
+                    )
+                    telegram_service.broadcast_deals_only(user_ids, msg)
 
         except Exception as e:
             logger.error(f"❌ Price Monitor error: {e}", exc_info=True)
