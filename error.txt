@@ -1,0 +1,50 @@
+2026-03-04T16:50:20.086339382Z Using cached rsa-4.9.1-py3-none-any.whl (34 kB)
+2026-03-04T16:50:20.088038624Z Using cached simplejson-3.20.2-cp311-cp311-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (144 kB)
+2026-03-04T16:50:20.089791009Z Using cached typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+2026-03-04T16:50:20.091384376Z Using cached uritemplate-4.2.0-py3-none-any.whl (11 kB)
+2026-03-04T16:50:20.092937301Z Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+2026-03-04T16:50:20.106412282Z Using cached grpcio-1.78.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (6.7 MB)
+2026-03-04T16:50:20.121963163Z Using cached grpcio_status-1.71.2-py3-none-any.whl (14 kB)
+2026-03-04T16:50:20.127588545Z Using cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+2026-03-04T16:50:20.1318387Z Using cached pluggy-1.6.0-py3-none-any.whl (20 kB)
+2026-03-04T16:50:20.133962473Z Using cached pyasn1-0.6.2-py3-none-any.whl (83 kB)
+2026-03-04T16:50:20.137869862Z Using cached pygments-2.19.2-py3-none-any.whl (1.2 MB)
+2026-03-04T16:50:20.142317247Z Using cached pyparsing-3.3.2-py3-none-any.whl (122 kB)
+2026-03-04T16:50:20.767158933Z Installing collected packages: sgmllib3k, pytz, peewee, multitasking, websockets, urllib3, uritemplate, Unidecode, tzlocal, typing-extensions, tqdm, soupsieve, six, simplejson, python-dotenv, pyparsing, pygments, pycparser, pyasn1, protobuf, pluggy, platformdirs, Pillow, packaging, orjson, numpy, narwhals, markupsafe, lxml, logistro, itsdangerous, iniconfig, idna, frozendict, feedparser, dnspython, click, charset_normalizer, certifi, blinker, annotated-types, werkzeug, typing-inspection, rsa, requests, python-dateutil, pytest, pydantic-core, pyasn1-modules, proto-plus, plotly, jinja2, httplib2, grpcio, googleapis-common-protos, choreographer, cffi, beautifulsoup4, APScheduler, pytest-timeout, pyTelegramBotAPI, pydantic, pandas, grpcio-status, gnews, Flask, curl_cffi, cryptography, yfinance, kaleido, investpy, google-auth, flask-cors, google-auth-httplib2, google-api-core, google-api-python-client, google-ai-generativelanguage, google-generativeai
+2026-03-04T16:50:45.93129831Z Successfully installed APScheduler-3.11.2 Flask-3.1.3 Pillow-12.1.1 Unidecode-1.4.0 annotated-types-0.7.0 beautifulsoup4-4.14.3 blinker-1.9.0 certifi-2026.2.25 cffi-2.0.0 charset_normalizer-3.4.4 choreographer-1.2.1 click-8.3.1 cryptography-46.0.5 curl_cffi-0.13.0 dnspython-2.8.0 feedparser-6.0.12 flask-cors-6.0.2 frozendict-2.4.7 gnews-0.4.3 google-ai-generativelanguage-0.6.15 google-api-core-2.30.0 google-api-python-client-2.191.0 google-auth-2.48.0 google-auth-httplib2-0.3.0 google-generativeai-0.8.6 googleapis-common-protos-1.72.0 grpcio-1.78.0 grpcio-status-1.71.2 httplib2-0.31.2 idna-3.11 iniconfig-2.3.0 investpy-1.0.8 itsdangerous-2.2.0 jinja2-3.1.6 kaleido-1.2.0 logistro-2.0.1 lxml-6.0.2 markupsafe-3.0.3 multitasking-0.0.12 narwhals-2.17.0 numpy-2.4.2 orjson-3.11.7 packaging-26.0 pandas-3.0.1 peewee-4.0.1 platformdirs-4.9.2 plotly-6.6.0 pluggy-1.6.0 proto-plus-1.27.1 protobuf-5.29.6 pyTelegramBotAPI-4.31.0 pyasn1-0.6.2 pyasn1-modules-0.4.2 pycparser-3.0 pydantic-2.12.5 pydantic-core-2.41.5 pygments-2.19.2 pyparsing-3.3.2 pytest-9.0.2 pytest-timeout-2.4.0 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 pytz-2026.1.post1 requests-2.32.5 rsa-4.9.1 sgmllib3k-1.0.0 simplejson-3.20.2 six-1.17.0 soupsieve-2.8.3 tqdm-4.67.3 typing-extensions-4.15.0 typing-inspection-0.4.2 tzlocal-5.3.1 uritemplate-4.2.0 urllib3-2.6.3 websockets-16.0 werkzeug-3.1.6 yfinance-1.2.0
+2026-03-04T16:50:46.012045502Z WARNING: There was an error checking the latest version of pip.
+2026-03-04T16:51:01.504049616Z ==> Uploading build...
+2026-03-04T16:51:20.560711588Z ==> Uploaded in 11.7s. Compression took 7.4s
+2026-03-04T16:51:20.676650169Z ==> Build successful 🎉
+2026-03-04T16:51:34.203919253Z ==> Deploying...
+2026-03-04T16:51:34.433889Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-03-04T16:52:05.679471757Z ==> Running 'python server.py'
+2026-03-04T16:52:10.787211463Z 2026-03-04 16:52:10,787 - services.telegram_service - INFO - ✅ Astra Signal Bot (@AstraSignal_Bot) инициализирован
+2026-03-04T16:52:10.788934744Z 2026-03-04 16:52:10,787 - services.telegram_service - INFO - 📱 TELEGRAM_BOT_TOKEN: установлен ✅
+2026-03-04T16:52:10.788945484Z 2026-03-04 16:52:10,787 - services.telegram_service - INFO - 📱 Режим работы: WEBHOOK
+2026-03-04T16:52:10.788949754Z 2026-03-04 16:52:10,787 - services.telegram_service - INFO - 📱 TELEGRAM_WEBHOOK_URL: https://astraanalyzerpro-q6up.onrender.com/api/tg/webhook
+2026-03-04T16:52:10.788953134Z 2026-03-04 16:52:10,787 - services.telegram_service - INFO - ✅ Telegram Bot инициализирован
+2026-03-04T16:52:10.874962062Z 2026-03-04 16:52:10,874 - services.db_service - INFO - ✅ DB Service переключен на Supabase Cloud API
+2026-03-04T16:52:11.0734247Z Traceback (most recent call last):
+2026-03-04T16:52:11.073470981Z   File "/opt/render/project/src/server.py", line 42, in <module>
+2026-03-04T16:52:11.073773239Z     from watcher import start_watcher, run_analysis_cycle
+2026-03-04T16:52:11.073801809Z   File "/opt/render/project/src/watcher.py", line 2901
+2026-03-04T16:52:11.07380904Z     global _htf_rejection_watch
+2026-03-04T16:52:11.07381433Z     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-03-04T16:52:11.07382Z SyntaxError: name '_htf_rejection_watch' is used prior to global declaration
+2026-03-04T16:52:12.469929643Z ==> Exited with status 1
+2026-03-04T16:52:12.471954657Z ==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
+2026-03-04T16:52:17.699775736Z ==> Running 'python server.py'
+2026-03-04T16:52:22.699550877Z 2026-03-04 16:52:22,698 - services.telegram_service - INFO - ✅ Astra Signal Bot (@AstraSignal_Bot) инициализирован
+2026-03-04T16:52:22.699572858Z 2026-03-04 16:52:22,698 - services.telegram_service - INFO - 📱 TELEGRAM_BOT_TOKEN: установлен ✅
+2026-03-04T16:52:22.699578248Z 2026-03-04 16:52:22,698 - services.telegram_service - INFO - 📱 Режим работы: WEBHOOK
+2026-03-04T16:52:22.699583388Z 2026-03-04 16:52:22,698 - services.telegram_service - INFO - 📱 TELEGRAM_WEBHOOK_URL: https://astraanalyzerpro-q6up.onrender.com/api/tg/webhook
+2026-03-04T16:52:22.699589828Z 2026-03-04 16:52:22,698 - services.telegram_service - INFO - ✅ Telegram Bot инициализирован
+2026-03-04T16:52:22.705401925Z 2026-03-04 16:52:22,705 - services.db_service - INFO - ✅ DB Service переключен на Supabase Cloud API
+2026-03-04T16:52:22.904336235Z Traceback (most recent call last):
+2026-03-04T16:52:22.904358616Z   File "/opt/render/project/src/server.py", line 42, in <module>
+2026-03-04T16:52:22.904480758Z     from watcher import start_watcher, run_analysis_cycle
+2026-03-04T16:52:22.904494499Z   File "/opt/render/project/src/watcher.py", line 2901
+2026-03-04T16:52:22.904499889Z     global _htf_rejection_watch
+2026-03-04T16:52:22.904503929Z     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-03-04T16:52:22.904508529Z SyntaxError: name '_htf_rejection_watch' is used prior to global declaration

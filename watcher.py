@@ -2898,7 +2898,6 @@ def run_analysis_cycle():
         breakout_dir = status_data.get('breakout_direction') or status_data.get('rejection_direction')
         if breakout_dir:
             breakout_dir = breakout_dir.upper()
-        global _htf_rejection_watch
         if h4_trend in ('UPTREND', 'DOWNTREND') and breakout_dir in ('BUY', 'SELL'):
             if h4_trend == 'UPTREND' and breakout_dir == 'SELL':
                 logger.warning("🚫 Range сигнал заблокирован: SELL против H4 UPTREND")
