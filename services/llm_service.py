@@ -1593,9 +1593,17 @@ class LLMService:
                 # Это позволит сохранить полное описание без обрезания
                 return result.get("response", "")
             
-            # Если ошибка, возвращаем JSON с WAIT
+            # Если ошибка — разный текст для отчёта в TG в зависимости от типа ошибки
+            status_code = result.get("status")
+            err_msg = (result.get("error") or "").lower()
+            if status_code == 503 or "503" in str(result.get("error", "")) or "high demand" in err_msg or "unavailable" in err_msg:
+                summary = "Сервисы Gemini перегружены. Ожидаем следующий отчёт (через 15 мин)."
+            elif status_code == 429 or "rate limit" in err_msg:
+                summary = "Исчерпан лимит API. Смените API ключ Gemini на другой."
+            else:
+                summary = "ИИ не смог сформировать четкий вердикт по сигналу."
             error_response = {
-                "executive_summary": "ИИ не смог сформировать четкий вердикт по сигналу.",
+                "executive_summary": summary,
                 "signal": {"action": "WAIT"},
                 "wait_metadata": {
                     "trigger_condition": "N/A",
