@@ -1,0 +1,21 @@
+В telegram_service.py найти место где регистрируются 
+команды бота (set_my_commands или BotCommand).
+
+Добавить две новые команды в список:
+    BotCommand("setrange", "📐 Задать диапазон вручную"),
+    BotCommand("autorange", "🔄 Переключить в авто режим")
+
+И добавить обработчики команд:
+
+    @bot.message_handler(commands=['setrange'])
+    def handle_setrange(message):
+        # вызвать ту же логику что и кнопка set_range
+        self._handle_set_range_cmd(message)
+
+    @bot.message_handler(commands=['autorange'])  
+    def handle_autorange(message):
+        # вызвать ту же логику что и кнопка auto_range
+        self._handle_auto_range_cmd(message)
+
+Таким образом команды появятся в командном меню 
+(кнопка "Меню" в TG) без необходимости нажимать /start.

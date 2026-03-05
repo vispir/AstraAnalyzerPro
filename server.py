@@ -378,7 +378,7 @@ def price_monitor_loop():
             # 2. Правила 1R → BE и 1R+5% → SL на 1R (по текущей цене M1)
             # risk_amount всегда от original_stop_loss, чтобы не уходить в 0 после переноса SL в BE
             risk_amount = abs(entry_price - original_stop_loss)
-            be_threshold = max(entry_price * 0.0005, 0.1 * risk_amount) if risk_amount > 0 else entry_price * 0.0005
+            be_threshold = max(entry_price * 0.0005, 0.15 * risk_amount) if risk_amount > 0 else entry_price * 0.0005
             sl_is_be = abs(stop_loss - entry_price) <= be_threshold
             at_1r = False
             if risk_amount > 0:

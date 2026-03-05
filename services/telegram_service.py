@@ -46,6 +46,8 @@ class TelegramService:
         
         # Регистрация всех обработчиков команд
         self._register_handlers()
+        # Команды в меню (кнопка «Меню» в TG)
+        self._set_bot_commands()
         
         logger.info("✅ Telegram Bot инициализирован")
     
@@ -75,6 +77,14 @@ class TelegramService:
         def handle_help(message):
             self._cmd_help(message)
         
+        @self.bot.message_handler(commands=['setrange'])
+        def handle_setrange(message):
+            self._handle_set_range_cmd(message)
+        
+        @self.bot.message_handler(commands=['autorange'])
+        def handle_autorange(message):
+            self._handle_auto_range_cmd(message)
+        
         # Обработка callback кнопок (inline)
         @self.bot.callback_query_handler(func=lambda call: True)
         def handle_callback(call):
@@ -84,6 +94,24 @@ class TelegramService:
         @self.bot.message_handler(func=lambda message: True)
         def handle_text(message):
             self._handle_text_message(message)
+
+    def _set_bot_commands(self):
+        """Регистрация команд в меню бота (кнопка «Меню» в Telegram)."""
+        if not self.bot:
+            return
+        try:
+            from telebot.types import BotCommand
+            self.bot.set_my_commands([
+                BotCommand("start", "🚀 Запустить терминал Astra"),
+                BotCommand("price", "💰 Актуальный курс Gold (OANDA)"),
+                BotCommand("trend", "📈 Технический SMC анализ М15"),
+                BotCommand("status", "🛡️ Проверить статус системы"),
+                BotCommand("help", "❓ Справка по командам"),
+                BotCommand("setrange", "📐 Задать диапазон вручную"),
+                BotCommand("autorange", "🔄 Переключить в авто режим"),
+            ])
+        except Exception as e:
+            logger.warning(f"⚠️ set_my_commands: {e}")
     
     # ==================== КОМАНДЫ ====================
     
@@ -404,6 +432,45 @@ class TelegramService:
             return user is not None
         except Exception:
             return False
+
+    def _handle_set_range_cmd(self, message):
+        """Команда /setrange — та же логика, что кнопка «Задать диапазон»."""
+        chat_id = message.chat.id
+        if not self._is_authorized_user(chat_id):
+            self.bot.send_message(
+                chat_id,
+                "⚠️ Сначала авторизуйтесь на сайте Astra Analyzer Pro, затем нажмите /start в боте.",
+                parse_mode='HTML'
+            )
+            return
+        self._pending_range_chat_ids[chat_id] = True
+        self.bot.send_message(
+            chat_id,
+            "Введите диапазон в формате: <b>HIGH LOW</b>\n\nНапример: <code>5192 5175</code>",
+            parse_mode='HTML'
+        )
+
+    def _handle_auto_range_cmd(self, message):
+        """Команда /autorange — та же логика, что кнопка «Авто режим»."""
+        chat_id = message.chat.id
+        if not self._is_authorized_user(chat_id):
+            self.bot.send_message(
+                chat_id,
+                "⚠️ Сначала авторизуйтесь на сайте Astra Analyzer Pro, затем нажмите /start в боте.",
+                parse_mode='HTML'
+            )
+            return
+        try:
+            from services.db_service import db_service
+            db_service.deactivate_manual_ranges(symbol='XAUUSD')
+            self.bot.send_message(
+                chat_id,
+                "✅ Ручной диапазон деактивирован.\nСистема переходит в авто режим.",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.error(f"❌ deactivate_manual_ranges: {e}")
+            self.bot.send_message(chat_id, "❌ Ошибка при переключении в авто режим.", parse_mode='HTML')
 
     def _handle_set_range(self, call):
         """Кнопка «Задать диапазон» — только для авторизованных."""
