@@ -41,6 +41,8 @@ class TelegramService:
             
         # Инициализация бота
         self.bot = telebot.TeleBot(self.bot_token, threaded=False)
+        # Ожидание ввода диапазона (chat_id -> True)
+        self._pending_range_chat_ids = {}
         
         # Регистрация всех обработчиков команд
         self._register_handlers()
@@ -324,6 +326,10 @@ class TelegramService:
             elif call.data == "help":
                 logger.debug("❓ Handling help callback")
                 self._cmd_help(call.message)
+            elif call.data == "set_range":
+                self._handle_set_range(call)
+            elif call.data == "auto_range":
+                self._handle_auto_range(call)
             elif call.data == "approve_login":
                 self._handle_approve_login(call)
             elif call.data == "deny_login":
@@ -389,11 +395,112 @@ class TelegramService:
             # Опционально: можно добавить деактивацию сессии или уведомление админа
         except Exception as e:
             logger.error(f"❌ Ошибка обработки deny_login: {e}")
+
+    def _is_authorized_user(self, chat_id: int) -> bool:
+        """Проверка: пользователь авторизован в боте (есть в БД)."""
+        try:
+            from services.db_service import db_service
+            user = db_service.get_user_by_id(chat_id)
+            return user is not None
+        except Exception:
+            return False
+
+    def _handle_set_range(self, call):
+        """Кнопка «Задать диапазон» — только для авторизованных."""
+        chat_id = call.message.chat.id
+        if not self._is_authorized_user(chat_id):
+            self.bot.send_message(
+                chat_id,
+                "⚠️ Сначала авторизуйтесь на сайте Astra Analyzer Pro, затем нажмите /start в боте.",
+                parse_mode='HTML'
+            )
+            return
+        self._pending_range_chat_ids[chat_id] = True
+        self.bot.send_message(
+            chat_id,
+            "Введите диапазон в формате: <b>HIGH LOW</b>\n\nНапример: <code>5192 5175</code>",
+            parse_mode='HTML'
+        )
+
+    def _handle_auto_range(self, call):
+        """Кнопка «Авто режим» — деактивировать ручной диапазон."""
+        chat_id = call.message.chat.id
+        if not self._is_authorized_user(chat_id):
+            self.bot.send_message(
+                chat_id,
+                "⚠️ Сначала авторизуйтесь на сайте Astra Analyzer Pro, затем нажмите /start в боте.",
+                parse_mode='HTML'
+            )
+            return
+        try:
+            from services.db_service import db_service
+            db_service.deactivate_manual_ranges(symbol='XAUUSD')
+            self.bot.send_message(
+                chat_id,
+                "✅ Ручной диапазон деактивирован.\nСистема переходит в авто режим.",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.error(f"❌ deactivate_manual_ranges: {e}")
+            self.bot.send_message(chat_id, "❌ Ошибка при переключении в авто режим.", parse_mode='HTML')
+
+    def _handle_range_input(self, message, text: str):
+        """Парсинг HIGH LOW и сохранение ручного диапазона."""
+        chat_id = message.chat.id
+        parts = text.replace(",", ".").split()
+        if len(parts) < 2:
+            self.bot.send_message(
+                chat_id,
+                "❌ Введите два числа: HIGH и LOW через пробел.\nНапример: 5192 5175",
+                parse_mode='HTML'
+            )
+            self._pending_range_chat_ids[chat_id] = True
+            return
+        try:
+            high = float(parts[0])
+            low = float(parts[1])
+        except ValueError:
+            self.bot.send_message(chat_id, "❌ Оба значения должны быть числами.", parse_mode='HTML')
+            self._pending_range_chat_ids[chat_id] = True
+            return
+        if high <= 0 or low <= 0:
+            self.bot.send_message(chat_id, "❌ HIGH и LOW должны быть больше 0.", parse_mode='HTML')
+            self._pending_range_chat_ids[chat_id] = True
+            return
+        if high <= low:
+            self.bot.send_message(chat_id, "❌ HIGH должен быть больше LOW.", parse_mode='HTML')
+            self._pending_range_chat_ids[chat_id] = True
+            return
+        try:
+            from services.db_service import db_service
+            saved = db_service.save_manual_range(
+                symbol='XAUUSD',
+                timeframe='M15',
+                range_high=high,
+                range_low=low,
+            )
+            if saved:
+                self.bot.send_message(
+                    chat_id,
+                    f"✅ Диапазон задан: [{low:.2f} - {high:.2f}]\nСистема будет торговать по нему.",
+                    parse_mode='HTML'
+                )
+            else:
+                self.bot.send_message(chat_id, "❌ Не удалось сохранить диапазон (проверьте БД).", parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"❌ save_manual_range: {e}")
+            self.bot.send_message(chat_id, "❌ Ошибка сохранения диапазона.", parse_mode='HTML')
     
     def _handle_text_message(self, message):
-        """Обработка текстовых сообщений (для кнопок внизу)"""
+        """Обработка текстовых сообщений (для кнопок внизу и ввод диапазона)"""
         text = message.text
-        
+        chat_id = message.chat.id
+
+        # Ожидание ввода диапазона HIGH LOW (только для авторизованных)
+        if self._pending_range_chat_ids.pop(chat_id, None):
+            self._handle_range_input(message, text)
+            return
+
         if text == "📊 Курс Gold":
             self._cmd_price(message)
         elif text == "📈 Тренд M15":
@@ -403,12 +510,11 @@ class TelegramService:
         elif text == "🔔 Последний сигнал":
             self._cmd_status(message)
         else:
-            # Неизвестная команда
             msg = (
                 "❓ Неизвестная команда.\n"
                 "Используйте /help для списка команд."
             )
-            self.bot.send_message(message.chat.id, msg)
+            self.bot.send_message(chat_id, msg)
     
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
     
@@ -420,6 +526,8 @@ class TelegramService:
         btn_trend = types.InlineKeyboardButton("📈 Анализ", callback_data="trend")
         btn_status = types.InlineKeyboardButton("🛡️ Статус", callback_data="status")
         btn_help = types.InlineKeyboardButton("❓ Помощь", callback_data="help")
+        btn_set_range = types.InlineKeyboardButton("📐 Задать диапазон", callback_data="set_range")
+        btn_auto_range = types.InlineKeyboardButton("🔄 Авто режим", callback_data="auto_range")
         
         # Кнопка открытия терминала
         frontend_url = os.getenv("FRONTEND_URL", "https://astra-analyzer-pro.vercel.app/")
@@ -428,6 +536,8 @@ class TelegramService:
         markup.add(btn_terminal)
         markup.add(btn_price, btn_trend)
         markup.add(btn_status, btn_help)
+        markup.add(btn_set_range)   # отдельная строка
+        markup.add(btn_auto_range)  # ниже в том же инлайн-меню
         
         return markup
     

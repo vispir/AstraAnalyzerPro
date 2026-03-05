@@ -306,6 +306,7 @@ def price_monitor_loop():
 
             entry_price = _to_float(trade.get("entry_price"))
             stop_loss = _to_float(trade.get("stop_loss"))
+            original_stop_loss = stop_loss  # для расчёта risk_amount не меняем после BE/1R
             take_profit = _to_float(trade.get("take_profit"))
             signal_id = trade.get("id")
 
@@ -374,8 +375,9 @@ def price_monitor_loop():
                     telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
 
             # 2. Правила 1R → BE и 1R+5% → SL на 1R (по текущей цене M1)
-            risk_amount = abs(entry_price - stop_loss)
-            be_threshold = entry_price * 0.0005  # ~0.05% от цены
+            # risk_amount всегда от original_stop_loss, чтобы не уходить в 0 после переноса SL в BE
+            risk_amount = abs(entry_price - original_stop_loss)
+            be_threshold = max(entry_price * 0.0005, 0.1 * risk_amount) if risk_amount > 0 else entry_price * 0.0005
             sl_is_be = abs(stop_loss - entry_price) <= be_threshold
             at_1r = False
             if risk_amount > 0:
@@ -384,7 +386,12 @@ def price_monitor_loop():
                 else:
                     at_1r = current_price <= entry_price - risk_amount
             if at_1r and not sl_is_be:
-                new_sl = entry_price
+                # BE буфер = 0.1 × risk защищает от охоты за стопами на уровне entry
+                be_buffer = 0.1 * risk_amount
+                if signal_type == "BUY":
+                    new_sl = entry_price - be_buffer
+                else:  # SELL
+                    new_sl = entry_price + be_buffer
                 logger.info(
                     f"🔒 Price Monitor: достигнут 1R в плюс. Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
                 )
@@ -394,7 +401,7 @@ def price_monitor_loop():
                     msg_be = (
                         f"🔒 <b>ASTRA Monitor:</b> SL переведён в BE по правилу 1R.\n\n"
                         f"id={signal_id} | {signal_type}\n"
-                        f"SL: {stop_loss:.2f} → {new_sl:.2f}\n"
+                        f"SL: {stop_loss:.2f} → {new_sl:.2f} (BE + буфер {be_buffer:.2f})\n"
                         f"TP: {take_profit:.2f}"
                     )
                     telegram_service.broadcast_deals_only(users_be, msg_be)

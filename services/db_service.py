@@ -835,6 +835,126 @@ class DBService:
             logger.error(f"❌ save_range: ошибка создания диапазона: {e}")
             return None
 
+    def has_active_manual_range(self, symbol: str = 'XAUUSD') -> bool:
+        """True если есть активный диапазон с is_manual=True для символа."""
+        if not self.url:
+            return False
+        target_url = (
+            f"{self.url}/rest/v1/local_ranges"
+            f"?symbol=eq.{symbol}&is_active=eq.true&is_manual=eq.true"
+            f"&select=id&limit=1"
+        )
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            rows = response.json()
+            return bool(rows)
+        except Exception as e:
+            logger.warning(f"⚠️ has_active_manual_range error: {e}")
+            return False
+
+    def save_manual_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        range_high: float,
+        range_low: float,
+    ) -> Optional[dict]:
+        """
+        Деактивирует все активные диапазоны (replaced_by_manual), создаёт новый
+        с is_manual=True, is_active=True. Возвращает созданный диапазон или None.
+        """
+        if not self.url:
+            logger.warning("⚠️ save_manual_range: SUPABASE_URL не настроен")
+            return None
+        deactivate_url = (
+            f"{self.url}/rest/v1/local_ranges"
+            f"?symbol=eq.{symbol}&timeframe=eq.{timeframe}&is_active=eq.true"
+        )
+        deactivate_payload = {
+            "is_active": False,
+            "death_reason": "replaced_by_manual",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            requests.patch(
+                deactivate_url,
+                json=deactivate_payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ save_manual_range: ошибка деактивации: {e}")
+        range_size = (range_high - range_low) if range_high is not None and range_low is not None else None
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "range_high": range_high,
+            "range_low": range_low,
+            "range_size": range_size,
+            "is_active": True,
+            "is_manual": True,
+            "candles_inside": 0,
+        }
+        try:
+            target_url = f"{self.url}/rest/v1/local_ranges"
+            headers = {
+                "apikey": self.key,
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            }
+            response = requests.post(target_url, json=payload, headers=headers)
+            response.raise_for_status()
+            rows = response.json()
+            new_range = rows[0] if isinstance(rows, list) and rows else rows
+            logger.info(
+                f"📐 Ручной диапазон сохранён: {symbol} {timeframe} [{range_low} - {range_high}]"
+            )
+            return new_range
+        except Exception as e:
+            logger.error(f"❌ save_manual_range: {e}")
+            return None
+
+    def deactivate_manual_ranges(self, symbol: str = 'XAUUSD') -> int:
+        """
+        Деактивирует все активные диапазоны с is_manual=True для символа.
+        death_reason='manual_deactivated'. Записи не удаляются.
+        """
+        if not self.url:
+            return 0
+        target_url = (
+            f"{self.url}/rest/v1/local_ranges"
+            f"?symbol=eq.{symbol}&is_manual=eq.true&is_active=eq.true"
+        )
+        payload = {
+            "is_active": False,
+            "death_reason": "manual_deactivated",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            response = requests.patch(
+                target_url,
+                json=payload,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"📐 Ручные диапазоны деактивированы для {symbol}")
+            return 1
+        except Exception as e:
+            logger.error(f"❌ deactivate_manual_ranges: {e}")
+            return 0
+
     def update_range_touch(self, range_id: int, new_candles_inside: Optional[int] = None):
         """
         Обновляет last_touch_at для диапазона.

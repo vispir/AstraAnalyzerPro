@@ -1300,8 +1300,11 @@ def format_debug_report(status_data):
         msg += f"└ Low: ${status_data['global_low']:.2f}\n\n"
     
     # Локальный диапазон из БД — всегда в отчёте (живёт до 24h / смены диапазона)
-    msg += "<b>📐 Локальный диапазон (БД):</b>\n"
     ar = status_data.get('active_range')
+    if ar and ar.get('is_manual'):
+        msg += "<b>📐 Локальный диапазон (ручной ввод трейдера):</b>\n"
+    else:
+        msg += "<b>📐 Локальный диапазон (БД):</b>\n"
     if ar:
         rh = ar.get('range_high')
         rl = ar.get('range_low')
@@ -2015,6 +2018,14 @@ def run_analysis_cycle():
     except Exception as e:
         logger.warning(f"⚠️ get_active_range error: {e}")
 
+    manual_range_active = False
+    try:
+        manual_range_active = db_service.has_active_manual_range(symbol=RANGE_SYMBOL)
+    except Exception as e:
+        logger.warning(f"⚠️ has_active_manual_range error: {e}")
+    if manual_range_active:
+        logger.info("📐 Ручной диапазон активен — автодетектор пропускается")
+
     if active_range:
         range_width = safe_float(active_range.get('range_size'), 0) or 0
         rh = safe_float(active_range.get('range_high'), 0)
@@ -2022,47 +2033,49 @@ def run_analysis_cycle():
         if range_width <= 0 and rh and rl:
             range_width = rh - rl
         rid = active_range.get('id')
+        is_manual_range = bool(active_range.get('is_manual'))
 
-        # (а) Цена вышла из диапазона: деактивируем, если цена за границей более чем на 1 ширину
-        #     (чтобы в отчёте не показывать «есть диапазон», когда цена уже явно вне его)
-        if range_width > 0:
-            if current_price < rl - range_width or current_price > rh + range_width:
-                db_service.deactivate_range(rid, 'price_too_far')
-                active_range = None
-                status_data['local_range_no_reason'] = 'price_too_far'
-                logger.info(
-                    "📐 Диапазон деактивирован: цена вне диапазона (ниже/выше более чем на 1 ширину)"
-                )
-
-        # (б) Прошло более 24 часов с last_touch_at
-        if active_range:
-            last_touch_raw = active_range.get('last_touch_at') or active_range.get('created_at')
-            if last_touch_raw:
-                try:
-                    last_touch = datetime.fromisoformat(str(last_touch_raw).replace('Z', '+00:00'))
-                    if last_touch.tzinfo is None:
-                        last_touch = last_touch.replace(tzinfo=timezone.utc)
-                    if (datetime.now(timezone.utc) - last_touch).total_seconds() > 24 * 3600:
-                        db_service.deactivate_range(rid, 'expired_24h')
-                        active_range = None
-                        status_data['local_range_no_reason'] = 'expired_24h'
-                        logger.info("📐 Диапазон деактивирован: истёк 24h (expired_24h)")
-                except Exception:
-                    pass
-
-        # (в) Новый диапазон из детектора не перекрывается со старым > 30%
-        if active_range and range_width > 0:
-            new_range = analysis.get('local_range') or {}
-            new_high = new_range.get('local_range_high')
-            new_low = new_range.get('local_range_low')
-            if new_high is not None and new_low is not None:
-                overlap = max(0, min(new_high, rh) - max(new_low, rl))
-                overlap_pct = overlap / range_width
-                if overlap_pct < 0.30:
-                    db_service.deactivate_range(rid, 'new_range_formed')
+        # Ручной диапазон не деактивируем по (а)(б)(в) — только через кнопку «Авто режим» или при определённых статусах
+        if not is_manual_range:
+            # (а) Цена вышла из диапазона: деактивируем, если цена за границей более чем на 1 ширину
+            if range_width > 0:
+                if current_price < rl - range_width or current_price > rh + range_width:
+                    db_service.deactivate_range(rid, 'price_too_far')
                     active_range = None
-                    status_data['local_range_no_reason'] = 'new_range_formed'
-                    logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
+                    status_data['local_range_no_reason'] = 'price_too_far'
+                    logger.info(
+                        "📐 Диапазон деактивирован: цена вне диапазона (ниже/выше более чем на 1 ширину)"
+                    )
+
+            # (б) Прошло более 24 часов с last_touch_at
+            if active_range:
+                last_touch_raw = active_range.get('last_touch_at') or active_range.get('created_at')
+                if last_touch_raw:
+                    try:
+                        last_touch = datetime.fromisoformat(str(last_touch_raw).replace('Z', '+00:00'))
+                        if last_touch.tzinfo is None:
+                            last_touch = last_touch.replace(tzinfo=timezone.utc)
+                        if (datetime.now(timezone.utc) - last_touch).total_seconds() > 24 * 3600:
+                            db_service.deactivate_range(rid, 'expired_24h')
+                            active_range = None
+                            status_data['local_range_no_reason'] = 'expired_24h'
+                            logger.info("📐 Диапазон деактивирован: истёк 24h (expired_24h)")
+                    except Exception:
+                        pass
+
+            # (в) Новый диапазон из детектора не перекрывается со старым > 30%
+            if active_range and range_width > 0:
+                new_range = analysis.get('local_range') or {}
+                new_high = new_range.get('local_range_high')
+                new_low = new_range.get('local_range_low')
+                if new_high is not None and new_low is not None:
+                    overlap = max(0, min(new_high, rh) - max(new_low, rl))
+                    overlap_pct = overlap / range_width
+                    if overlap_pct < 0.30:
+                        db_service.deactivate_range(rid, 'new_range_formed')
+                        active_range = None
+                        status_data['local_range_no_reason'] = 'new_range_formed'
+                        logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
     skip_range_creation_this_cycle = False  # Проблема 4: после подтверждённого пробоя один цикл не создаём новый диапазон
     if not active_range:
@@ -2071,6 +2084,10 @@ def run_analysis_cycle():
             _breakout_confirmed_previous_cycle = False
             skip_range_creation_this_cycle = True
             status_data['is_range_breakout_confirmed'] = True
+            try:
+                db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+            except Exception:
+                pass
             logger.info("✅ Пробой активного диапазона подтверждён — старые диапазоны игнорируются")
         else:
             # Воскрешение старых диапазонов: только если две последние закрытые свечи строго внутри [range_low, range_high] (без буфера ATR)
@@ -2298,6 +2315,10 @@ def run_analysis_cycle():
                         f"Range Rejection: цена слишком далеко от range_low "
                         f"({current_price:.2f} <= {range_low - 1.5 * atr_m15:.2f})"
                     )
+                    try:
+                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                    except Exception:
+                        pass
                     send_debug_notification(status_data)
                     return
                 body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
@@ -2320,6 +2341,10 @@ def run_analysis_cycle():
                         f"Range Rejection: цена слишком далеко от range_high "
                         f"({current_price:.2f} >= {range_high + 1.5 * atr_m15:.2f})"
                     )
+                    try:
+                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                    except Exception:
+                        pass
                     send_debug_notification(status_data)
                     return
                 body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
@@ -2369,6 +2394,10 @@ def run_analysis_cycle():
                             f"Range Breakout: подтверждение слишком далеко от уровня "
                             f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
                         )
+                        try:
+                            db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                        except Exception:
+                            pass
                         logger.warning(f"⚠️ {status_data['reason']}")
                         send_debug_notification(status_data)
                         return
@@ -2423,6 +2452,10 @@ def run_analysis_cycle():
 
                 status_data['is_range_breakout_confirmed'] = True
                 status_data['breakout_direction'] = 'BUY' if breakout_up else 'SELL'
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
 
                 # Wick-профиль последних 2–3 свечей пробоя для LLM (длины теней и тела)
                 try:
@@ -2498,6 +2531,10 @@ def run_analysis_cycle():
                         f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
                     )
+                    try:
+                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                    except Exception:
+                        pass
                     send_debug_notification(status_data)
                     return
 
@@ -2908,6 +2945,10 @@ def run_analysis_cycle():
                     "SELL заблокирован: H4 тренд UPTREND. "
                     "Торгуем только по направлению старшего тренда."
                 )
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 # В следующем цикле, если цена вернётся выше нижней границы диапазона,
                 # рассматриваем Range Rejection BUY от поддержки при H4 UPTREND.
                 level = safe_float(status_data.get('local_range_low') or 0.0)
@@ -2925,6 +2966,10 @@ def run_analysis_cycle():
                     "BUY заблокирован: H4 тренд DOWNTREND. "
                     "Торгуем только по направлению старшего тренда."
                 )
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 # В следующем цикле, если цена вернётся ниже верхней границы диапазона,
                 # рассматриваем Range Rejection SELL от сопротивления при H4 DOWNTREND.
                 level = safe_float(status_data.get('local_range_high') or 0.0)
