@@ -359,9 +359,10 @@ def price_monitor_loop():
 
             # 1. Проверяем достижение цены входа (активация сделки)
             crossed_entry = False
-            if signal_type == "BUY" and current_price >= entry_price > 0:
+            ENTRY_BUFFER = 0.3  # буфер 0.3 пункта для погрешности цены
+            if signal_type == "BUY" and entry_price > 0 and current_price <= entry_price + ENTRY_BUFFER:
                 crossed_entry = True
-            elif signal_type == "SELL" and current_price <= entry_price > 0:
+            elif signal_type == "SELL" and entry_price > 0 and current_price >= entry_price - ENTRY_BUFFER:
                 crossed_entry = True
             if crossed_entry and not entry_notified:
                 db_service.mark_entry_notified(signal_id)
