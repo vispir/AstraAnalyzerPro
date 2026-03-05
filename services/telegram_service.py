@@ -358,6 +358,8 @@ class TelegramService:
                 self._handle_set_range(call)
             elif call.data == "auto_range":
                 self._handle_auto_range(call)
+            elif call.data == "cancel_range_input":
+                self._handle_cancel_range_input(call)
             elif call.data == "approve_login":
                 self._handle_approve_login(call)
             elif call.data == "deny_login":
@@ -447,6 +449,23 @@ class TelegramService:
         self.bot.send_message(
             chat_id,
             "Введите диапазон в формате: <b>HIGH LOW</b>\n\nНапример: <code>5192 5175</code>",
+            parse_mode='HTML',
+            reply_markup=self._get_cancel_range_markup()
+        )
+
+    def _get_cancel_range_markup(self):
+        """Кнопка «Отмена» под сообщением «Введите диапазон»."""
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_range_input"))
+        return markup
+
+    def _handle_cancel_range_input(self, call):
+        """Отмена ожидания ввода диапазона — система снова ищет диапазон сама."""
+        chat_id = call.message.chat.id
+        self._pending_range_chat_ids.pop(chat_id, None)
+        self.bot.send_message(
+            chat_id,
+            "✅ Ожидание ввода отменено",
             parse_mode='HTML'
         )
 
@@ -486,7 +505,8 @@ class TelegramService:
         self.bot.send_message(
             chat_id,
             "Введите диапазон в формате: <b>HIGH LOW</b>\n\nНапример: <code>5192 5175</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=self._get_cancel_range_markup()
         )
 
     def _handle_auto_range(self, call):
