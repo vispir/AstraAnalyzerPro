@@ -275,6 +275,9 @@ def initialize_services():
     return services_status
 
 
+_original_sl_cache: dict = {}  # {signal_id: original_stop_loss} — хранит исходный SL между итерациями мониторинга
+
+
 def price_monitor_loop():
     """
     Фоновый поток Price Monitor: раз в 5 секунд проверяет активную сделку
@@ -296,6 +299,8 @@ def price_monitor_loop():
             # Получаем последнюю АКТИВНУЮ торговую сделку (BUY/SELL) для XAU_USD
             trade = db_service.get_active_trade(symbol="XAU_USD")
             if not trade:
+                # Сделки нет — очищаем кэш чтобы не накапливать старые записи
+                _original_sl_cache.clear()
                 time.sleep(5)
                 continue
 
@@ -306,13 +311,18 @@ def price_monitor_loop():
 
             entry_price = _to_float(trade.get("entry_price"))
             stop_loss = _to_float(trade.get("stop_loss"))
-            original_stop_loss = stop_loss  # для расчёта risk_amount не меняем после BE/1R
             take_profit = _to_float(trade.get("take_profit"))
             signal_id = trade.get("id")
 
             if not signal_id or entry_price == 0 or (stop_loss == 0 and take_profit == 0):
                 time.sleep(5)
                 continue
+
+            # original_stop_loss — ИСХОДНЫЙ SL сделки при создании, не меняется после переноса в BE/1R.
+            # Кэшируем на уровне модуля по signal_id: первый раз берём из БД, далее используем кэш.
+            if signal_id not in _original_sl_cache:
+                _original_sl_cache[signal_id] = stop_loss
+            original_stop_loss = _original_sl_cache[signal_id]
 
             # Получаем текущую цену по S5 из OANDA (нужна для логики и для closed_price при закрытии)
             # Используем секундный таймфрейм S5 для более точного мониторинга
@@ -450,10 +460,6 @@ def price_monitor_loop():
                 else:
                     max_trailing_level = 0
                     rr_ratio = 0.0
-                if max_trailing_level >= 2:
-                    logger.info(
-                        f"📊 Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R"
-                    )
                 R_MARGIN = 0.05
                 if max_trailing_level >= 2:
                     for n in range(max_trailing_level, 1, -1):
@@ -470,6 +476,9 @@ def price_monitor_loop():
                         if at_level and not sl_already_at_level and abs(stop_loss - sl_level) > be_threshold:
                             db_service.update_signal_sl_and_status(signal_id, sl_level, status=None)
                             n_minus_r = f"{n - 1}R"
+                            logger.info(
+                                f"📊 Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R"
+                            )
                             logger.info(
                                 f"🔒 Price Monitor: цена прошла {n}R+5%. Переносим SL на уровень {n_minus_r}: "
                                 f"{stop_loss:.2f} → {sl_level:.2f}."

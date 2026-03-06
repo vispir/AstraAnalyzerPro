@@ -1579,9 +1579,15 @@ def run_analysis_cycle():
                 f"type={last_trade.get('signal_type')}, entry={last_trade.get('entry_price')}). "
                 f"Hunter is disabled until this trade is closed."
             )
+            _active_range_for_report = None
+            try:
+                _active_range_for_report = db_service.get_active_range(symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
+            except Exception:
+                pass
             send_debug_notification({
                 'status': 'active_trade',
-                'reason': 'Обнаружена активная сделка BUY/SELL. Охотник пропускает поиск нового входа.'
+                'reason': 'Обнаружена активная сделка BUY/SELL. Охотник пропускает поиск нового входа.',
+                'active_range': _active_range_for_report,
             })
             return
     
@@ -3000,12 +3006,12 @@ def run_analysis_cycle():
         # Блокируем если Swing тренд против направления сигнала
         # Исключение: Swing CHoCH подтверждён (реальный разворот)
         if not htf_filter_blocked:
-            swing_trend = (status_data.get('trend') or 'NEUTRAL').upper()
-            smc_summary = status_data.get('smc_summary') or {}
-            swing_choch_confirmed = (smc_summary.get('swing_choch_confirmed', 0) or 0) > 0
+            swing_trend_m15 = (status_data.get('trend') or 'NEUTRAL').upper()
+            smc_summary_sw = status_data.get('smc_summary') or {}
+            swing_choch_confirmed = (smc_summary_sw.get('swing_choch_confirmed', 0) or 0) > 0
             signal_direction = (status_data.get('breakout_direction') or status_data.get('rejection_direction') or '').strip().upper()
             if signal_direction in ('BUY', 'SELL'):
-                if signal_direction == 'BUY' and swing_trend == 'DOWNTREND':
+                if signal_direction == 'BUY' and swing_trend_m15 == 'DOWNTREND':
                     if not swing_choch_confirmed:
                         htf_filter_blocked = True
                         block_reason = (
@@ -3015,7 +3021,11 @@ def run_analysis_cycle():
                         logger.info(f"🚫 {block_reason}")
                         status_data['status'] = 'htf_filter_blocked'
                         status_data['reason'] = block_reason
-                elif signal_direction == 'SELL' and swing_trend == 'UPTREND':
+                        status_data['is_range_breakout_confirmed'] = False
+                        status_data['is_range_rejection_confirmed'] = False
+                        send_debug_notification(status_data)
+                        return
+                elif signal_direction == 'SELL' and swing_trend_m15 == 'UPTREND':
                     if not swing_choch_confirmed:
                         htf_filter_blocked = True
                         block_reason = (
@@ -3025,6 +3035,10 @@ def run_analysis_cycle():
                         logger.info(f"🚫 {block_reason}")
                         status_data['reason'] = block_reason
                         status_data['status'] = 'htf_filter_blocked'
+                        status_data['is_range_breakout_confirmed'] = False
+                        status_data['is_range_rejection_confirmed'] = False
+                        send_debug_notification(status_data)
+                        return
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
