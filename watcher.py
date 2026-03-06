@@ -1581,7 +1581,7 @@ def run_analysis_cycle():
             )
             _active_range_for_report = None
             try:
-                _active_range_for_report = db_service.get_active_range(symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
+                _active_range_for_report = db_service.get_active_range(symbol='XAUUSD', timeframe='M15')
             except Exception:
                 pass
             send_debug_notification({
