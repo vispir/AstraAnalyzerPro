@@ -2224,6 +2224,10 @@ def run_analysis_cycle():
                 status_data['rejection_level'] = range_low
                 status_data['htf_rejection_watch'] = True
                 is_near = True
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 logger.info(
                     f"↩️ HTF Range Rejection BUY: цена вернулась выше поддержки range_low={range_low:.3f} при H4 UPTREND "
                     f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
@@ -2236,6 +2240,10 @@ def run_analysis_cycle():
                 status_data['rejection_level'] = range_high
                 status_data['htf_rejection_watch'] = True
                 is_near = True
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 logger.info(
                     f"↩️ HTF Range Rejection SELL: цена вернулась ниже сопротивления range_high={range_high:.3f} при H4 DOWNTREND "
                     f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
@@ -2333,6 +2341,10 @@ def run_analysis_cycle():
                 status_data['rejection_direction'] = 'SELL'
                 status_data['rejection_level'] = range_low
                 is_near = True
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 logger.info(f"↩️ Range Rejection подтверждён: SELL от уровня {range_low}")
             elif rejection_buy:
                 if current_price >= range_high + 1.5 * atr_m15:
@@ -2359,6 +2371,10 @@ def run_analysis_cycle():
                 status_data['rejection_direction'] = 'BUY'
                 status_data['rejection_level'] = range_high
                 is_near = True
+                try:
+                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
+                except Exception:
+                    pass
                 logger.info(f"↩️ Range Rejection подтверждён: BUY от уровня {range_high}")
     
         if not skip_range_breakout:
@@ -2531,10 +2547,6 @@ def run_analysis_cycle():
                         f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
                     )
-                    try:
-                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                    except Exception:
-                        pass
                     send_debug_notification(status_data)
                     return
 
@@ -3457,6 +3469,12 @@ def run_analysis_cycle():
         status_data['confidence'] = verdict['confidence']
         if low_conf_override:
             status_data['original_action'] = original_action
+        # WAIT от LLM при любом из трёх режимов (Range Breakout / Range Rejection / HTF Rejection) → деактивировать ручной диапазон
+        if status_data.get('is_range_breakout_confirmed') or status_data.get('is_range_rejection_confirmed'):
+            try:
+                db_service.deactivate_manual_ranges(symbol='XAUUSD')
+            except Exception:
+                pass
         send_debug_notification(status_data)
 
 
