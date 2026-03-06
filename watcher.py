@@ -52,6 +52,8 @@ MANAGER_PROGRESS_PEAK = 0.70
 MANAGER_PROGRESS_PULLBACK = 0.70
 # Минимальный возраст сделки (мин), прежде чем спрашивать LLM: не реагировать на шум M5 сразу после входа
 MANAGER_MIN_TRADE_AGE_MINUTES = 10
+# Первые N минут после активации входа (entry_notified) — LLM менеджер не вызываем (защита от раннего закрытия)
+MANAGER_ENTRY_COOLDOWN_MINUTES = 30
 # Макс. время (мин) ожидания достижения цены входа; если не достигнута — сделка считается отменённой (менеджер скипает, охотник может искать новый вход)
 ENTRY_FILL_TIMEOUT_MINUTES = 30
 # Минимальный интервал (мин) между вызовами LLM по одной сделке — защита от спама по квоте API
@@ -2936,6 +2938,7 @@ def run_analysis_cycle():
             }
         except Exception as e:
             logger.warning(f"⚠️ HTF контекст {tf_name} не собран: {e}")
+    htf_filter_blocked = False
     if htf_context:
         logger.info(f"✓ HTF контекст для LLM: {list(htf_context.keys())}")
         # HTF фильтр для Range Breakout / Range Rejection:
@@ -2957,6 +2960,7 @@ def run_analysis_cycle():
                     "SELL заблокирован: H4 тренд UPTREND. "
                     "Торгуем только по направлению старшего тренда."
                 )
+                htf_filter_blocked = True
                 try:
                     db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
                 except Exception:
@@ -2978,6 +2982,7 @@ def run_analysis_cycle():
                     "BUY заблокирован: H4 тренд DOWNTREND. "
                     "Торгуем только по направлению старшего тренда."
                 )
+                htf_filter_blocked = True
                 try:
                     db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
                 except Exception:
@@ -2990,6 +2995,36 @@ def run_analysis_cycle():
                     'watch_direction': 'SELL',
                     'level': level,
                 }
+
+        # HTF фильтр для не-Range триггеров (и для Range, если ещё не заблокировано по H4)
+        # Блокируем если Swing тренд против направления сигнала
+        # Исключение: Swing CHoCH подтверждён (реальный разворот)
+        if not htf_filter_blocked:
+            swing_trend = (status_data.get('trend') or 'NEUTRAL').upper()
+            smc_summary = status_data.get('smc_summary') or {}
+            swing_choch_confirmed = (smc_summary.get('swing_choch_confirmed', 0) or 0) > 0
+            signal_direction = (status_data.get('breakout_direction') or status_data.get('rejection_direction') or '').strip().upper()
+            if signal_direction in ('BUY', 'SELL'):
+                if signal_direction == 'BUY' and swing_trend == 'DOWNTREND':
+                    if not swing_choch_confirmed:
+                        htf_filter_blocked = True
+                        block_reason = (
+                            "HTF фильтр: BUY против Swing DOWNTREND "
+                            "без подтверждённого CHoCH"
+                        )
+                        logger.info(f"🚫 {block_reason}")
+                        status_data['status'] = 'htf_filter_blocked'
+                        status_data['reason'] = block_reason
+                elif signal_direction == 'SELL' and swing_trend == 'UPTREND':
+                    if not swing_choch_confirmed:
+                        htf_filter_blocked = True
+                        block_reason = (
+                            "HTF фильтр: SELL против Swing UPTREND "
+                            "без подтверждённого CHoCH"
+                        )
+                        logger.info(f"🚫 {block_reason}")
+                        status_data['reason'] = block_reason
+                        status_data['status'] = 'htf_filter_blocked'
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
@@ -4178,7 +4213,6 @@ def run_trade_manager_cycle():
     trade_age_minutes = None
     try:
         if trade_created:
-            # Supabase: "2026-02-11 17:12:25.271836+00" или ISO с T
             ts_str = str(trade_created).strip().replace(' ', 'T').replace('Z', '+00:00')
             if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
                 ts_str = ts_str + ':00'
@@ -4192,6 +4226,27 @@ def run_trade_manager_cycle():
         logger.info(
             f"🤖 Manager: сделка id={trade_id} свежая ({trade_age_minutes:.0f} мин < {MANAGER_MIN_TRADE_AGE_MINUTES} мин), "
             "LLM не вызываем — даём сделке время развиться."
+        )
+        return
+
+    # Первые 30 мин после активации входа — LLM менеджер не вызываем (защита от раннего закрытия при консолидации)
+    entry_notified_at = trade.get('entry_notified_at') or trade_created or ''
+    elapsed_entry_minutes = None
+    try:
+        if entry_notified_at:
+            ts_str = str(entry_notified_at).strip().replace(' ', 'T').replace('Z', '+00:00')
+            if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
+                ts_str = ts_str + ':00'
+            entry_dt = datetime.fromisoformat(ts_str)
+            if entry_dt.tzinfo is None:
+                entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+            elapsed_entry_minutes = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 60.0
+    except Exception as e:
+        logger.debug(f"Manager: не удалось вычислить время с активации входа: {e}")
+    if elapsed_entry_minutes is not None and elapsed_entry_minutes < MANAGER_ENTRY_COOLDOWN_MINUTES:
+        logger.info(
+            f"⏳ Manager: таймаут {MANAGER_ENTRY_COOLDOWN_MINUTES} мин после входа, "
+            f"прошло {elapsed_entry_minutes:.1f} мин — LLM не вызывается."
         )
         return
 

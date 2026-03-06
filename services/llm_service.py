@@ -175,6 +175,8 @@ ATR_M15(14): {atr_m15}
 RULES:
 - For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
+- Range Breakout SELL: SL must be ABOVE invalidation level by at least 1-2 points: SL >= invalidation_sell + 1.0 (SL always beyond invalidation, not inside).
+- Range Breakout BUY: SL must be BELOW invalidation level by at least 1-2 points: SL <= invalidation_buy - 1.0.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
 - Entry: найди ЛОГИЧНУЮ точку входа рядом с CURRENT_PRICE:
   • ретест пробитой границы диапазона (range_high/low), или

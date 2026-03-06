@@ -713,9 +713,11 @@ class DBService:
         if not self.url or not signal_id:
             return False
         target_url = f"{self.url}/rest/v1/signals?id=eq.{signal_id}"
+        now_iso = datetime.now(timezone.utc).isoformat()
         payload = {
             "entry_notified": True,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": now_iso,
+            "entry_notified_at": now_iso,
         }
         try:
             response = requests.patch(
