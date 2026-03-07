@@ -1098,8 +1098,8 @@ class DBService:
     def get_stats(self) -> dict:
         """
         Статистика закрытых сделок за день/неделю/месяц в часовом поясе UTC+4.
-        Считает только closed_sl, closed_tp, closed_manager, closed_manual
-        с result_pnl IS NOT NULL.
+        Считает только BUY/SELL сигналы символа XAU_USD со статусами
+        closed_sl, closed_tp, closed_manager, closed_manual и result_pnl IS NOT NULL.
         BE-сделки (result_pnl = 0) идут в total, но не в wins/losses.
         """
         if not self.url:
@@ -1116,14 +1116,17 @@ class DBService:
         )
         month_start = now_utc4.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # Запрашиваем всё начиная с начала месяца
-        month_start_iso = month_start.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+        # Запрашиваем всё начиная с начала месяца (с запасом -1 день чтобы не обрезать по UTC)
+        fetch_from = (month_start - timedelta(days=1)).astimezone(timezone.utc)
+        fetch_from_iso = fetch_from.isoformat().replace('+00:00', 'Z')
 
         target_url = (
             f"{self.url}/rest/v1/signals"
-            f"?status=in.(closed_sl,closed_tp,closed_manager,closed_manual)"
+            f"?symbol=eq.XAU_USD"
+            f"&signal_type=in.(BUY,SELL)"
+            f"&status=in.(closed_sl,closed_tp,closed_manager,closed_manual)"
             f"&result_pnl=not.is.null"
-            f"&close_timestamp=gte.{month_start_iso}"
+            f"&close_timestamp=gte.{fetch_from_iso}"
             f"&select=result_pnl,close_timestamp"
             f"&order=close_timestamp.desc"
             f"&limit=500"
@@ -1135,9 +1138,21 @@ class DBService:
             )
             response.raise_for_status()
             rows = response.json() or []
+            logger.info(f"📊 get_stats: получено {len(rows)} записей от Supabase")
         except Exception as e:
             logger.error(f"❌ get_stats error: {e}")
             return {}
+
+        def _parse_ts(ts_raw) -> datetime:
+            """Парсит timestamp из Supabase с поддержкой +00 и +00:00 форматов."""
+            ts_str = str(ts_raw).strip().replace(' ', 'T').replace('Z', '+00:00')
+            # Supabase возвращает +00 (без двоеточия) — исправляем для Python < 3.11
+            if ts_str.endswith('+00') and not ts_str.endswith('+00:00'):
+                ts_str = ts_str + ':00'
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts
 
         def _compute(since_utc4):
             total = wins = losses = 0
@@ -1147,15 +1162,14 @@ class DBService:
                 if not ts_raw:
                     continue
                 try:
-                    ts = datetime.fromisoformat(str(ts_raw).replace('Z', '+00:00'))
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    if ts.astimezone(UTC4) < since_utc4:
-                        continue
+                    ts_utc4 = _parse_ts(ts_raw).astimezone(UTC4)
                 except Exception:
                     continue
-                pnl = safe_float(r.get('result_pnl'), None)
-                if pnl is None:
+                if ts_utc4 < since_utc4:
+                    continue
+                try:
+                    pnl = float(r['result_pnl'])
+                except (TypeError, ValueError, KeyError):
                     continue
                 total += 1
                 total_pnl += pnl
