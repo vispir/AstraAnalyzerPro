@@ -1095,5 +1095,97 @@ class DBService:
             logger.error(f"❌ reactivate_range error (id={range_id}): {e}")
             return False
 
+    def get_stats(self) -> dict:
+        """
+        Статистика закрытых сделок за день/неделю/месяц в часовом поясе UTC+4.
+        Считает только closed_sl, closed_tp, closed_manager, closed_manual
+        с result_pnl IS NOT NULL.
+        BE-сделки (result_pnl = 0) идут в total, но не в wins/losses.
+        """
+        if not self.url:
+            logger.warning("⚠️ get_stats: SUPABASE_URL не настроен")
+            return {}
+
+        UTC4 = timezone(timedelta(hours=4))
+        now_utc4 = datetime.now(UTC4)
+
+        # Границы периодов в UTC+4
+        day_start = now_utc4.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = (now_utc4 - timedelta(days=now_utc4.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        month_start = now_utc4.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # Запрашиваем всё начиная с начала месяца
+        month_start_iso = month_start.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+        target_url = (
+            f"{self.url}/rest/v1/signals"
+            f"?status=in.(closed_sl,closed_tp,closed_manager,closed_manual)"
+            f"&result_pnl=not.is.null"
+            f"&close_timestamp=gte.{month_start_iso}"
+            f"&select=result_pnl,close_timestamp"
+            f"&order=close_timestamp.desc"
+            f"&limit=500"
+        )
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+            )
+            response.raise_for_status()
+            rows = response.json() or []
+        except Exception as e:
+            logger.error(f"❌ get_stats error: {e}")
+            return {}
+
+        def _compute(since_utc4):
+            total = wins = losses = 0
+            wins_pnl = losses_pnl = total_pnl = 0.0
+            for r in rows:
+                ts_raw = r.get('close_timestamp')
+                if not ts_raw:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(str(ts_raw).replace('Z', '+00:00'))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if ts.astimezone(UTC4) < since_utc4:
+                        continue
+                except Exception:
+                    continue
+                pnl = safe_float(r.get('result_pnl'), None)
+                if pnl is None:
+                    continue
+                total += 1
+                total_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                    wins_pnl += pnl
+                elif pnl < 0:
+                    losses += 1
+                    losses_pnl += abs(pnl)
+            return {
+                'total': total,
+                'wins': wins,
+                'losses': losses,
+                'wins_pnl': wins_pnl,
+                'losses_pnl': losses_pnl,
+                'total_pnl': total_pnl,
+            }
+
+        months_ru = {
+            1: 'Январь', 2: 'Февраль', 3: 'Март', 4: 'Апрель',
+            5: 'Май', 6: 'Июнь', 7: 'Июль', 8: 'Август',
+            9: 'Сентябрь', 10: 'Октябрь', 11: 'Ноябрь', 12: 'Декабрь',
+        }
+
+        return {
+            'day': _compute(day_start),
+            'week': _compute(week_start),
+            'month': _compute(month_start),
+            'month_name': months_ru.get(now_utc4.month, str(now_utc4.month)),
+        }
+
 # Создаем экземпляр сервиса
 db_service = DBService()

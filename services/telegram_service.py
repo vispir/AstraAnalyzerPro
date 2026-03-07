@@ -77,6 +77,10 @@ class TelegramService:
         def handle_help(message):
             self._cmd_help(message)
         
+        @self.bot.message_handler(commands=['stats'])
+        def handle_stats(message):
+            self._cmd_stats(message)
+
         @self.bot.message_handler(commands=['setrange'])
         def handle_setrange(message):
             self._handle_set_range_cmd(message)
@@ -107,6 +111,7 @@ class TelegramService:
                 BotCommand("trend", "📈 Технический SMC анализ М15"),
                 BotCommand("status", "🛡️ Проверить статус системы"),
                 BotCommand("help", "❓ Справка по командам"),
+                BotCommand("stats", "📊 Статистика сделок"),
                 BotCommand("setrange", "📐 Задать диапазон вручную"),
                 BotCommand("autorange", "🔄 Переключить в авто режим"),
             ])
@@ -315,13 +320,64 @@ class TelegramService:
             "<code>/price</code> — Текущая цена золота\n"
             "<code>/trend</code> — Анализ тренда M15\n"
             "<code>/status</code> — Статус системы\n"
+            "<code>/stats</code> — Статистика сделок\n"
             "<code>/help</code> — Эта справка\n\n"
             "💡 <i>Вы также можете использовать кнопки в меню</i>"
         )
         self.bot.send_message(message.chat.id, help_text, parse_mode='HTML')
     
+    def _cmd_stats(self, message):
+        """Обработчик команды /stats — статистика сделок"""
+        try:
+            from services.db_service import db_service
+            stats = db_service.get_stats()
+            if not stats:
+                self.bot.send_message(
+                    message.chat.id,
+                    "❌ Не удалось получить статистику. Попробуйте позже.",
+                    parse_mode='HTML'
+                )
+                return
+
+            def fmt_period(p):
+                total_pnl = p['total_pnl']
+                if total_pnl > 0:
+                    color = '🟢'
+                    sign = '+'
+                elif total_pnl < 0:
+                    color = '🔴'
+                    sign = ''
+                else:
+                    color = '⚪'
+                    sign = ''
+                return (
+                    f"├ Сделок: {p['total']}\n"
+                    f"├ ✅ В плюс: {p['wins']} (+{p['wins_pnl']:.2f} пунктов)\n"
+                    f"├ ❌ В минус: {p['losses']} (-{p['losses_pnl']:.2f} пунктов)\n"
+                    f"└ 💰 Итого: {color} {sign}{total_pnl:.2f} пунктов"
+                )
+
+            msg = (
+                f"<b>📊 СТАТИСТИКА ASTRA</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"<b>📅 Сегодня:</b>\n"
+                f"{fmt_period(stats['day'])}\n\n"
+                f"<b>📅 Неделя (пн–вс):</b>\n"
+                f"{fmt_period(stats['week'])}\n\n"
+                f"<b>📅 Месяц ({stats['month_name']}):</b>\n"
+                f"{fmt_period(stats['month'])}"
+            )
+            self.bot.send_message(message.chat.id, msg, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"Ошибка в /stats: {e}", exc_info=True)
+            self.bot.send_message(
+                message.chat.id,
+                "❌ Ошибка получения статистики.",
+                parse_mode='HTML'
+            )
+
     # ==================== CALLBACK ОБРАБОТЧИКИ ====================
-    
+
     def _handle_callback_query(self, call):
         """Обработка нажатий на inline кнопки"""
         try:
@@ -358,6 +414,8 @@ class TelegramService:
                 self._handle_set_range(call)
             elif call.data == "auto_range":
                 self._handle_auto_range(call)
+            elif call.data == "stats":
+                self._cmd_stats(call.message)
             elif call.data == "cancel_range_input":
                 self._handle_cancel_range_input(call)
             elif call.data == "approve_login":
@@ -613,18 +671,20 @@ class TelegramService:
         btn_trend = types.InlineKeyboardButton("📈 Анализ", callback_data="trend")
         btn_status = types.InlineKeyboardButton("🛡️ Статус", callback_data="status")
         btn_help = types.InlineKeyboardButton("❓ Помощь", callback_data="help")
+        btn_stats = types.InlineKeyboardButton("📊 Статистика", callback_data="stats")
         btn_set_range = types.InlineKeyboardButton("📐 Задать диапазон", callback_data="set_range")
         btn_auto_range = types.InlineKeyboardButton("🔄 Авто режим", callback_data="auto_range")
-        
+
         # Кнопка открытия терминала
         frontend_url = os.getenv("FRONTEND_URL", "https://astra-analyzer-pro.vercel.app/")
         btn_terminal = types.InlineKeyboardButton("🌐 Открыть Терминал", url=frontend_url)
-        
+
         markup.add(btn_terminal)
         markup.add(btn_price, btn_trend)
         markup.add(btn_status, btn_help)
-        markup.add(btn_set_range)   # отдельная строка
-        markup.add(btn_auto_range)  # ниже в том же инлайн-меню
+        markup.add(btn_stats)        # отдельная строка
+        markup.add(btn_set_range)
+        markup.add(btn_auto_range)
         
         return markup
     
