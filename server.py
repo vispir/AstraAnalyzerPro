@@ -385,26 +385,32 @@ def price_monitor_loop():
                     )
                     telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
 
-            # 2. Правила 1R → BE и 1R+5% → SL на 1R (по текущей цене M1)
-            # risk_amount всегда от original_stop_loss, чтобы не уходить в 0 после переноса SL в BE
+            # --- ТРЕЙЛИНГ СТОП: 1) BE (всегда), 2) Trailing по R:R (max_trailing_level = floor(rr_ratio)-1, cap 5) ---
+            # risk от original_stop_loss (_original_sl_cache)
             risk_amount = abs(entry_price - original_stop_loss)
             be_threshold = max(entry_price * 0.0005, 0.15 * risk_amount) if risk_amount > 0 else entry_price * 0.0005
             sl_is_be = abs(stop_loss - entry_price) <= be_threshold
+
+            # 1) BE — срабатывает ВСЕГДА при ЛЮБОМ R:R: цена достигла 1R → переносим SL на entry (BE).
+            # Только если SL ещё не перенесён в профит (иначе не перезаписываем 1R/2R обратно в BE).
             at_1r = False
             if risk_amount > 0:
                 if signal_type == "BUY":
                     at_1r = current_price >= entry_price + risk_amount
                 else:
                     at_1r = current_price <= entry_price - risk_amount
-            if at_1r and not sl_is_be:
-                # BE буфер = 0.1 × risk защищает от охоты за стопами на уровне entry
+            sl_still_at_or_below_be = (
+                (signal_type == "BUY" and stop_loss <= entry_price + be_threshold) or
+                (signal_type == "SELL" and stop_loss >= entry_price - be_threshold)
+            )
+            if at_1r and not sl_is_be and sl_still_at_or_below_be:
                 be_buffer = 0.1 * risk_amount
                 if signal_type == "BUY":
                     new_sl = entry_price - be_buffer
-                else:  # SELL
+                else:
                     new_sl = entry_price + be_buffer
                 logger.info(
-                    f"🔒 Price Monitor: достигнут 1R в плюс. Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
+                    f"🔒 Price Monitor: достигнут 1R. Переводим SL в BE: {stop_loss:.2f} → {new_sl:.2f}."
                 )
                 db_service.update_signal_sl_and_status(signal_id, new_sl, status=None)
                 users_be = db_service.get_all_active_users()
@@ -419,26 +425,23 @@ def price_monitor_loop():
                 stop_loss = new_sl
                 sl_is_be = True
 
-            # 1R+5%: перенос SL на уровень 1R, если уже в BE
-            # sl_1r_level ТОЛЬКО от entry_price и original_stop_loss (не от текущего stop_loss после BE)
-            MANAGER_1R_LOCK_MARGIN = 0.05
-            if risk_amount > 0 and sl_is_be:
-                risk_1r = abs(entry_price - original_stop_loss)
+            # 2a) Блок 1R (at_1r_plus_margin): при цене 1R+5% переносим SL на 1R. Не меняется.
+            risk_1r = abs(entry_price - original_stop_loss) if risk_amount > 0 else 0.0
+            TRAILING_MARGIN = 0.05
+            if risk_amount > 0 and sl_is_be and risk_1r > 0:
                 if signal_type == "BUY":
                     sl_1r_level = entry_price + risk_1r
+                    at_1r_plus_margin = current_price >= entry_price + risk_1r * (1.0 + TRAILING_MARGIN)
+                    sl_already_at_1r = stop_loss >= sl_1r_level - be_threshold
                 else:
                     sl_1r_level = entry_price - risk_1r
-                at_1r_plus_margin = False
-                if signal_type == "BUY":
-                    at_1r_plus_margin = current_price >= entry_price + risk_1r * (1.0 + MANAGER_1R_LOCK_MARGIN)
-                else:
-                    at_1r_plus_margin = current_price <= entry_price - risk_1r * (1.0 + MANAGER_1R_LOCK_MARGIN)
-                if at_1r_plus_margin and abs(stop_loss - sl_1r_level) > be_threshold:
-                    logger.info(
-                        f"🔒 Price Monitor: цена прошла 1R+{MANAGER_1R_LOCK_MARGIN*100:.0f}%. "
-                        f"Переносим SL на уровень 1R: {stop_loss:.2f} → {sl_1r_level:.2f}."
-                    )
+                    at_1r_plus_margin = current_price <= entry_price - risk_1r * (1.0 + TRAILING_MARGIN)
+                    sl_already_at_1r = stop_loss <= sl_1r_level + be_threshold
+                if at_1r_plus_margin and not sl_already_at_1r and abs(stop_loss - sl_1r_level) > be_threshold:
                     db_service.update_signal_sl_and_status(signal_id, sl_1r_level, status=None)
+                    logger.info(
+                        f"🔒 Price Monitor: цена прошла 1R+5%. Переносим SL на 1R: {stop_loss:.2f} → {sl_1r_level:.2f}."
+                    )
                     users_lock = db_service.get_all_active_users()
                     if users_lock:
                         msg_lock = (
@@ -450,50 +453,49 @@ def price_monitor_loop():
                         telegram_service.broadcast_deals_only(users_lock, msg_lock)
                     stop_loss = sl_1r_level
 
-            # Трейлинг по R-уровням 2R..5R привязан к R:R сделки: max_trailing_level = floor(rr_ratio) - 1
-            # R:R < 3 → только 1R; 3–4 → до 2R; 4–5 → до 3R; 5–6 → до 4R; 6+ → до 5R
-            if risk_amount > 0 and sl_is_be:
-                risk_1r = abs(entry_price - original_stop_loss)
-                if risk_1r > 0 and take_profit and take_profit > 0:
-                    rr_ratio = abs(take_profit - entry_price) / risk_1r
-                    max_trailing_level = min(max(0, int(rr_ratio) - 1), 5)
-                else:
-                    max_trailing_level = 0
-                    rr_ratio = 0.0
-                R_MARGIN = 0.05
-                if max_trailing_level >= 2:
-                    for n in range(max_trailing_level, 1, -1):
-                        if signal_type == "BUY":
-                            price_level = entry_price + n * risk_1r * (1.0 + R_MARGIN)
-                            sl_level = entry_price + (n - 1) * risk_1r
-                            at_level = current_price >= price_level
-                            sl_already_at_level = stop_loss >= sl_level
-                        else:
-                            price_level = entry_price - n * risk_1r * (1.0 + R_MARGIN)
-                            sl_level = entry_price - (n - 1) * risk_1r
-                            at_level = current_price <= price_level
-                            sl_already_at_level = stop_loss <= sl_level
-                        if at_level and not sl_already_at_level and abs(stop_loss - sl_level) > be_threshold:
-                            db_service.update_signal_sl_and_status(signal_id, sl_level, status=None)
-                            n_minus_r = f"{n - 1}R"
-                            logger.info(
-                                f"📊 Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R"
+            # 2b) Трейлинг 2R-5R: только при max_trailing_level >= 2. При nR+5% → SL на (n-1)R.
+            # max_trailing_level = int(rr_ratio) - 1, cap 5: при R:R 3 → макс 2R, при R:R 4 → макс 3R и т.д.
+            if risk_1r > 0 and take_profit and take_profit > 0:
+                rr_ratio = abs(take_profit - entry_price) / risk_1r
+                max_trailing_level = min(max(0, int(rr_ratio) - 1), 5)
+            else:
+                max_trailing_level = 0
+                rr_ratio = 0.0
+            in_be_or_trailing = sl_is_be or (
+                (signal_type == "BUY" and stop_loss >= entry_price + risk_1r - be_threshold) or
+                (signal_type == "SELL" and stop_loss <= entry_price - risk_1r + be_threshold)
+            )
+            if risk_1r > 0 and in_be_or_trailing and max_trailing_level >= 2:
+                logger.info(f"Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R")
+                for n in range(max_trailing_level, 1, -1):
+                    if signal_type == "BUY":
+                        price_trigger = entry_price + n * risk_1r * (1.0 + TRAILING_MARGIN)
+                        sl_level = entry_price + (n - 1) * risk_1r
+                        at_trigger = current_price >= price_trigger
+                        sl_already_at_level = stop_loss >= sl_level - be_threshold
+                    else:
+                        price_trigger = entry_price - n * risk_1r * (1.0 + TRAILING_MARGIN)
+                        sl_level = entry_price - (n - 1) * risk_1r
+                        at_trigger = current_price <= price_trigger
+                        sl_already_at_level = stop_loss <= sl_level + be_threshold
+                    if at_trigger and not sl_already_at_level and abs(stop_loss - sl_level) > be_threshold:
+                        db_service.update_signal_sl_and_status(signal_id, sl_level, status=None)
+                        n_minus_r = f"{n - 1}R"
+                        logger.info(
+                            f"🔒 Price Monitor: цена прошла {n}R+5%. Переносим SL на уровень {n_minus_r}: "
+                            f"{stop_loss:.2f} → {sl_level:.2f}."
+                        )
+                        users_tr = db_service.get_all_active_users()
+                        if users_tr:
+                            msg_tr = (
+                                f"🔒 <b>ASTRA Monitor:</b> SL перенесён на уровень {n_minus_r}.\n\n"
+                                f"id={signal_id} | {signal_type}\n"
+                                f"SL: {stop_loss:.2f} → {sl_level:.2f}\n"
+                                f"TP: {take_profit:.2f}"
                             )
-                            logger.info(
-                                f"🔒 Price Monitor: цена прошла {n}R+5%. Переносим SL на уровень {n_minus_r}: "
-                                f"{stop_loss:.2f} → {sl_level:.2f}."
-                            )
-                            users_tr = db_service.get_all_active_users()
-                            if users_tr:
-                                msg_tr = (
-                                    f"🔒 <b>ASTRA Monitor:</b> SL перенесён на уровень {n_minus_r}.\n\n"
-                                    f"id={signal_id} | {signal_type}\n"
-                                    f"SL: {stop_loss:.2f} → {sl_level:.2f}\n"
-                                    f"TP: {take_profit:.2f}"
-                                )
-                                telegram_service.broadcast_deals_only(users_tr, msg_tr)
-                            stop_loss = sl_level
-                            break
+                            telegram_service.broadcast_deals_only(users_tr, msg_tr)
+                        stop_loss = sl_level
+                        break
 
             # 3. Проверяем SL / TP для фактического закрытия
             hit_sl = (

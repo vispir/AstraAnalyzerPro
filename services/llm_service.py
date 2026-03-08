@@ -175,15 +175,15 @@ ATR_M15(14): {atr_m15}
 RULES:
 - For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
-- Range Breakout SELL: SL must be ABOVE invalidation level by at least 1-2 points: SL >= invalidation_sell + 1.0 (SL always beyond invalidation, not inside).
-- Range Breakout BUY: SL must be BELOW invalidation level by at least 1-2 points: SL <= invalidation_buy - 1.0.
+- Range Breakout SELL: SL = range_low + 0.3×ATR (just above broken range boundary). Must also be >= invalidation_sell.
+- Range Breakout BUY: SL = range_high - 0.3×ATR (just below broken range boundary). Must also be <= invalidation_buy.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
 - Entry: найди ЛОГИЧНУЮ точку входа рядом с CURRENT_PRICE:
   • ретест пробитой границы диапазона (range_high/low), или
   • ближайший OB/FVG по направлению пробоя,
   • но НЕ дальше чем 0.5×ATR или примерно 0.3% от CURRENT_PRICE.
   Если явного уровня рядом нет, используй CURRENT_PRICE.
-- Minimum R:R = 1.2. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.2 → WAIT.
+- Minimum R:R = 1.5. Output calculated R:R in math_debug_log.calculated_rr. If R:R < 1.5 → WAIT.
 INVALIDATION LEVELS:
 {json.dumps(inv_levels, indent=2)}
 </invalidation_and_atr>
@@ -203,7 +203,7 @@ When 'is_confirmed' is true, the system has detected a confirmed Range Breakout 
 
 Use these as the BASELINE for your trade plan in Range Breakout scenarios:
 - Do NOT place SL closer to price than suggested_sl (it MUST stay beyond the broken range boundary).
-- You MAY refine TP based on liquidity/structure, but do not reduce R:R below 1.2 and prefer R:R ≥ 1.5.
+- You MAY refine TP based on liquidity/structure, but do not reduce R:R below 1.5 and prefer R:R ≥ 1.5.
 
 JSON:
 {json.dumps(rbc, indent=2)}
@@ -467,22 +467,23 @@ class LLMService:
     "- Price at key level (OB or FVG)\n"
     "- R:R > 1.5\n"
     "\n"
-    "## B+ Setup (Confidence 55-69) — Хороший сетап, можно торговать\n"
+    "## B+ Setup (Confidence 60-69) — Хороший сетап, можно торговать\n"
     "- Trend is identifiable\n"
     "- At least one SMC confluence (OB OR FVG OR liquidity level)\n"
     "- Internal structure confirmation\n"
-    "- R:R >= 1.2\n"
+    "- R:R >= 1.5\n"
     "\n"
-    "## B Setup (Confidence 55-59) — Минимально допустимый\n"
+    "## B Setup (Confidence 55-59) — Торгуем осторожно\n"
     "- Basic structure alignment\n"
     "- One clear reason to enter\n"
-    "- R:R = 1.2\n"
+    "- R:R >= 1.5\n"
+    "- ONLY during London or London/NY session. Skip during Tokyo and Off-hours.\n"
     "\n"
     "## C Setup (Confidence < 55) — НЕ ТОРГУЕМ → WAIT\n"
     "- Conflicting timeframes\n"
     "- No clear structure\n"
     "- Price in no-trade zone (middle of range)\n"
-    "- Poor R:R (< 1.2)\n"
+    "- Poor R:R (< 1.5)\n"
     "\n"
     "# TRADE IDENTIFICATION\n"
     "\n"
@@ -549,7 +550,7 @@ class LLMService:
     "- **Stop Loss**: Beyond LOCAL (Internal M15) invalidation structure + $0.50-1.00 buffer\n"
     "  * Use NEAREST Internal OB or FVG for SL — NOT Swing High/Low\n"
     "  * Keep SL within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
-    "  * SL < 1.0×ATR or SL > 6.0×ATR will trigger WARNING but trade allowed if R:R ≥ 1.2\n"
+    "  * SL < 1.0×ATR or SL > 6.0×ATR will trigger WARNING but trade allowed if R:R ≥ 1.5\n"
     "  * Typical SL for Gold M15: 1.5-3.0×ATR ($12-24 with ATR=$8)\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5138 (1.5×ATR, 12 points) ✓\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5134 (2.0×ATR, 16 points) ✓\n"
@@ -557,9 +558,9 @@ class LLMService:
     "- **Take Profit**: Next liquidity pool, opposing OB, or fixed R:R\n"
     "\n"
     "## Step 4: R:R Check\n"
-    "- Minimum acceptable R:R = 1.2 (for B+ or better setups; gold favours slightly higher)\n"
+    "- Minimum acceptable R:R = 1.5 (for B+ or better setups; gold favours slightly higher)\n"
     "- Ideal R:R > 1.5\n"
-    "- If R:R < 1.2 → downgrade to WAIT\n"
+    "- If R:R < 1.5 → downgrade to WAIT\n"
     "\n"
     "# RANGE BREAKOUT — ГЛАВНЫЙ ПРИОРИТЕТ АНАЛИЗА\n"
     "\n"
@@ -719,7 +720,7 @@ class LLMService:
     "- HTF trend directly opposed → -10\n"
     "- Low volume session (Sydney, Off-Hours) → -5\n"
     "- Near high-impact news (<30 min) → -10\n"
-    "- R:R < 1.2 → -15\n"
+    "- R:R < 1.5 → -15\n"
     "\n"
     "ZONE (supplementary, NOT primary):\n"
     "+ Entry at extreme of range (< 25% for BUY, > 75% for SELL) → +5\n"
@@ -730,7 +731,7 @@ class LLMService:
     "GRADE ASSIGNMENT:\n"
     "85-100 → A+ (all model elements present + swing confirmation)\n"
     "70-84 → A (strong model with swing or clear sweep+CHoCH)\n"
-    "55-69 → B+ (tradeable, internal confirmation with some confluence)\n"
+    "60-69 → B+ (tradeable, internal confirmation with some confluence)\n"
     "< 55 → WAIT (confidence < 55 = do not trade)\n"
     "\n"
     "HARD CAPS:\n"
@@ -738,7 +739,7 @@ class LLMService:
     "- Internal-only against swing trend → MAX 50 → WAIT\n"
     "- No identifiable entry model (see Step 2) → MAX 45 → WAIT\n"
     "- SL should be within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
-    "- SL < 1.0×ATR or SL > 6.0×ATR → WARNING logged, but trade allowed if R:R ≥ 1.2\n"
+    "- SL < 1.0×ATR or SL > 6.0×ATR → WARNING logged, but trade allowed if R:R ≥ 1.5\n"
     "- SL < $5.00 → REJECT TRADE → WAIT (technical error protection)\n"
     "\n"
     "# WHEN TO TRADE\n"
@@ -746,14 +747,14 @@ class LLMService:
     "✅ Price at quality OB or FVG\n"
     "✅ Liquidity sweep + reversal structure\n"
     "✅ BOS/CHoCH with follow-through\n"
-    "✅ R:R >= 1.2 with defined invalidation\n"
+    "✅ R:R >= 1.5 with defined invalidation\n"
     "\n"
     "# WHEN TO WAIT\n"
     "❌ Market closed (Sat, Sun before 22:00 UTC, Fri after 22:00 UTC)\n"
     "❌ High-impact news within 30 minutes\n"
     "❌ HTF and LTF in direct conflict\n"
     "❌ Price stuck in equilibrium with no structure break\n"
-    "❌ R:R below 1.2\n"
+    "❌ R:R below 1.5\n"
     "❌ No clear SMC setup visible\n"
     "\n"
     "# USER IDEA VALIDATION\n"
@@ -767,7 +768,7 @@ class LLMService:
     "- Tokyo: Historically profitable for Gold; treat as valid session. Slightly higher confidence threshold (e.g. 55) for marginal setups.\n"
     "- London / London-NY overlap: Highest volume; standard confidence rules. Best for swing confirmations.\n"
     "- NY only / Off-hours: Lower volume; prefer only A/A+ setups with clear liquidity sweep + CHoCH.\n"
-    "Session is CONTEXT: a complete model (e.g. LIQUIDITY_SWEEP_REVERSAL with 4/4 elements) can be traded in any session.\n"
+    "Session is CONTEXT: a complete model (e.g. LIQUIDITY_SWEEP_REVERSAL with 4/4 elements) at B+ grade or above can be traded in any session. B Setup (confidence 55-59) is restricted to London and London/NY sessions only.\n"
     "\n"
     "# OUTPUT FORMAT (STRICT JSON)\n"
     "\n"
@@ -1288,7 +1289,7 @@ class LLMService:
 1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
 2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
 3. Validate the setup using the "Decision Protocol" from System Instructions.
-4. RESPECT <invalidation_and_atr>: SL beyond invalidation, R:R >= 1.2, entry near current price.
+4. RESPECT <invalidation_and_atr>: SL beyond invalidation, R:R >= 1.5, entry near current price.
 5. If outputting BUY/SELL, include "confluence" object with: htf_aligned, ltf_trigger_confirmed, no_news_soon, rr_acceptable, invalidation_respected (all true for valid trade).
 6. Output the STRICT JSON decision with the required fields.
 </task>
