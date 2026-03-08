@@ -453,7 +453,7 @@ def price_monitor_loop():
                         telegram_service.broadcast_deals_only(users_lock, msg_lock)
                     stop_loss = sl_1r_level
 
-            # 2b) Трейлинг 2R-5R: только при max_trailing_level >= 2. При nR+5% → SL на (n-1)R.
+            # 2b) Трейлинг 2R-5R: только при max_trailing_level >= 2. При nR+5% → SL на nR.
             # max_trailing_level = int(rr_ratio) - 1, cap 5: при R:R 3 → макс 2R, при R:R 4 → макс 3R и т.д.
             if risk_1r > 0 and take_profit and take_profit > 0:
                 rr_ratio = abs(take_profit - entry_price) / risk_1r
@@ -470,25 +470,25 @@ def price_monitor_loop():
                 for n in range(max_trailing_level, 1, -1):
                     if signal_type == "BUY":
                         price_trigger = entry_price + n * risk_1r * (1.0 + TRAILING_MARGIN)
-                        sl_level = entry_price + (n - 1) * risk_1r
+                        sl_level = entry_price + n * risk_1r
                         at_trigger = current_price >= price_trigger
                         sl_already_at_level = stop_loss >= sl_level - be_threshold
                     else:
                         price_trigger = entry_price - n * risk_1r * (1.0 + TRAILING_MARGIN)
-                        sl_level = entry_price - (n - 1) * risk_1r
+                        sl_level = entry_price - n * risk_1r
                         at_trigger = current_price <= price_trigger
                         sl_already_at_level = stop_loss <= sl_level + be_threshold
                     if at_trigger and not sl_already_at_level and abs(stop_loss - sl_level) > be_threshold:
                         db_service.update_signal_sl_and_status(signal_id, sl_level, status=None)
-                        n_minus_r = f"{n - 1}R"
+                        n_r = f"{n}R"
                         logger.info(
-                            f"🔒 Price Monitor: цена прошла {n}R+5%. Переносим SL на уровень {n_minus_r}: "
+                            f"🔒 Price Monitor: цена прошла {n}R+5%. Переносим SL на уровень {n_r}: "
                             f"{stop_loss:.2f} → {sl_level:.2f}."
                         )
                         users_tr = db_service.get_all_active_users()
                         if users_tr:
                             msg_tr = (
-                                f"🔒 <b>ASTRA Monitor:</b> SL перенесён на уровень {n_minus_r}.\n\n"
+                                f"🔒 <b>ASTRA Monitor:</b> SL перенесён на уровень {n_r}.\n\n"
                                 f"id={signal_id} | {signal_type}\n"
                                 f"SL: {stop_loss:.2f} → {sl_level:.2f}\n"
                                 f"TP: {take_profit:.2f}"
