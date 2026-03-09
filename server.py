@@ -541,15 +541,14 @@ def price_monitor_loop():
                 time.sleep(5)
                 continue
 
-            # Расчёт фактического PnL
-            if signal_type == "BUY":
-                result_pnl = current_price - entry_price
-            else:
-                result_pnl = entry_price - current_price
-
             user_ids = db_service.get_all_active_users()
 
             if hit_sl:
+                # Расчёт PnL по уровню стоп-лосса (а не по текущей цене)
+                if signal_type == "BUY":
+                    result_pnl = stop_loss - entry_price
+                else:
+                    result_pnl = entry_price - stop_loss
                 logger.info(
                     f"🛑 Price Monitor: SL hit for trade id={signal_id} "
                     f"type={signal_type} entry={entry_price:.2f} sl={stop_loss:.2f} price={current_price:.2f}"
@@ -568,6 +567,11 @@ def price_monitor_loop():
                     )
                     telegram_service.broadcast_deals_only(user_ids, msg)
             elif hit_tp:
+                # Расчёт PnL по уровню тейк-профита (а не по текущей цене)
+                if signal_type == "BUY":
+                    result_pnl = take_profit - entry_price
+                else:
+                    result_pnl = entry_price - take_profit
                 logger.info(
                     f"✅ Price Monitor: TP hit for trade id={signal_id} "
                     f"type={signal_type} entry={entry_price:.2f} tp={take_profit:.2f} price={current_price:.2f}"

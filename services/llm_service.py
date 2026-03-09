@@ -175,8 +175,8 @@ ATR_M15(14): {atr_m15}
 RULES:
 - For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
-- Range Breakout SELL: SL = range_low + 0.3×ATR (just above broken range boundary). Must also be >= invalidation_sell.
-- Range Breakout BUY: SL = range_high - 0.3×ATR (just below broken range boundary). Must also be <= invalidation_buy.
+- Range Breakout SELL: SL = range_low + 0.3×ATR (just above broken lower range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_sell from OB/FVG, ignore it completely.
+- Range Breakout BUY: SL = range_high - 0.3×ATR (just below broken upper range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_buy from OB/FVG, ignore it completely.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
 - Entry: найди ЛОГИЧНУЮ точку входа рядом с CURRENT_PRICE:
   • ретест пробитой границы диапазона (range_high/low), или
@@ -594,8 +594,8 @@ class LLMService:
     "3. SL и TP — см. правила ниже\n"
     "\n"
     "РАСЧЁТ SL (стоп-лосс):\n"
-    "- BUY (пробой вверх): SL = range_high − 0.3×ATR (чуть ниже пробитой верхней границы)\n"
-    "- SELL (пробой вниз): SL = range_low + 0.3×ATR (чуть выше пробитой нижней границы)\n"
+    "- BUY (пробой вверх): SL = range_high − 0.3×ATR (чуть ниже пробитой верхней границы). В режиме Range Breakout сама граница диапазона является уровнем инвалидации — не используй invalidation_buy от OB/FVG для переноса SL.\n"
+    "- SELL (пробой вниз): SL = range_low + 0.3×ATR (чуть выше пробитой нижней границы). В режиме Range Breakout сама граница диапазона является уровнем инвалидации — не используй invalidation_sell от OB/FVG для переноса SL.\n"
     "- НЕ ставь SL внутри диапазона.\n"
     "- НЕ ставь SL дальше от границы чем suggested_sl из <range_breakout_context> (если секция есть).\n"
     "- НЕ выбирай OB/FVG для SL если они дальше от границы чем 0.3×ATR.\n"

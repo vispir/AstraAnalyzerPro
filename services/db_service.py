@@ -1095,6 +1095,93 @@ class DBService:
             logger.error(f"❌ reactivate_range error (id={range_id}): {e}")
             return False
 
+    # ---------------------- HTF Rejection Watch (system_state) ----------------------
+
+    def get_htf_rejection_watch(self) -> Optional[dict]:
+        """
+        Читает состояние HTF Rejection Watch из таблицы system_state.
+        Ожидается строка с key='htf_rejection_watch' и JSON в поле value.
+        Возвращает dict или None если нет активного состояния.
+        """
+        if not self.url:
+            logger.warning("⚠️ get_htf_rejection_watch: SUPABASE_URL не настроен")
+            return None
+
+        target_url = (
+            f"{self.url}/rest/v1/system_state"
+            f"?key=eq.htf_rejection_watch"
+            f"&select=value"
+            f"&limit=1"
+        )
+        try:
+            response = requests.get(
+                target_url,
+                headers={"apikey": self.key, "Authorization": f"Bearer {self.key}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            rows = response.json() or []
+            if not rows:
+                return None
+            value = rows[0].get("value")
+            # Supabase вернёт JSON как dict; если строка — попробуем распарсить
+            if isinstance(value, str):
+                try:
+                    import json
+
+                    value = json.loads(value)
+                except Exception:
+                    return None
+            return value or None
+        except Exception as e:
+            logger.warning(f"⚠️ get_htf_rejection_watch error: {e}")
+            return None
+
+    def set_htf_rejection_watch(self, data: Optional[dict]) -> bool:
+        """
+        Сохраняет состояние HTF Rejection Watch в system_state.
+        data = dict → upsert {key: 'htf_rejection_watch', value: data}
+        data = None → удаляет / деактивирует запись.
+        """
+        if not self.url:
+            logger.warning("⚠️ set_htf_rejection_watch: SUPABASE_URL не настроен")
+            return False
+
+        base_url = f"{self.url}/rest/v1/system_state"
+
+        try:
+            if data is None:
+                # Деактивируем: удаляем строку с данным key
+                delete_url = f"{base_url}?key=eq.htf_rejection_watch"
+                resp = requests.delete(
+                    delete_url,
+                    headers={
+                        "apikey": self.key,
+                        "Authorization": f"Bearer {self.key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                return True
+
+            payload = {
+                "key": "htf_rejection_watch",
+                "value": data,
+            }
+            # Upsert по ключу — используем Prefer: resolution=merge-duplicates
+            resp = requests.post(
+                base_url,
+                json=payload,
+                headers=self.headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"❌ set_htf_rejection_watch error: {e}")
+            return False
+
     def get_stats(self) -> dict:
         """
         Статистика закрытых сделок за день/неделю/месяц в часовом поясе UTC+4.
