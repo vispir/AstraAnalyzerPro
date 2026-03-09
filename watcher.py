@@ -3003,13 +3003,21 @@ def run_analysis_cycle():
                 }
 
         # HTF фильтр для не-Range триггеров (и для Range, если ещё не заблокировано по H4)
-        # Блокируем если Swing тренд против направления сигнала
-        # Исключение: Swing CHoCH подтверждён (реальный разворот)
+        # Блокируем если Swing тренд против направления сигнала.
+        # Исключение: Swing CHoCH подтверждён (реальный разворот).
         if not htf_filter_blocked:
             swing_trend_m15 = (status_data.get('trend') or 'NEUTRAL').upper()
             smc_summary_sw = status_data.get('smc_summary') or {}
             swing_choch_confirmed = (smc_summary_sw.get('swing_choch_confirmed', 0) or 0) > 0
-            signal_direction = (status_data.get('breakout_direction') or status_data.get('rejection_direction') or '').strip().upper()
+            # Направление сигнала:
+            # 1) Range Breakout / Range Rejection (breakout_direction / rejection_direction)
+            # 2) Proximity / Equilibrium сигналы могут передать suggested_direction
+            signal_direction = (
+                status_data.get('breakout_direction')
+                or status_data.get('rejection_direction')
+                or status_data.get('suggested_direction')
+                or ''
+            ).strip().upper()
             if signal_direction in ('BUY', 'SELL'):
                 if signal_direction == 'BUY' and swing_trend_m15 == 'DOWNTREND':
                     if not swing_choch_confirmed:
@@ -3039,6 +3047,21 @@ def run_analysis_cycle():
                         status_data['is_range_rejection_confirmed'] = False
                         send_debug_notification(status_data)
                         return
+            else:
+                # Proximity/Equilibrium: направление явно не задано.
+                # Если есть выраженный Swing-тренд и НЕТ Swing CHoCH,
+                # блокируем, чтобы LLM не мог выдать контртрендовый сигнал.
+                if swing_trend_m15 in ('DOWNTREND', 'UPTREND') and not swing_choch_confirmed:
+                    htf_filter_blocked = True
+                    block_reason = (
+                        f"HTF фильтр: Proximity/Equilibrium сигнал при Swing {swing_trend_m15} "
+                        f"без подтверждённого CHoCH — LLM не вызываем"
+                    )
+                    logger.info(f"🚫 {block_reason}")
+                    status_data['status'] = 'htf_filter_blocked'
+                    status_data['reason'] = block_reason
+                    send_debug_notification(status_data)
+                    return
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
