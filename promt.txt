@@ -1,0 +1,43 @@
+В файле server.py найди блок активации входа (около строки 373):
+
+if signal_type == "BUY" and entry_price > 0 and current_price <= entry_price + ENTRY_BUFFER:
+    crossed_entry = True
+elif signal_type == "SELL" and entry_price > 0 and current_price >= entry_price - ENTRY_BUFFER:
+    crossed_entry = True
+
+Проблема: для рыночных входов (когда entry ≈ цена открытия свечи в момент сигнала) цена уже ушла выше entry (BUY) или ниже entry (SELL) к моменту следующей проверки монитора. Условие не выполняется и активация не происходит — её подхватывает менеджер по крону с задержкой.
+
+Нужно добавить альтернативное условие активации: если сигнал свежий (создан менее 3 минут назад) и цена уже прошла через entry в правильном направлении.
+
+Заменить на:
+
+ENTRY_BUFFER = 0.3
+# Время создания сигнала
+signal_created_at = trade.get("created_at")
+signal_age_seconds = None
+if signal_created_at:
+    try:
+        from datetime import timezone
+        created_dt = datetime.fromisoformat(str(signal_created_at).replace('Z', '+00:00'))
+        signal_age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
+    except Exception:
+        signal_age_seconds = None
+
+is_fresh_signal = signal_age_seconds is not None and signal_age_seconds < 180  # моложе 3 минут
+
+if signal_type == "BUY" and entry_price > 0:
+    # Стандартная активация: цена пришла к entry сверху вниз (лимитный вход)
+    crossed_entry_limit = current_price <= entry_price + ENTRY_BUFFER
+    # Рыночная активация: свежий сигнал, цена уже выше entry (вход по рынку)
+    crossed_entry_market = is_fresh_signal and current_price >= entry_price - ENTRY_BUFFER
+    crossed_entry = crossed_entry_limit or crossed_entry_market
+
+elif signal_type == "SELL" and entry_price > 0:
+    # Стандартная активация: цена пришла к entry снизу вверх (лимитный вход)
+    crossed_entry_limit = current_price >= entry_price - ENTRY_BUFFER
+    # Рыночная активация: свежий сигнал, цена уже ниже entry (вход по рынку)
+    crossed_entry_market = is_fresh_signal and current_price <= entry_price + ENTRY_BUFFER
+    crossed_entry = crossed_entry_limit or crossed_entry_market
+
+else:
+    crossed_entry = False

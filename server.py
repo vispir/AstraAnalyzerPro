@@ -368,12 +368,36 @@ def price_monitor_loop():
                         pass
 
             # 1. Проверяем достижение цены входа (активация сделки)
-            crossed_entry = False
+            from datetime import datetime, timezone
             ENTRY_BUFFER = 0.3  # буфер 0.3 пункта для погрешности цены
-            if signal_type == "BUY" and entry_price > 0 and current_price <= entry_price + ENTRY_BUFFER:
-                crossed_entry = True
-            elif signal_type == "SELL" and entry_price > 0 and current_price >= entry_price - ENTRY_BUFFER:
-                crossed_entry = True
+
+            # Время создания сигнала (для определения "рыночной" активации на свежем сигнале)
+            signal_created_at = trade.get("created_at")
+            signal_age_seconds = None
+            if signal_created_at:
+                try:
+                    created_dt = datetime.fromisoformat(str(signal_created_at).replace('Z', '+00:00'))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                    signal_age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
+                except Exception:
+                    signal_age_seconds = None
+
+            is_fresh_signal = signal_age_seconds is not None and signal_age_seconds < 180  # моложе 3 минут
+
+            crossed_entry = False
+            if signal_type == "BUY" and entry_price > 0:
+                # Лимитная активация: цена пришла к entry сверху вниз
+                crossed_entry_limit = current_price <= entry_price + ENTRY_BUFFER
+                # Рыночная активация: свежий сигнал, цена уже выше entry (рынок ушёл вверх)
+                crossed_entry_market = is_fresh_signal and current_price >= entry_price - ENTRY_BUFFER
+                crossed_entry = crossed_entry_limit or crossed_entry_market
+            elif signal_type == "SELL" and entry_price > 0:
+                # Лимитная активация: цена пришла к entry снизу вверх
+                crossed_entry_limit = current_price >= entry_price - ENTRY_BUFFER
+                # Рыночная активация: свежий сигнал, цена уже ниже entry
+                crossed_entry_market = is_fresh_signal and current_price <= entry_price + ENTRY_BUFFER
+                crossed_entry = crossed_entry_limit or crossed_entry_market
             if crossed_entry and not entry_notified:
                 db_service.mark_entry_notified(signal_id)
                 user_ids_filled = db_service.get_all_active_users()
