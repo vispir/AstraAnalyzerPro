@@ -2033,6 +2033,7 @@ def run_analysis_cycle():
     status_data['rejection_direction'] = None
     status_data['rejection_level'] = None
 
+    range_just_created = False  # локальный флаг: диапазон создан в этом цикле — Rejection по нему невалиден
     active_range = None
     try:
         active_range = db_service.get_active_range(symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
@@ -2202,6 +2203,7 @@ def run_analysis_cycle():
                 saved = db_service.save_range(n_high, n_low, symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME)
                 if saved:
                     active_range = saved
+                    range_just_created = True
                     logger.info(f"📐 Новый локальный диапазон создан: [{n_low:.3f} - {n_high:.3f}]")
 
     status_data['active_range'] = active_range
@@ -2334,7 +2336,9 @@ def run_analysis_cycle():
             skip_range_breakout = True
 
         # ---------- RANGE REJECTION: отбой от границы снаружи (цена не жила внутри) ----------
-        if skip_range_breakout and candles and len(candles) >= 4:
+        if range_just_created:
+            logger.info("⏭️ Range Rejection пропущен: диапазон создан в этом цикле, нет истории свечей внутри.")
+        elif skip_range_breakout and candles and len(candles) >= 4:
             atr_m15 = atr_m15_initial or 0.0
             c4 = candles[-4]
             signal_high = safe_float(signal_c.get('high', signal_c.get('High', 0)))
@@ -3435,9 +3439,17 @@ def run_analysis_cycle():
     model_used = model_used or ""
     try:
         lower_model = str(model_used).lower()
-        if "gemini-2.0-flash-001" in model_used or "openrouter" in lower_model:
-            model_label = "💰 Платный (OpenRouter Gemini 2.0 Flash)"
+        if "gemini-2.0-flash-001" in lower_model:
+            # Платный Gemini 2.0 Flash через OpenRouter
+            model_label = "💰 Платный (Gemini 2.0 Flash)"
+        elif "gemini-3-flash-preview" in lower_model:
+            # Основной бесплатный Gemini 3 Flash Preview (прямой API)
+            model_label = "🆓 Бесплатный (Gemini 3 Flash Preview)"
+        elif "gemini-3-pro" in lower_model:
+            # На случай, если когда-нибудь будет задействован Pro через Gateway
+            model_label = "💰 Платный (Gemini 3 Pro)"
         else:
+            # Значение по умолчанию — считаем, что это бесплатный Gemini Flash
             model_label = "🆓 Бесплатный (Gemini Flash)"
     except Exception:
         model_label = "🆓 Бесплатный (Gemini Flash)"
