@@ -2369,10 +2369,6 @@ def run_analysis_cycle():
                         f"Range Rejection: цена слишком далеко от range_low "
                         f"({current_price:.2f} <= {range_low - 1.5 * atr_m15:.2f})"
                     )
-                    try:
-                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                    except Exception:
-                        pass
                     send_debug_notification(status_data)
                     return
                 body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
@@ -2399,10 +2395,6 @@ def run_analysis_cycle():
                         f"Range Rejection: цена слишком далеко от range_high "
                         f"({current_price:.2f} >= {range_high + 1.5 * atr_m15:.2f})"
                     )
-                    try:
-                        db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                    except Exception:
-                        pass
                     send_debug_notification(status_data)
                     return
                 body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
@@ -2456,10 +2448,6 @@ def run_analysis_cycle():
                             f"Range Breakout: подтверждение слишком далеко от уровня "
                             f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
                         )
-                        try:
-                            db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                        except Exception:
-                            pass
                         logger.warning(f"⚠️ {status_data['reason']}")
                         send_debug_notification(status_data)
                         return
@@ -3005,10 +2993,6 @@ def run_analysis_cycle():
                     "Торгуем только по направлению старшего тренда."
                 )
                 htf_filter_blocked = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 # В следующем цикле, если цена вернётся выше нижней границы диапазона,
                 # рассматриваем Range Rejection BUY от поддержки при H4 UPTREND.
                 level = safe_float(status_data.get('local_range_low') or 0.0)
@@ -3032,10 +3016,6 @@ def run_analysis_cycle():
                     "Торгуем только по направлению старшего тренда."
                 )
                 htf_filter_blocked = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 # В следующем цикле, если цена вернётся ниже верхней границы диапазона,
                 # рассматриваем Range Rejection SELL от сопротивления при H4 DOWNTREND.
                 level = safe_float(status_data.get('local_range_high') or 0.0)
