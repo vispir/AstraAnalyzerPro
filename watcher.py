@@ -288,6 +288,20 @@ def get_invalidation_levels(analysis, buffer=0.5):
     }
 
 
+def _is_range_nested(r, others):
+    """Возвращает True, если диапазон r полностью вложен в любой другой диапазон из others."""
+    rh = safe_float(r.get('range_high'), 0)
+    rl = safe_float(r.get('range_low'), 0)
+    for other in others:
+        if other.get('id') == r.get('id'):
+            continue
+        oh = safe_float(other.get('range_high'), 0)
+        ol = safe_float(other.get('range_low'), 0)
+        if ol <= rl and rh <= oh:
+            return True
+    return False
+
+
 def _trade_open_timestamp(trade):
     """Возвращает Unix timestamp открытия сделки из created_at/timestamp или None."""
     raw = trade.get('created_at') or trade.get('timestamp') or ''
@@ -2100,8 +2114,18 @@ def run_analysis_cycle():
             # Воскрешение старых диапазонов: только если две последние закрытые свечи строго внутри [range_low, range_high] (без буфера ATR)
             try:
                 inactive_ranges = db_service.get_recent_inactive_ranges(
-                    symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=72
+                    symbol=RANGE_SYMBOL, timeframe=RANGE_TIMEFRAME, hours=24
                 )
+                # Берём только 4 самых свежих по created_at
+                inactive_ranges = sorted(
+                    inactive_ranges,
+                    key=lambda x: x.get('created_at') or '',
+                    reverse=True
+                )[:4]
+
+                # Фильтр вложенности: убираем диапазоны, полностью вложенные внутрь других
+                inactive_ranges = [r for r in inactive_ranges if not _is_range_nested(r, inactive_ranges)]
+
                 if candles and len(candles) >= 3:
                     signal_candle = candles[-2]
                     breakout_candle = candles[-3]
@@ -2130,7 +2154,7 @@ def run_analysis_cycle():
                                 logger.info(
                                     f"🔄 Диапазон воскрешён: две свечи закрылись внутри [{r_low:.3f} - {r_high:.3f}]"
                                 )
-                            break
+                            break  # воскрешаем первый подходящий (он уже самый свежий после сортировки)
                         count_inside = (1 if inside_signal else 0) + (1 if inside_breakout else 0)
                         if best_for_log is None or count_inside > best_for_log[2]:
                             best_for_log = (r_low, r_high, count_inside)
@@ -3069,19 +3093,11 @@ def run_analysis_cycle():
                         return
             else:
                 # Proximity/Equilibrium: направление явно не задано.
-                # Если есть выраженный Swing-тренд и НЕТ Swing CHoCH,
-                # блокируем, чтобы LLM не мог выдать контртрендовый сигнал.
-                if swing_trend_m15 in ('DOWNTREND', 'UPTREND') and not swing_choch_confirmed:
-                    htf_filter_blocked = True
-                    block_reason = (
-                        f"HTF фильтр: Proximity/Equilibrium сигнал при Swing {swing_trend_m15} "
-                        f"без подтверждённого CHoCH — LLM не вызываем"
-                    )
-                    logger.info(f"🚫 {block_reason}")
-                    status_data['status'] = 'htf_filter_blocked'
-                    status_data['reason'] = block_reason
-                    send_debug_notification(status_data)
-                    return
+                # Блокируем только контртрендовые сигналы на уровне LLM-постпроверки.
+                # Здесь НЕ блокируем вызов LLM, а лишь сохраняем контекст HTF для последующей проверки вердикта.
+                status_data['htf_proximity_check_needed'] = True
+                status_data['htf_proximity_trend'] = swing_trend_m15
+                status_data['htf_proximity_choch'] = swing_choch_confirmed
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
@@ -3373,6 +3389,30 @@ def run_analysis_cycle():
 
     llm_action = verdict['action']  # BUY / SELL / WAIT
     is_confirmed = llm_action in ['BUY', 'SELL']
+
+    # HTF постпроверка для Proximity/Equilibrium сигналов:
+    # блокируем ТОЛЬКО контртрендовый вердикт без Swing CHoCH (по тренду не трогаем).
+    if status_data.get('htf_proximity_check_needed'):
+        proximity_trend = status_data.get('htf_proximity_trend', '').upper()
+        proximity_choch = bool(status_data.get('htf_proximity_choch'))
+        verdict_direction = (llm_action or '').upper()
+
+        is_counter_trend = (
+            (proximity_trend == 'UPTREND' and verdict_direction == 'SELL') or
+            (proximity_trend == 'DOWNTREND' and verdict_direction == 'BUY')
+        )
+
+        if is_counter_trend and not proximity_choch:
+            logger.info(f"🚫 HTF постпроверка: {verdict_direction} против Swing {proximity_trend} без CHoCH — блокируем")
+            status_data['status'] = 'htf_filter_blocked'
+            status_data['reason'] = (
+                f"HTF фильтр: {verdict_direction} против Swing {proximity_trend} "
+                f"без подтверждённого CHoCH — сигнал заблокирован"
+            )
+            verdict['action'] = 'WAIT'
+            verdict['reason'] = (verdict.get('reason') or '') + " | HTF Proximity counter-trend rejected"
+            llm_action = 'WAIT'
+            is_confirmed = False
     
     # Task 10: Audit log model and model_completeness
     model_name = verdict.get('model', 'NONE')
