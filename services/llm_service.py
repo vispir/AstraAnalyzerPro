@@ -8,7 +8,7 @@ import base64
 import re
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from PIL import Image
 import io
 
@@ -550,6 +550,8 @@ class LLMService:
     "- **Entry**: Current price or limit at OB/FVG\n"
     "- **Stop Loss**: Beyond LOCAL (Internal M15) invalidation structure + $0.50-1.00 buffer\n"
     "  * Use NEAREST Internal OB or FVG for SL — NOT Swing High/Low\n"
+    "  * EXCEPTION — Range Breakout mode: SL = range boundary ± 0.3×ATR (see RANGE BREAKOUT section). Do NOT use OB/FVG for SL in Range Breakout mode.\n"
+    "  * EXCEPTION — Range Rejection mode: SL = range boundary ± 0.3×ATR (see RANGE REJECTION section). Do NOT use OB/FVG for SL in Range Rejection mode.\n"
     "  * Keep SL within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
     "  * SL < 1.0×ATR or SL > 6.0×ATR will trigger WARNING but trade allowed if R:R ≥ 1.5\n"
     "  * Typical SL for Gold M15: 1.5-3.0×ATR ($12-24 with ATR=$8)\n"
@@ -663,7 +665,40 @@ class LLMService:
     "диапазон [5167 - 5186] двумя свечами вниз, закрепившись ниже 5167.\"\n"
     "Это обязательная часть анализа, не опускай её.\n"
     "\n"
-    "# RANGE REJECTION — ОТБОЙ ОТ ГРАНИЦЫ\n"
+    "# RANGE REJECTION — ОТБОЙ ОТ ГРАНИЦЫ ДИАПАЗОНА\n"
+    "\n"
+    "К этому моменту система определила что цена подошла к границе диапазона СНАРУЖИ и показала отбой.\n"
+    "\n"
+    "Сценарий: цена была вне диапазона, приблизилась к границе, но не закрепилась внутри — это отбой от уровня.\n"
+    "\n"
+    "ТВОЯ ЗАДАЧА:\n"
+    "1. Подтвердить отбой по скриншоту (wick rejection, engulfing, pin bar у границы)\n"
+    "2. Направление: BUY от range_low (отбой снизу вверх), SELL от range_high (отбой сверху вниз)\n"
+    "3. Confidence: применяй стандартный scoring, но +10 если виден чёткий rejection candle у границы\n"
+    "\n"
+    "РАСЧЁТ SL (Range Rejection):\n"
+    "- BUY от range_low: SL = range_low − 0.3×ATR (чуть ниже границы)\n"
+    "- SELL от range_high: SL = range_high + 0.3×ATR (чуть выше границы)\n"
+    "- НЕ используй OB/FVG для SL в этом режиме\n"
+    "\n"
+    "РАСЧЁТ TP:\n"
+    "- Те же правила что для Range Breakout: ближайший уровень в направлении сделки, R:R >= 1.5, не дальше 80 пунктов от entry\n"
+    "\n"
+    "# HTF REJECTION WATCH — РАЗВОРОТ ПО HTF ТРЕНДУ\n"
+    "\n"
+    "Этот сценарий срабатывает когда Range Breakout был заблокирован HTF фильтром, цена развернулась и вернулась к границе диапазона. Система уже определила направление по HTF тренду.\n"
+    "\n"
+    "- H4 UPTREND: сигнал BUY от range_low (цена вернулась к поддержке)\n"
+    "- H4 DOWNTREND: сигнал SELL от range_high (цена вернулась к сопротивлению)\n"
+    "\n"
+    "ТВОЯ ЗАДАЧА:\n"
+    "1. Подтвердить что цена действительно вернулась к границе и показывает реакцию\n"
+    "2. HTF тренд уже проверен системой — доверяй направлению\n"
+    "3. Применяй стандартный confidence scoring + +10 за alignment с H4 трендом\n"
+    "\n"
+    "РАСЧЁТ SL и TP: те же правила что для Range Rejection.\n"
+    "\n"
+    "# RANGE REJECTION — ОТБОЙ ОТ ГРАНИЦЫ (контекст из системы)\n"
     "\n"
     "Если is_range_rejection = True (в range_breakout_context):\n"
     "Цена подошла к границе диапазона СНАРУЖИ и не зашла внутрь.\n"
@@ -1645,11 +1680,11 @@ class LLMService:
         """Получить информацию о текущей торговой сессии"""
         return self.session.get_current_session()
 
-    def get_signal_verdict(self, analysis_data: Dict) -> str:
+    def get_signal_verdict(self, analysis_data: Dict) -> Union[Dict[str, str], str]:
         """
         Специальный метод для Наблюдателя.
         Использует ПОЛНЫЙ системный промт и Gemini 3 Flash для авто-анализа.
-        Возвращает сырой JSON ответ от LLM для дальнейшей обработки.
+        При успехе возвращает {"response": "...", "model": "..."}; при ошибке — строку с JSON WAIT.
         """
         try:
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -1675,9 +1710,11 @@ class LLMService:
             )
 
             if result.get("success"):
-                # Возвращаем ПОЛНЫЙ сырой ответ для парсинга в watcher.py
-                # Это позволит сохранить полное описание без обрезания
-                return result.get("response", "")
+                # Возвращаем ответ и модель, чтобы в отчёте корректно отображалась платная/бесплатная LLM
+                return {
+                    "response": result.get("response", ""),
+                    "model": result.get("model", "")
+                }
             
             # Если ошибка — разный текст для отчёта в TG в зависимости от типа ошибки
             status_code = result.get("status")

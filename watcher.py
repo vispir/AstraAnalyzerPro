@@ -3343,6 +3343,13 @@ def run_analysis_cycle():
     # Вызов Gemini с оптимизированным analysis
     ai_response = llm_service.get_signal_verdict(analysis_light)
     
+    # Извлекаем model и текст если ai_response — словарь (успешный вызов с указанием модели)
+    if isinstance(ai_response, dict):
+        _model_from_response = ai_response.get("model", "")
+        ai_response = ai_response.get("response", "")
+    else:
+        _model_from_response = ""
+    
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_llm)
@@ -3429,14 +3436,8 @@ def run_analysis_cycle():
     
     # Task 7 & 8: Cooldown after SL and trade limits (before confirming signal)
     # Определяем, какая модель LLM использовалась (для логов/TG)
-    # llm_service возвращает в результате поле "model" (например, gemini-3-flash-preview или google/gemini-2.0-flash-001)
-    model_used = None
-    try:
-        if isinstance(ai_response, dict):
-            model_used = ai_response.get("model")
-    except Exception:
-        model_used = None
-    model_used = model_used or ""
+    # model приходит из get_signal_verdict (словарь response/model) и извлечён в _model_from_response
+    model_used = _model_from_response or ""
     try:
         lower_model = str(model_used).lower()
         if "gemini-2.0-flash-001" in lower_model:
