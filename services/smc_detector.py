@@ -230,7 +230,8 @@ def calculate_local_range(candles, lookback=30):
     SMALL_RATIO       = 0.40  # минимальная доля маленьких свечей в окне
     MAX_RANGE_ATR     = 2.5   # максимальная ширина диапазона в ATR
     MAX_HISTORY       = 150   # сколько свечей истории просматриваем
-    MAX_PROXIMITY_ATR = 5.0   # максимальное расстояние диапазона от текущей цены
+    MAX_END_AGE       = 20    # end_idx окна должен быть среди последних N свечей от конца
+    MAX_PROXIMITY_ATR = 3.0   # максимальное расстояние диапазона от текущей цены
     # ──────────────────────────────────────────────────────────────────────────
 
     result = {
@@ -281,6 +282,9 @@ def calculate_local_range(candles, lookback=30):
     # ── скользящее окно: ищем самое свежее квалифицирующее окно ───────────────
     best = None
     for end_idx in range(n - 1, history_start - 1, -1):
+        # Ограничиваем возраст конца окна: слишком старые комбинации не рассматриваем
+        if (n - 1 - end_idx) > MAX_END_AGE:
+            break  # окно слишком старое — дальше не ищем
         for win_size in range(MIN_WINDOW, MAX_WINDOW + 1):
             start_idx = end_idx - win_size + 1
             if start_idx < history_start:
