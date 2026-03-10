@@ -6,6 +6,7 @@ import requests
 import logging
 import base64
 import re
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from PIL import Image
@@ -1237,54 +1238,53 @@ class LLMService:
         manual_sl: Optional[str] = None,
         manual_tp: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Анализ через Gemini API"""
-        try:
-            if not self.gemini_key:
-                return {"error": "GEMINI_API_KEY not configured"}
+        """Анализ через Gemini API с fallback на OpenRouter Gemini 2.0 Flash"""
+        if not self.gemini_key:
+            return {"error": "GEMINI_API_KEY not configured"}
 
-            # Получаем текущую сессию
-            current_time = datetime.now(timezone.utc)
-            session_info = self.session.get_current_session(current_time)
-            time_str = current_time.strftime("%Y-%m-%d %H:%M UTC")
+        # Получаем текущую сессию
+        current_time = datetime.now(timezone.utc)
+        session_info = self.session.get_current_session(current_time)
+        time_str = current_time.strftime("%Y-%m-%d %H:%M UTC")
 
-            # v8.6 MUST-HAVE: инвалидация, ATR, текущая цена — для жёсткой валидации SL и R:R
-            inv_levels = (technical_data or {}).get("invalidation_levels") or {}
-            atr_m15 = (technical_data or {}).get("atr_m15") or 0
-            cur_price = (technical_data or {}).get("current_price") or 0
-            
-            invalidation_data = None
-            if inv_levels or atr_m15 or cur_price:
-                invalidation_data = {
-                    "invalidation_levels": inv_levels,
-                    "atr_m15": atr_m15,
-                    "current_price": cur_price
-                }
-            
-            # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
-            htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
+        # v8.6 MUST-HAVE: инвалидация, ATR, текущая цена — для жёсткой валидации SL и R:R
+        inv_levels = (technical_data or {}).get("invalidation_levels") or {}
+        atr_m15 = (technical_data or {}).get("atr_m15") or 0
+        cur_price = (technical_data or {}).get("current_price") or 0
+        
+        invalidation_data = None
+        if inv_levels or atr_m15 or cur_price:
+            invalidation_data = {
+                "invalidation_levels": inv_levels,
+                "atr_m15": atr_m15,
+                "current_price": cur_price
+            }
+        
+        # HTF контекст (H4, H1) для Step 1 — макро-тренд и зоны (если передан охотником)
+        htf_context = technical_data.get("htf_context") if isinstance(technical_data, dict) else None
 
-            # Формируем текстовый промпт через общую функцию (секция visual — только при наличии картинок)
-            user_prompt_text = _build_common_prompt_section(
-                current_time_utc=time_str,
-                session_info=session_info,
-                news_data=news_data,
-                computed_levels=computed_levels,
-                technical_data=technical_data,
-                balance=balance,
-                daily_loss_limit=daily_loss_limit,
-                risk_percent=risk_percent,
-                language=language,
-                user_idea=user_idea,
-                manual_entry=manual_entry,
-                manual_sl=manual_sl,
-                manual_tp=manual_tp,
-                include_visual_section=bool(chart_images),
-                invalidation_data=invalidation_data,
-                htf_context=htf_context
-            )
-            
-            # Добавляем специфичный task для Gemini с учётом invalidation и HTF
-            task_addition = """
+        # Формируем текстовый промпт через общую функцию (секция visual — только при наличии картинок)
+        user_prompt_text = _build_common_prompt_section(
+            current_time_utc=time_str,
+            session_info=session_info,
+            news_data=news_data,
+            computed_levels=computed_levels,
+            technical_data=technical_data,
+            balance=balance,
+            daily_loss_limit=daily_loss_limit,
+            risk_percent=risk_percent,
+            language=language,
+            user_idea=user_idea,
+            manual_entry=manual_entry,
+            manual_sl=manual_sl,
+            manual_tp=manual_tp,
+            include_visual_section=bool(chart_images),
+            invalidation_data=invalidation_data,
+            htf_context=htf_context
+        )
+        
+        # Добавляем специфичный task для Gemini с учётом invalidation и HTF
+        task_addition = """
 <task>
 1. If <htf_context> is present: use it for Step 1 (HTF Bias). Align M15 setup with H4/H1 trend and zone.
 2. Synthesize the News, Data, and Technical Analysis (M15 + HTF).
@@ -1294,29 +1294,29 @@ class LLMService:
 6. Output the STRICT JSON decision with the required fields.
 </task>
 """
-            # Заменяем стандартный <task> на расширенную версию
-            if "<task>" in user_prompt_text:
-                start = user_prompt_text.find("<task>")
-                end = user_prompt_text.find("</task>") + len("</task>")
-                user_prompt_text = user_prompt_text[:start] + task_addition + user_prompt_text[end:]
+        # Заменяем стандартный <task> на расширенную версию
+        if "<task>" in user_prompt_text:
+            start = user_prompt_text.find("<task>")
+            end = user_prompt_text.find("</task>") + len("</task>")
+            user_prompt_text = user_prompt_text[:start] + task_addition + user_prompt_text[end:]
 
-            # Формируем полный промпт (системный + пользовательский)
-            full_prompt = self.SYSTEM_PROMPT + "\n\n" + user_prompt_text
-            
+        # Формируем полный промпт (системный + пользовательский)
+        full_prompt = self.SYSTEM_PROMPT + "\n\n" + user_prompt_text
+
+        # Собираем части запроса (текст + опциональные картинки)
+        parts = [{"text": full_prompt}]
+        if chart_images:
+            for _key, b64 in chart_images.items():
+                if b64:
+                    parts.append({"inline_data": {"mime_type": "image/png", "data": b64}})
+
+        def _call_gemini() -> Dict[str, Any]:
+            """Внутренняя функция вызова прямого Gemini API."""
             logger.info(f"Sending request to Gemini (model: {self.GEMINI_MODEL})")
-            
-            # Запрос к Gemini API
+
             url = f"{self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
-            
-            # Логируем URL (без ключа)
             logger.debug(f"Gemini API URL: {self.GEMINI_API_URL}/{self.GEMINI_MODEL}:generateContent")
-            
-            parts = [{"text": full_prompt}]
-            if chart_images:
-                for _key, b64 in chart_images.items():
-                    if b64:
-                        parts.append({"inline_data": {"mime_type": "image/png", "data": b64}})
-                logger.info(f"Attached {len([p for p in parts if p.get('inline_data')])} chart image(s) to Gemini request")
+
             payload = {
                 "contents": [{"parts": parts}],
                 "generationConfig": {
@@ -1325,88 +1325,171 @@ class LLMService:
                 }
             }
             logger.info(f"Payload size: {len(full_prompt)} characters")
-            
-            # Логируем IP адрес перед запросом
+
             current_ip = get_current_ip()
             if current_ip:
                 logger.info(f"Current external IP: {current_ip}")
-            
-            logger.info(f"Sending request to Gemini API (model: {self.GEMINI_MODEL})")
-            logger.debug(f"Request URL: {url}")
-            
+
             response = requests.post(
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=120  # Увеличено до 120 секунд для VPN окружения
+                timeout=120,  # Увеличено до 120 секунд для VPN окружения
             )
-            
+
             if response.status_code == 429:
                 logger.warning("Gemini API rate limit exceeded")
                 return {"error": "Gemini API rate limit exceeded", "status": 429}
-            
+
             if response.status_code != 200:
                 logger.error(f"Gemini API error: {response.status_code}")
                 try:
                     error_details = response.json()
                     logger.error(f"Gemini Error Details: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
-                except:
+                except Exception:
                     logger.error(f"Gemini Error Raw Body: {response.text}")
-                
-                return {"error": f"Gemini API error: {response.status_code}", "status": response.status_code, "details": response.text}
-            
+                return {
+                    "error": f"Gemini API error: {response.status_code}",
+                    "status": response.status_code,
+                    "details": response.text,
+                }
+
             result = response.json()
-            
             logger.info("Successfully received response from Gemini")
-            
-            # Извлекаем ответ модели
-            if result.get('candidates') and result['candidates'][0].get('content'):
-                assistant_message = result['candidates'][0]['content']['parts'][0]['text']
-                
-                # Логируем длину ответа
+
+            if result.get("candidates") and result["candidates"][0].get("content"):
+                assistant_message = result["candidates"][0]["content"]["parts"][0]["text"]
                 logger.info(f"Response received: {len(assistant_message)} characters")
-                
-                # Пытаемся распарсить JSON из ответа
                 parsed_json = parse_json_response(assistant_message)
-                
                 response_data = {
                     "success": True,
                     "model": self.GEMINI_MODEL,
                     "session_info": session_info,
                     "timestamp": time_str,
                     "response": assistant_message,
-                    "usage": result.get('usageMetadata', {}),
-                    "raw_response": result
+                    "usage": result.get("usageMetadata", {}),
+                    "raw_response": result,
                 }
-                
-                # Добавляем распарсенный JSON если удалось
                 if parsed_json:
                     response_data["parsed_decision"] = parsed_json
                     logger.info("✓ Successfully parsed JSON from Gemini response")
                     logger.debug(f"Parsed decision: {json.dumps(parsed_json, indent=2, ensure_ascii=False)}")
                 else:
                     logger.warning("⚠ Failed to parse JSON from Gemini response - returning raw text")
-                
                 return response_data
-            else:
-                logger.error("Invalid Gemini API response structure")
-                return {"error": "Invalid Gemini API response structure"}
-        
+
+            logger.error("Invalid Gemini API response structure")
+            return {"error": "Invalid Gemini API response structure"}
+
+        def _call_openrouter_fallback() -> Dict[str, Any]:
+            """Fallback: вызов OpenRouter с моделью Gemini 2.0 Flash при ошибке Gemini."""
+            openrouter_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY".lower())
+            if not openrouter_key:
+                logger.warning("⚠️ OpenRouter fallback requested but OPENROUTER_API_KEY is not configured")
+                return {"error": "OpenRouter API key not configured"}
+
+            logger.warning("⚠️ Gemini 503/timeout — переключаемся на OpenRouter Gemini 2.0 Flash")
+
+            # Собираем контент в формате OpenRouter (OpenAI-совместимый)
+            content = [{"type": "text", "text": full_prompt}]
+            if chart_images:
+                for _key, b64 in chart_images.items():
+                    if b64:
+                        content.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{b64}",
+                                },
+                            }
+                        )
+
+            payload = {
+                "model": "google/gemini-2.0-flash-001",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+                "max_tokens": 4000,
+            }
+
+            try:
+                response = requests.post(
+                    self.OPENROUTER_API_URL,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {openrouter_key}",
+                    },
+                    timeout=120,
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                if result.get("choices"):
+                    assistant_message = result["choices"][0]["message"]["content"]
+                    logger.info("✅ OpenRouter fallback успешен")
+                    parsed_json = parse_json_response(assistant_message)
+                    data = {
+                        "success": True,
+                        "model": "google/gemini-2.0-flash-001",
+                        "session_info": session_info,
+                        "timestamp": time_str,
+                        "response": assistant_message,
+                        "usage": result.get("usage", {}),
+                        "raw_response": result,
+                    }
+                    if parsed_json:
+                        data["parsed_decision"] = parsed_json
+                    return data
+
+                logger.error("Invalid OpenRouter fallback response structure")
+                return {"error": "Invalid OpenRouter fallback response"}
+            except Exception as e:
+                logger.error(f"❌ OpenRouter fallback тоже упал: {e}")
+                return {
+                    "error": "OpenRouter fallback failed",
+                    "details": str(e),
+                }
+
+        # Основной вызов Gemini с обработкой ошибок и fallback
+        try:
+            primary_result = _call_gemini()
         except requests.exceptions.Timeout:
             logger.error("Gemini API timeout")
-            return {"error": "Gemini API timeout", "status": 504}
+            primary_result = {"error": "Gemini API timeout", "status": 504}
         except requests.exceptions.RequestException as e:
             logger.error(f"Request error: {str(e)}")
-            return {
+            primary_result = {
                 "error": "Failed to connect to Gemini",
-                "details": str(e)
+                "details": str(e),
             }
         except Exception as e:
             logger.error(f"Error in _analyze_with_gemini: {str(e)}", exc_info=True)
-            return {
+            primary_result = {
                 "error": "Internal error during Gemini analysis",
-                "details": str(e)
+                "details": str(e),
             }
+
+        status_code = primary_result.get("status")
+        error_text = str(primary_result.get("error", "")).lower()
+
+        should_fallback = (
+            status_code == 503
+            or "503" in error_text
+            or "timeout" in error_text
+        )
+
+        if should_fallback:
+            fallback_result = _call_openrouter_fallback()
+            if fallback_result.get("success"):
+                return fallback_result
+            # Если fallback тоже упал — возвращаем исходную ошибку Gemini/OpenRouter
+            return fallback_result
+
+        return primary_result
     
     def _analyze_with_gateway(
         self,

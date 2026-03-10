@@ -3424,6 +3424,24 @@ def run_analysis_cycle():
         logger.info(f"📋 Model completeness: {present}/{total} elements present")
     
     # Task 7 & 8: Cooldown after SL and trade limits (before confirming signal)
+    # Определяем, какая модель LLM использовалась (для логов/TG)
+    # llm_service возвращает в результате поле "model" (например, gemini-3-flash-preview или google/gemini-2.0-flash-001)
+    model_used = None
+    try:
+        if isinstance(ai_response, dict):
+            model_used = ai_response.get("model")
+    except Exception:
+        model_used = None
+    model_used = model_used or ""
+    try:
+        lower_model = str(model_used).lower()
+        if "gemini-2.0-flash-001" in model_used or "openrouter" in lower_model:
+            model_label = "💰 Платный (OpenRouter Gemini 2.0 Flash)"
+        else:
+            model_label = "🆓 Бесплатный (Gemini Flash)"
+    except Exception:
+        model_label = "🆓 Бесплатный (Gemini Flash)"
+
     if is_confirmed:
         logger.info(f"🔍 Task 7: Проверка кулдауна после SL для {llm_action}...")
         structure_breaks = (analysis.get('all_swing_choch') or []) + (analysis.get('all_swing_bos') or [])
@@ -3558,7 +3576,11 @@ def run_analysis_cycle():
             logger.info(f"📤 Сигнал отправлен {len(user_ids)} пользователям (в т.ч. Signal Bot)")
         
         status_data['status'] = 'signal_sent'
-        status_data['reason'] = f'{mode_text} Gemini подтвердил {llm_action}!\n' + '\n'.join(impulse_reasons)
+        status_data['reason'] = (
+            f'{mode_text} Gemini подтвердил {llm_action}!\n'
+            f'🤖 LLM: {model_label}\n' +
+            '\n'.join(impulse_reasons)
+        )
         status_data['llm_verdict'] = ai_response
         atr_m15_val = analysis_light.get('atr_m15') or 0
         status_data['atr_m15'] = atr_m15_val
@@ -3596,7 +3618,11 @@ def run_analysis_cycle():
             logger.info(f"📤 WAIT сигнал отправлен {len(user_ids)} пользователям")
         
         status_data['status'] = 'wait_decision' if not low_conf_override else 'low_confidence_wait'
-        status_data['reason'] = wait_reason + '\n' + '\n'.join(impulse_reasons)
+        status_data['reason'] = (
+            wait_reason + '\n'
+            f'🤖 LLM: {model_label}\n' +
+            '\n'.join(impulse_reasons)
+        )
         status_data['llm_verdict'] = ai_response
         status_data['confidence'] = verdict['confidence']
         if low_conf_override:
