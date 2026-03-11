@@ -903,7 +903,7 @@ def increment_trade_counter(direction):
     logger.info(f"📊 Trade counter: {_trades_today['count']}/3 today | {direction}: {by_dir}/2 this session")
 
 
-def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5):
+def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5, is_range_breakout=False):
     """
     v8.6 MUST-HAVE: пост-валидация вердикта LLM.
     - R:R >= min_rr иначе WAIT.
@@ -975,10 +975,12 @@ def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min
         return 'WAIT', entry_f, sl_f, tp_f, f'R:R={rr:.2f} по {tp_used} < {min_rr} (минимальный порог). Риск/прибыль недопустимы.'
     
     # Инвалидация: BUY — SL должен быть на или ниже invalidation_buy; SELL — SL на или выше invalidation_sell
-    if action == 'BUY' and inv_buy is not None and sl_f > inv_buy + 0.5:
-        return 'WAIT', entry_f, sl_f, tp_f, f'SL для BUY ({sl_f:.2f}) выше уровня инвалидации ({inv_buy:.2f}). Стоп должен быть за структурой.'
-    if action == 'SELL' and inv_sell is not None and sl_f < inv_sell - 0.5:
-        return 'WAIT', entry_f, sl_f, tp_f, f'SL для SELL ({sl_f:.2f}) ниже уровня инвалидации ({inv_sell:.2f}). Стоп должен быть за структурой.'
+    # Исключение: режим Range Breakout — SL ставится от границы диапазона, а не по OB/FVG invalidation.
+    if not is_range_breakout:
+        if action == 'BUY' and inv_buy is not None and sl_f > inv_buy + 0.5:
+            return 'WAIT', entry_f, sl_f, tp_f, f'SL для BUY ({sl_f:.2f}) выше уровня инвалидации ({inv_buy:.2f}). Стоп должен быть за структурой.'
+        if action == 'SELL' and inv_sell is not None and sl_f < inv_sell - 0.5:
+            return 'WAIT', entry_f, sl_f, tp_f, f'SL для SELL ({sl_f:.2f}) ниже уровня инвалидации ({inv_sell:.2f}). Стоп должен быть за структурой.'
     
     # Confluence: если любой false — WAIT
     # ltf_trigger_confirmed исключён — покрывается fact_check_llm() через штраф к confidence
@@ -3345,8 +3347,10 @@ def run_analysis_cycle():
 
     # v8.6 MUST-HAVE: пост-валидация R:R, инвалидации SL, confluence, entry (Уровень 3)
     invalidation_levels = (analysis_light.get('invalidation_levels') or {})
+    is_range_breakout = status_data.get('is_range_breakout_confirmed', False)
     strict_action, strict_entry, strict_sl, strict_tp, strict_reason = validate_llm_verdict_strict(
-        verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5
+        verdict, current_price, invalidation_levels, min_rr=1.2, entry_tolerance_pct=0.5,
+        is_range_breakout=is_range_breakout
     )
     
     # 🔍 DEBUG: Логируем что было ДО валидации
