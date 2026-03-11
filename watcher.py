@@ -102,6 +102,9 @@ _entry_filled_notification_sent = set()
 
 # Range Manager: в прошлом цикле подтвердили пробой активного диапазона — не воскрешать старый диапазон (Проблема 4)
 _breakout_confirmed_previous_cycle = False
+# Range Manager: в прошлом цикле ждали вторую/третью свечу подтверждения пробоя — восстановить тот же диапазон (Проблема 5)
+_breakout_wait_previous_cycle = False  # ждём вторую свечу подтверждения пробоя
+_breakout_wait_range = None  # снимок диапазона, по которому ждём подтверждения
 
 # Task 7: Cooldown after stop loss (prevent cascade entries). 30 min для BUY/SELL после закрытия по SL.
 _last_stop_loss_time = {}
@@ -1568,7 +1571,7 @@ def run_analysis_cycle():
     - Проверка confirmed=True в каждом сигнале
     - Защита от wick breaks
     """
-    global _breakout_confirmed_previous_cycle
+    global _breakout_confirmed_previous_cycle, _breakout_wait_previous_cycle, _breakout_wait_range
     logger.info("📡 [TRIGGER] Цикл анализа v8.0 запущен")
     
     # ========================================================================
@@ -2105,6 +2108,17 @@ def run_analysis_cycle():
 
     skip_range_creation_this_cycle = False  # Проблема 4: после подтверждённого пробоя один цикл не создаём новый диапазон
     if not active_range:
+        # Проблема 5: в прошлом цикле ждали вторую свечу подтверждения пробоя — восстановить тот же диапазон
+        if _breakout_wait_previous_cycle and _breakout_wait_range:
+            _breakout_wait_previous_cycle = False
+            saved_range = _breakout_wait_range
+            _breakout_wait_range = None
+            active_range = dict(saved_range)
+            active_range['is_active'] = True
+            logger.info(
+                f"↩️ Восстановлен диапазон ожидания пробоя: "
+                f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
+            )
         # Проблема 4: только что подтвердили пробой — не воскрешать старый диапазон, не создавать новый; дать приоритет вызову LLM
         if _breakout_confirmed_previous_cycle:
             _breakout_confirmed_previous_cycle = False
@@ -2115,7 +2129,7 @@ def run_analysis_cycle():
             except Exception:
                 pass
             logger.info("✅ Пробой активного диапазона подтверждён — старые диапазоны игнорируются")
-        else:
+        elif not active_range:
             # Воскрешение старых диапазонов: только если две последние закрытые свечи строго внутри [range_low, range_high] (без буфера ATR)
             try:
                 inactive_ranges = db_service.get_recent_inactive_ranges(
@@ -2352,6 +2366,9 @@ def run_analysis_cycle():
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
                     )
                     send_debug_notification(status_data)
+                    # Запоминаем диапазон, по которому ждём вторую свечу подтверждения пробоя (Problem 5)
+                    _breakout_wait_previous_cycle = True
+                    _breakout_wait_range = dict(active_range)
                     return
 
                 elif both_below or both_above:
@@ -2664,6 +2681,9 @@ def run_analysis_cycle():
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
                     )
                     send_debug_notification(status_data)
+                    # Запоминаем диапазон, по которому ждём вторую свечу подтверждения пробоя (Problem 5)
+                    _breakout_wait_previous_cycle = True
+                    _breakout_wait_range = dict(active_range)
                     return
 
                 # Цена внутри диапазона (не первый пробой)
