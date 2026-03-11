@@ -2373,10 +2373,11 @@ def run_analysis_cycle():
                         # Не доджи — полноценный пробой, идём дальше к LLM.
                         price_was_inside = True  # переопределяем чтобы не попасть в skip
                 else:
-                    # Обе внутри — обычный range_no_touch.
-                    status_data['status'] = 'range_no_touch'
+                    # Обе внутри — показываем как «Цена внутри диапазона (нет пробоя)».
+                    status_data['status'] = 'range_internal'
                     status_data['reason'] = (
-                        f'Ручной диапазон [{range_low:.3f} - {range_high:.3f}]: цена внутри, ждём пробоя'
+                        f'Цена внутри локального диапазона [{range_low:.3f} - {range_high:.3f}]. '
+                        f'Нет закрепления за границей.'
                     )
                     send_debug_notification(status_data)
                     return
