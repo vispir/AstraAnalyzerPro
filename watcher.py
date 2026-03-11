@@ -1202,6 +1202,7 @@ def format_debug_report(status_data):
         'range_no_touch': '⚠️',
         'range_rejection_doji': '🕯️',
         'range_rejection_overheated': '🌡️',
+        'range_rejection_weak': '⚠️',
         'range_rejection_confirmed': '↩️',
         'range_rejection_trigger': '↩️',
         'htf_filter_blocked': '🚫',
@@ -1248,6 +1249,7 @@ def format_debug_report(status_data):
         'htf_filter_blocked': '🚫 Range сигнал заблокирован (против H4 тренда)',
         'range_rejection_doji': '🕯️ Range Rejection: доджи',
         'range_rejection_overheated': '🌡️ Range Rejection: перегрев',
+        'range_rejection_weak': '⚠️ Range Rejection: слабое закрытие (слишком близко к границе)',
         'range_rejection_confirmed': '↩️ Range Rejection подтверждён',
         'range_rejection_trigger': '↩️ RANGE REJECTION: Отбой от границы диапазона — вызов LLM',
     }
@@ -2421,11 +2423,11 @@ def run_analysis_cycle():
             rejection_sell = approach_sell and two_closes_sell
             rejection_buy = approach_buy and two_closes_buy
             if rejection_sell:
-                if current_price <= range_low - 1.5 * atr_m15:
+                if current_price <= range_low - 1.8 * atr_m15:
                     status_data['status'] = 'range_rejection_overheated'
                     status_data['reason'] = (
                         f"Range Rejection: цена слишком далеко от range_low "
-                        f"({current_price:.2f} <= {range_low - 1.5 * atr_m15:.2f})"
+                        f"({current_price:.2f} <= {range_low - 1.8 * atr_m15:.2f})"
                     )
                     send_debug_notification(status_data)
                     return
@@ -2435,6 +2437,16 @@ def run_analysis_cycle():
                 if candle_body < body_threshold:
                     status_data['status'] = 'range_rejection_doji'
                     status_data['reason'] = f"Range Rejection: свеча подтверждения — доджи (тело {candle_body:.2f} < {body_threshold:.2f})"
+                    send_debug_notification(status_data)
+                    return
+                # Подтверждающая свеча должна закрыться минимум на 0.25×ATR ниже границы
+                min_close_distance = 0.25 * atr_m15
+                if signal_close > range_low - min_close_distance:
+                    status_data['status'] = 'range_rejection_weak'
+                    status_data['reason'] = (
+                        f'Range Rejection SELL: свеча закрылась слишком близко к границе '
+                        f'(close={signal_close:.3f}, нужно < {range_low - min_close_distance:.3f})'
+                    )
                     send_debug_notification(status_data)
                     return
                 status_data['is_range_rejection_confirmed'] = True
@@ -2443,11 +2455,11 @@ def run_analysis_cycle():
                 is_near = True
                 logger.info(f"↩️ Range Rejection подтверждён: SELL от уровня {range_low}")
             elif rejection_buy:
-                if current_price >= range_high + 1.5 * atr_m15:
+                if current_price >= range_high + 1.8 * atr_m15:
                     status_data['status'] = 'range_rejection_overheated'
                     status_data['reason'] = (
                         f"Range Rejection: цена слишком далеко от range_high "
-                        f"({current_price:.2f} >= {range_high + 1.5 * atr_m15:.2f})"
+                        f"({current_price:.2f} >= {range_high + 1.8 * atr_m15:.2f})"
                     )
                     send_debug_notification(status_data)
                     return
@@ -2457,6 +2469,16 @@ def run_analysis_cycle():
                 if candle_body < body_threshold:
                     status_data['status'] = 'range_rejection_doji'
                     status_data['reason'] = f"Range Rejection: свеча подтверждения — доджи (тело {candle_body:.2f} < {body_threshold:.2f})"
+                    send_debug_notification(status_data)
+                    return
+                # Подтверждающая свеча должна закрыться минимум на 0.25×ATR выше границы
+                min_close_distance = 0.25 * atr_m15
+                if signal_close < range_high + min_close_distance:
+                    status_data['status'] = 'range_rejection_weak'
+                    status_data['reason'] = (
+                        f'Range Rejection BUY: свеча закрылась слишком близко к границе '
+                        f'(close={signal_close:.3f}, нужно > {range_high + min_close_distance:.3f})'
+                    )
                     send_debug_notification(status_data)
                     return
                 status_data['is_range_rejection_confirmed'] = True
@@ -2492,11 +2514,11 @@ def run_analysis_cycle():
                 atr_m15 = atr_m15_initial or 0.0
                 if atr_m15 > 0:
                     distance = (signal_close - range_high) if breakout_up else (range_low - signal_close)
-                    if distance > 1.5 * atr_m15:
+                    if distance > 1.8 * atr_m15:
                         status_data['status'] = 'range_breakout_overheated'
                         status_data['reason'] = (
                             f"Range Breakout: подтверждение слишком далеко от уровня "
-                            f"({distance:.2f} > 1.5×ATR={1.5 * atr_m15:.2f}) — перегрев, скип"
+                            f"({distance:.2f} > 1.8×ATR={1.8 * atr_m15:.2f}) — перегрев, скип"
                         )
                         logger.warning(f"⚠️ {status_data['reason']}")
                         send_debug_notification(status_data)
