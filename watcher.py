@@ -2264,10 +2264,6 @@ def run_analysis_cycle():
                 status_data['rejection_level'] = range_low
                 status_data['htf_rejection_watch'] = True
                 is_near = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 logger.info(
                     f"↩️ HTF Range Rejection BUY: цена вернулась выше поддержки range_low={range_low:.3f} при H4 UPTREND "
                     f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
@@ -2283,10 +2279,6 @@ def run_analysis_cycle():
                 status_data['rejection_level'] = range_high
                 status_data['htf_rejection_watch'] = True
                 is_near = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 logger.info(
                     f"↩️ HTF Range Rejection SELL: цена вернулась ниже сопротивления range_high={range_high:.3f} при H4 DOWNTREND "
                     f"(watch_level={watch_level:.3f}, current_price={current_price:.3f})"
@@ -2325,19 +2317,79 @@ def run_analysis_cycle():
         breakout_down = (breakout_close < range_low  and signal_close < range_low)
 
         # Проблема 3: пробой валиден только если минимум 2 свечи закрылись внутри диапазона (не «галлюцинация»).
-        # Исключение: ручной диапазон трейдера — он уже задан после факта, candles_inside может быть 0.
+        # Исключение: ручной диапазон — отдельная логика, авто-диапазон остаётся на старых правилах.
         is_manual_range = active_range.get('is_manual', False)
-        price_was_inside = is_manual_range or (active_range.get('candles_inside') or 0) >= 2
+        price_was_inside = (active_range.get('candles_inside') or 0) >= 2
         skip_range_breakout = False
         if not price_was_inside:
-            status_data['status'] = 'range_no_touch'
-            status_data['reason'] = (
-                f'Диапазон [{range_low:.3f} - {range_high:.3f}]: меньше 2 свечей закрылись внутри — пробой невалиден'
-            )
-            logger.warning(
-                f"⚠️ Range пробой пропущен: в диапазоне [{range_low:.3f} - {range_high:.3f}] не закрылись 2 свечи"
-            )
-            skip_range_breakout = True
+            if is_manual_range:
+                # Ручной диапазон — трейдер задал его когда цена уже за границей.
+                # Определяем, что произошло с двумя последними свечами.
+                both_below = breakout_close < range_low and signal_close < range_low
+                both_above = breakout_close > range_high and signal_close > range_high
+                only_signal_below = signal_close < range_low and breakout_close >= range_low
+                only_signal_above = signal_close > range_high and breakout_close <= range_high
+                fakeout_down = breakout_close < range_low and signal_close >= range_low
+                fakeout_up = breakout_close > range_high and signal_close <= range_high
+
+                if fakeout_down or fakeout_up:
+                    direction_txt = 'вниз' if fakeout_down else 'вверх'
+                    status_data['status'] = 'range_no_touch'
+                    status_data['reason'] = f'Ложный пробой {direction_txt} — цена вернулась в диапазон'
+                    logger.info(f"↩️ Ложный пробой {direction_txt} для ручного диапазона")
+                    send_debug_notification(status_data)
+                    return
+
+                elif only_signal_below or only_signal_above:
+                    direction_txt = 'вниз' if only_signal_below else 'вверх'
+                    boundary = range_low if only_signal_below else range_high
+                    db_service.update_range_touch(active_range['id'])
+                    status_data['status'] = 'range_breakout_wait_confirmation'
+                    status_data['reason'] = (
+                        f'⏳ Первый пробой {direction_txt}: граница={boundary:.3f} — ждём закрепления второй свечой'
+                    )
+                    send_debug_notification(status_data)
+                    return
+
+                elif both_below or both_above:
+                    # Обе свечи за границей — считаем как подтверждённый пробой.
+                    # Проверка доджи на второй свече (signal_close).
+                    signal_open = safe_float(signal_c.get('open', signal_c.get('Open', 0)))
+                    candle_body = abs(signal_close - signal_open)
+                    atr_m15 = atr_m15_initial or 0.0
+                    body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
+                    if candle_body < body_threshold:
+                        # Доджи — ждём третью свечу.
+                        db_service.update_range_touch(active_range['id'], doji_pending=True)
+                        active_range['doji_pending'] = True
+                        status_data['status'] = 'range_breakout_doji'
+                        status_data['reason'] = (
+                            f'Range Breakout: вторая свеча — доджи '
+                            f'(тело {candle_body:.2f} < {body_threshold:.2f}) — ждём третью свечу'
+                        )
+                        send_debug_notification(status_data)
+                        return
+                    else:
+                        # Не доджи — полноценный пробой, идём дальше к LLM.
+                        price_was_inside = True  # переопределяем чтобы не попасть в skip
+                else:
+                    # Обе внутри — обычный range_no_touch.
+                    status_data['status'] = 'range_no_touch'
+                    status_data['reason'] = (
+                        f'Ручной диапазон [{range_low:.3f} - {range_high:.3f}]: цена внутри, ждём пробоя'
+                    )
+                    send_debug_notification(status_data)
+                    return
+            else:
+                # Автоматический диапазон — старая логика: требуем 2 свечи внутри.
+                status_data['status'] = 'range_no_touch'
+                status_data['reason'] = (
+                    f'Диапазон [{range_low:.3f} - {range_high:.3f}]: меньше 2 свечей закрылись внутри — пробой невалиден'
+                )
+                logger.warning(
+                    f"⚠️ Range пробой пропущен: в диапазоне [{range_low:.3f} - {range_high:.3f}] не закрылись 2 свечи"
+                )
+                skip_range_breakout = True
 
         # ---------- RANGE REJECTION: отбой от границы снаружи (цена не жила внутри) ----------
         if range_just_created:
@@ -2387,10 +2439,6 @@ def run_analysis_cycle():
                 status_data['rejection_direction'] = 'SELL'
                 status_data['rejection_level'] = range_low
                 is_near = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 logger.info(f"↩️ Range Rejection подтверждён: SELL от уровня {range_low}")
             elif rejection_buy:
                 if current_price >= range_high + 1.5 * atr_m15:
@@ -2413,10 +2461,6 @@ def run_analysis_cycle():
                 status_data['rejection_direction'] = 'BUY'
                 status_data['rejection_level'] = range_high
                 is_near = True
-                try:
-                    db_service.deactivate_manual_ranges(symbol=RANGE_SYMBOL)
-                except Exception:
-                    pass
                 logger.info(f"↩️ Range Rejection подтверждён: BUY от уровня {range_high}")
     
         if not skip_range_breakout:
@@ -2858,10 +2902,12 @@ def run_analysis_cycle():
                 'unavailable' in last_reason_lower
             )
             
-            # Приоритет Range Breakout / Range Rejection над памятью охотника:
-            # если подтверждён пробой/отбой диапазона — всегда вызывать LLM, не пропуская по hunter_memory_skip.
+            # Приоритет Range Breakout / Range Rejection и доджи-паттернов над памятью охотника:
+            # если подтверждён пробой/отбой диапазона или ждём третью свечу после доджи — всегда вызывать LLM.
             is_range_breakout_confirmed = status_data.get('is_range_breakout_confirmed', False)
             is_range_rejection_confirmed = status_data.get('is_range_rejection_confirmed', False)
+            _active_range_hm = status_data.get('active_range') or {}
+            _doji_pending = bool(_active_range_hm.get('doji_pending', False))
 
             if (
                 last_action == 'WAIT'
@@ -2873,14 +2919,34 @@ def run_analysis_cycle():
                 and (last_trend or '').upper() == (swing_trend or '').upper()
                 and not is_range_breakout_confirmed
                 and not is_range_rejection_confirmed
+                and not _doji_pending
             ):
-                reason = (
-                    f"Рынок мало изменился с последнего WAIT сигнала: "
-                    f"Δprice={price_delta:.2f} (< {price_threshold:.2f}), "
-                    f"zone: {last_zone} → {current_zone}, "
-                    f"trend: {last_trend} → {swing_trend}. "
-                    f"Пропускаем вызов LLM, чтобы не дублировать предыдущий вердикт."
-                )
+                # Если есть активный диапазон и цена внутри него — пишем более понятное сообщение
+                _ar = status_data.get('active_range')
+                if _ar:
+                    _rh = safe_float(_ar.get('range_high'), 0)
+                    _rl = safe_float(_ar.get('range_low'), 0)
+                    if _rl > 0 and _rh > 0 and _rl <= current_price <= _rh:
+                        reason = (
+                            f'Цена внутри локального диапазона [{_rl:.3f} - {_rh:.3f}]. '
+                            f'Ждём пробоя или отбоя от границы.'
+                        )
+                    else:
+                        reason = (
+                            f"Рынок мало изменился с последнего WAIT сигнала: "
+                            f"Δprice={price_delta:.2f} (< {price_threshold:.2f}), "
+                            f"zone: {last_zone} → {current_zone}, "
+                            f"trend: {last_trend} → {swing_trend}. "
+                            f"Пропускаем вызов LLM, чтобы не дублировать предыдущий вердикт."
+                        )
+                else:
+                    reason = (
+                        f"Рынок мало изменился с последнего WAIT сигнала: "
+                        f"Δprice={price_delta:.2f} (< {price_threshold:.2f}), "
+                        f"zone: {last_zone} → {current_zone}, "
+                        f"trend: {last_trend} → {swing_trend}. "
+                        f"Пропускаем вызов LLM, чтобы не дублировать предыдущий вердикт."
+                    )
                 logger.info(f"🧠 Hunter memory: skipping LLM call. {reason}")
                 status_data['status'] = 'hunter_memory_skip'
                 status_data['reason'] = reason
