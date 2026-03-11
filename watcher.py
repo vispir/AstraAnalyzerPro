@@ -2346,7 +2346,8 @@ def run_analysis_cycle():
                     db_service.update_range_touch(active_range['id'])
                     status_data['status'] = 'range_breakout_wait_confirmation'
                     status_data['reason'] = (
-                        f'⏳ Первый пробой {direction_txt}: граница={boundary:.3f} — ждём закрепления второй свечой'
+                        f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
+                        f'граница={boundary:.3f} — ждём закрепления второй свечой'
                     )
                     send_debug_notification(status_data)
                     return
