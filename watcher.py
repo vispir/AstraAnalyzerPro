@@ -1209,6 +1209,7 @@ def format_debug_report(status_data):
         'range_rejection_confirmed': '↩️',
         'range_rejection_trigger': '↩️',
         'htf_filter_blocked': '🚫',
+        'llm_unavailable': '⚠️',
     }
     
     status_texts = {
@@ -1255,6 +1256,7 @@ def format_debug_report(status_data):
         'range_rejection_weak': '⚠️ Range Rejection: слабое закрытие (слишком близко к границе)',
         'range_rejection_confirmed': '↩️ Range Rejection подтверждён',
         'range_rejection_trigger': '↩️ RANGE REJECTION: Отбой от границы диапазона — вызов LLM',
+        'llm_unavailable': '⚠️ LLM таймаут: Gemini и OpenRouter не ответили — сигнал пропущен',
     }
     
     status = status_data.get('status', 'unknown')
@@ -3461,16 +3463,50 @@ def run_analysis_cycle():
     payload_size = len(json.dumps(analysis_light, ensure_ascii=False))
     logger.info(f"📦 Размер payload для LLM: {payload_size:,} символов ({payload_size/1024:.1f} KB)")
     
-    # Вызов Gemini с оптимизированным analysis
-    ai_response = llm_service.get_signal_verdict(analysis_light)
-    
+    # Вызов Gemini с оптимизированным analysis (таймаут 25 с + fallback на OpenRouter в llm_service)
+    try:
+        ai_response = llm_service.get_signal_verdict(analysis_light)
+    except Exception as e:
+        logger.error(f"❌ LLM полностью недоступен: {e}")
+        _rl = status_data.get('local_range_low')
+        _rh = status_data.get('active_range', {}).get('range_high') or status_data.get('local_range_high')
+        range_txt = f"[{_rl} - {_rh}]" if (_rl is not None and _rh is not None) else "—"
+        status_data['status'] = 'llm_unavailable'
+        status_data['reason'] = (
+            f"Gemini и OpenRouter не ответили — сигнал пропущен. "
+            f"Цена: ${current_price:.2f} | Диапазон: {range_txt}"
+        )
+        send_debug_notification(status_data)
+        try:
+            _breakout_confirmed_previous_cycle = False
+        except NameError:
+            pass
+        return
+
+    if ai_response is None:
+        logger.error("❌ LLM полностью недоступен: get_signal_verdict вернул None")
+        _rl = status_data.get('local_range_low')
+        _rh = status_data.get('active_range', {}).get('range_high') if status_data.get('active_range') else status_data.get('local_range_high')
+        range_txt = f"[{_rl} - {_rh}]" if (_rl is not None and _rh is not None) else "—"
+        status_data['status'] = 'llm_unavailable'
+        status_data['reason'] = (
+            f"Gemini и OpenRouter не ответили — сигнал пропущен. "
+            f"Цена: ${current_price:.2f} | Диапазон: {range_txt}"
+        )
+        send_debug_notification(status_data)
+        try:
+            _breakout_confirmed_previous_cycle = False
+        except NameError:
+            pass
+        return
+
     # Извлекаем model и текст если ai_response — словарь (успешный вызов с указанием модели)
     if isinstance(ai_response, dict):
         _model_from_response = ai_response.get("model", "")
         ai_response = ai_response.get("response", "")
     else:
         _model_from_response = ""
-    
+
     # Парсим ответ (поддержка ОБОИХ форматов через extract_llm_verdict)
     parsed_llm = parse_llm_response(ai_response)
     verdict = extract_llm_verdict(parsed_llm)

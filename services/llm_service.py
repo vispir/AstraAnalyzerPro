@@ -1217,7 +1217,7 @@ class LLMService:
                 self.OPENROUTER_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=120  # Увеличено до 120 секунд для VPN окружения
+                timeout=25  # Быстрый таймаут — при зависании не блокируем Render
             )
             
             response.raise_for_status()
@@ -1384,7 +1384,7 @@ class LLMService:
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=120,  # Увеличено до 120 секунд для VPN окружения
+                timeout=25,  # Быстрый таймаут — при зависании переключаемся на OpenRouter
             )
 
             if response.status_code == 429:
@@ -1473,7 +1473,7 @@ class LLMService:
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {openrouter_key}",
                     },
-                    timeout=120,
+                    timeout=25,
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -1630,12 +1630,12 @@ class LLMService:
             logger.info(f"Sending request to AI Gateway ({gateway_url}) with model: {self.GATEWAY_MODEL}")
             logger.debug(f"Request URL: {gateway_url}")
             
-            # Отправляем запрос с увеличенным таймаутом
+            # Отправляем запрос с таймаутом (не блокируем Render)
             response = requests.post(
                 gateway_url,
                 headers=headers,
                 json=payload,
-                timeout=120  # Увеличено до 120 секунд для VPN окружения
+                timeout=25  # Быстрый таймаут — при зависании не блокируем Render
             )
             
             response.raise_for_status()
@@ -1730,39 +1730,14 @@ class LLMService:
                     "response": result.get("response", ""),
                     "model": result.get("model", "")
                 }
-            
-            # Если ошибка — разный текст для отчёта в TG в зависимости от типа ошибки
-            status_code = result.get("status")
-            err_msg = (result.get("error") or "").lower()
-            if status_code == 503 or "503" in str(result.get("error", "")) or "high demand" in err_msg or "unavailable" in err_msg:
-                summary = "Сервисы Gemini перегружены. Ожидаем следующий отчёт (через 15 мин)."
-            elif status_code == 429 or "rate limit" in err_msg:
-                summary = "Исчерпан лимит API. Смените API ключ Gemini на другой."
-            else:
-                summary = "ИИ не смог сформировать четкий вердикт по сигналу."
-            error_response = {
-                "executive_summary": summary,
-                "signal": {"action": "WAIT"},
-                "wait_metadata": {
-                    "trigger_condition": "N/A",
-                    "estimated_wait_time": "N/A",
-                    "wait_reason_code": "NO_SETUP"
-                }
-            }
-            return json.dumps(error_response, ensure_ascii=False)
 
-        except Exception as e:
-            logger.error(f"Error in automated verdict: {e}")
-            error_response = {
-                "executive_summary": f"Ошибка анализа: {str(e)}",
-                "signal": {"action": "WAIT"},
-                "wait_metadata": {
-                    "trigger_condition": "N/A",
-                    "estimated_wait_time": "N/A",
-                    "wait_reason_code": "NO_SETUP"
-                }
-            }
-            return json.dumps(error_response, ensure_ascii=False)
+            # Оба LLM (Gemini и OpenRouter) недоступны — возвращаем None, чтобы watcher отправил уведомление в TG
+            logger.warning("⚠️ Gemini и OpenRouter не дали ответ — возвращаем None")
+            return None
+
+        except (requests.exceptions.Timeout, Exception) as e:
+            logger.warning(f"⚠️ Gemini таймаут/ошибка: {e} — переключаемся на OpenRouter или возвращаем None")
+            return None
 
     def manage_active_trade(
         self,
