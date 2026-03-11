@@ -957,7 +957,7 @@ class DBService:
             logger.error(f"❌ deactivate_manual_ranges: {e}")
             return 0
 
-    def update_range_touch(self, range_id: int, new_candles_inside: Optional[int] = None):
+    def update_range_touch(self, range_id: int, new_candles_inside: Optional[int] = None, doji_pending: Optional[bool] = None):
         """
         Обновляет last_touch_at для диапазона.
         Если передан new_candles_inside (например current+1), обновляет и candles_inside (колонка в Supabase).
@@ -968,6 +968,8 @@ class DBService:
         payload = {"last_touch_at": datetime.now(timezone.utc).isoformat()}
         if new_candles_inside is not None:
             payload["candles_inside"] = new_candles_inside
+        if doji_pending is not None:
+            payload["doji_pending"] = doji_pending
         try:
             response = requests.patch(
                 target_url,
