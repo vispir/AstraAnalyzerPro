@@ -2801,7 +2801,30 @@ def run_analysis_cycle():
     # Локальный флаг: подтверждён ли Range Breakout (двумя свечами) или Range Rejection (отбой от границы)
     is_range_breakout_confirmed = status_data.get('is_range_breakout_confirmed', False)
     is_range_rejection_confirmed = status_data.get('is_range_rejection_confirmed', False)
-    
+
+    # ── GUARD: Диапазон имеет АБСОЛЮТНЫЙ приоритет над Proximity ──────────────────────────────
+    # Если активный диапазон загружен, но пробой/отбой ещё НЕ подтверждён —
+    # OB/FVG/ключевые уровни не должны вызывать LLM в этот цикл.
+    # В нормальном потоке Range-блок уже делает return раньше, но при rollover-свечах
+    # или фантомных данных код может добраться сюда — этот guard подстрахует.
+    if active_range and not is_range_breakout_confirmed and not is_range_rejection_confirmed:
+        _g_rh = safe_float(active_range.get('range_high'), 0)
+        _g_rl = safe_float(active_range.get('range_low'), 0)
+        if _g_rh > 0 and _g_rl > 0:
+            _g_pos = 'внутри' if _g_rl <= current_price <= _g_rh else 'вне'
+            logger.info(
+                f"⏸ RANGE GUARD: диапазон [{_g_rl:.3f} - {_g_rh:.3f}] активен "
+                f"(цена {_g_pos}), пробой не подтверждён — Proximity пропускается."
+            )
+            status_data['status'] = 'range_watching'
+            status_data['reason'] = (
+                f'Локальный диапазон [{_g_rl:.3f} - {_g_rh:.3f}] активен — '
+                f'ждём пробоя или отбоя от границы. '
+                f'PROXIMITY MODE пропущен: диапазон имеет приоритет.'
+            )
+            send_debug_notification(status_data)
+            return
+
     # Близость к структурам OB/FVG или к ключевым уровням (пропускаем при импульсе или confirmed break/rejection)
     # v8.5: триггер LLM также при цене близко к ключевым уровням (Equilibrium, High_250, Low_250, Swing High/Low)
     if (
@@ -3046,6 +3069,15 @@ def run_analysis_cycle():
             _active_range_hm = status_data.get('active_range') or {}
             _doji_pending = bool(_active_range_hm.get('doji_pending', False))
 
+            # Если цена уже вышла за границы активного диапазона — не подавляем LLM памятью охотника:
+            # это потенциальный Range Breakout (пробой формируется), и LLM должен быть вызван.
+            _hm_range_price_outside = False
+            if active_range:
+                _hm_rh = safe_float(active_range.get('range_high'), 0)
+                _hm_rl = safe_float(active_range.get('range_low'), 0)
+                if _hm_rh > 0 and _hm_rl > 0:
+                    _hm_range_price_outside = not (_hm_rl <= current_price <= _hm_rh)
+
             if (
                 last_action == 'WAIT'
                 and not last_was_error_fallback
@@ -3057,6 +3089,7 @@ def run_analysis_cycle():
                 and not is_range_breakout_confirmed
                 and not is_range_rejection_confirmed
                 and not _doji_pending
+                and not _hm_range_price_outside
             ):
                 # Если есть активный диапазон и цена внутри него — пишем более понятное сообщение
                 _ar = status_data.get('active_range')
