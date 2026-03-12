@@ -1206,6 +1206,7 @@ def format_debug_report(status_data):
         'range_breakout_overheated': '🌡️',
         'range_breakout_doji': '🕯️',
         'range_no_touch': '⚠️',
+        'range_fakeout': '↩️',
         'range_rejection_doji': '🕯️',
         'range_rejection_overheated': '🌡️',
         'range_rejection_weak': '⚠️',
@@ -1252,7 +1253,8 @@ def format_debug_report(status_data):
         'range_breakout_no_structure': '⚠️ Range Breakout без BOS/CHoCH — скип',
         'range_breakout_overheated': 'Range Breakout: перегрев — цена слишком далеко от уровня',
         'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы',
-        'range_no_touch': '⚠️ В диапазоне не закрылись 2 свечи — пробой пропущен',
+        'range_no_touch': '⚠️ Диапазон активен — накапливаем свечи внутри (нужно ≥2)',
+        'range_fakeout': '↩️ Ложный пробой — цена вернулась в диапазон',
         'htf_filter_blocked': '🚫 Range сигнал заблокирован (против H4 тренда)',
         'range_rejection_doji': '🕯️ Range Rejection: доджи',
         'range_rejection_overheated': '🌡️ Range Rejection: перегрев',
@@ -2381,7 +2383,7 @@ def run_analysis_cycle():
 
                 if fakeout_down or fakeout_up:
                     direction_txt = 'вниз' if fakeout_down else 'вверх'
-                    status_data['status'] = 'range_no_touch'
+                    status_data['status'] = 'range_fakeout'
                     status_data['reason'] = f'Ложный пробой {direction_txt} — цена вернулась в диапазон'
                     logger.info(f"↩️ Ложный пробой {direction_txt} для ручного диапазона")
                     # Сбрасываем doji_pending — ложный пробой сбивает счётчик,
