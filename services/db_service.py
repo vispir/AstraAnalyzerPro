@@ -1053,10 +1053,17 @@ class DBService:
             logger.warning(f"⚠️ get_recent_inactive_ranges error: {e}")
             return []
 
+        # Причины при которых воскрешение запрещено:
+        # - expired_24h: диапазон устарел
+        # - manual_deactivated: трейдер явно выключил через «Авто режим»
+        # - replaced_by_manual: трейдер заменил своим ручным диапазоном
+        # - replaced_by_breakout старше 24h: пробой давно подтверждён
+        NO_RESURRECT_REASONS = {'expired_24h', 'manual_deactivated', 'replaced_by_manual'}
+
         out = []
         for r in rows:
             reason = r.get('death_reason')
-            if reason == 'expired_24h':
+            if reason in NO_RESURRECT_REASONS:
                 continue
             if reason == 'replaced_by_breakout':
                 updated = r.get('updated_at')
