@@ -282,6 +282,7 @@ def initialize_services():
 
 
 _original_sl_cache: dict = {}  # {signal_id: original_stop_loss} — хранит исходный SL между итерациями мониторинга
+_first_seen_ts: dict = {}      # {signal_id: timestamp} — момент когда монитор впервые увидел сигнал
 
 
 def price_monitor_loop():
@@ -305,8 +306,9 @@ def price_monitor_loop():
             # Получаем последнюю АКТИВНУЮ торговую сделку (BUY/SELL) для XAU_USD
             trade = db_service.get_active_trade(symbol="XAU_USD")
             if not trade:
-                # Сделки нет — очищаем кэш чтобы не накапливать старые записи
+                # Сделки нет — очищаем кэши чтобы не накапливать старые записи
                 _original_sl_cache.clear()
+                _first_seen_ts.clear()
                 time.sleep(5)
                 continue
 
@@ -329,6 +331,13 @@ def price_monitor_loop():
             if signal_id not in _original_sl_cache:
                 _original_sl_cache[signal_id] = stop_loss
             original_stop_loss = _original_sl_cache[signal_id]
+
+            # Запоминаем момент когда монитор ВПЕРВЫЕ увидел этот сигнал.
+            # Используется для "свежести" при рыночной активации — вместо времени создания сигнала,
+            # т.к. анализ (HTF + график + Gemini) занимает 3-5 минут и signal_age уже > 180 сек.
+            is_first_seen = signal_id not in _first_seen_ts
+            if is_first_seen:
+                _first_seen_ts[signal_id] = time.time()
 
             # Получаем текущую цену по S5 из OANDA (нужна для логики и для closed_price при закрытии)
             # Используем секундный таймфрейм S5 для более точного мониторинга
@@ -375,37 +384,40 @@ def price_monitor_loop():
 
             # 1. Проверяем достижение цены входа (активация сделки)
             from datetime import datetime, timezone
-            ENTRY_BUFFER = 0.3  # буфер 0.3 пункта для погрешности цены
+            ENTRY_BUFFER = 0.3   # буфер 0.3 пункта для лимитной активации
+            MARKET_BUFFER = 2.0  # буфер 2.0 пункта для рыночной/первосмотровой активации
 
-            # Время создания сигнала (для определения "рыночной" активации на свежем сигнале)
-            signal_created_at = trade.get("created_at")
-            signal_age_seconds = None
-            if signal_created_at:
-                try:
-                    created_dt = datetime.fromisoformat(str(signal_created_at).replace('Z', '+00:00'))
-                    if created_dt.tzinfo is None:
-                        created_dt = created_dt.replace(tzinfo=timezone.utc)
-                    signal_age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                except Exception:
-                    signal_age_seconds = None
-
-            is_fresh_signal = signal_age_seconds is not None and signal_age_seconds < 180  # моложе 3 минут
+            # "Свежесть" по времени с момента ПЕРВОГО ОБНАРУЖЕНИЯ монитором (не с создания сигнала).
+            # Gemini + график = 3-5 мин задержки, поэтому signal_age был всегда > 180s.
+            # Даём 10 минут с момента первого обнаружения для рыночной активации.
+            time_since_first_seen = time.time() - _first_seen_ts.get(signal_id, time.time())
+            is_fresh_to_monitor = time_since_first_seen < 300  # 5 минут с первого обнаружения (анализ ≤ 2 мин)
 
             crossed_entry = False
             if signal_type == "BUY" and entry_price > 0:
-                # Лимитная активация: цена пришла к entry сверху вниз
+                # Лимитная активация: цена пришла к entry сверху вниз (или уже у entry)
                 crossed_entry_limit = current_price <= entry_price + ENTRY_BUFFER
-                # Рыночная активация: свежий сигнал, цена уже выше entry (рынок ушёл вверх)
-                crossed_entry_market = is_fresh_signal and current_price >= entry_price - ENTRY_BUFFER
+                # Рыночная/первосмотровая активация: цена уже выше entry (рынок ушёл вверх от entry).
+                # При первом обнаружении сигнала активируем сразу если цена в пределах MARKET_BUFFER выше entry.
+                # Это покрывает: LLM выдал entry = текущая цена свечи, монитор видит сигнал через 5+ сек когда цена чуть выше.
+                crossed_entry_market = is_fresh_to_monitor and current_price >= entry_price - MARKET_BUFFER
                 crossed_entry = crossed_entry_limit or crossed_entry_market
             elif signal_type == "SELL" and entry_price > 0:
-                # Лимитная активация: цена пришла к entry снизу вверх
+                # Лимитная активация: цена пришла к entry снизу вверх (или уже у entry)
                 crossed_entry_limit = current_price >= entry_price - ENTRY_BUFFER
-                # Рыночная активация: свежий сигнал, цена уже ниже entry
-                crossed_entry_market = is_fresh_signal and current_price <= entry_price + ENTRY_BUFFER
+                # Рыночная/первосмотровая активация: цена уже ниже entry
+                crossed_entry_market = is_fresh_to_monitor and current_price <= entry_price + MARKET_BUFFER
                 crossed_entry = crossed_entry_limit or crossed_entry_market
+
             if crossed_entry and not entry_notified:
+                logger.info(
+                    f"✅ Price Monitor: entry активирован id={signal_id} {signal_type} "
+                    f"entry={entry_price:.2f} price={current_price:.2f} "
+                    f"first_seen={'да' if is_first_seen else 'нет'} "
+                    f"since_first_seen={time_since_first_seen:.0f}s"
+                )
                 db_service.mark_entry_notified(signal_id)
+                entry_notified = True  # обновляем локально чтобы SL/TP сработал в этой же итерации
                 user_ids_filled = db_service.get_all_active_users()
                 if user_ids_filled:
                     msg_filled = (
@@ -496,7 +508,7 @@ def price_monitor_loop():
                 (signal_type == "SELL" and stop_loss <= entry_price - risk_1r + be_threshold)
             )
             if risk_1r > 0 and in_be_or_trailing and max_trailing_level >= 2:
-                logger.info(f"Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R")
+                logger.debug(f"Трейлинг: R:R={rr_ratio:.2f}, макс уровень={max_trailing_level}R")
                 for n in range(max_trailing_level, 1, -1):
                     if signal_type == "BUY":
                         price_trigger = entry_price + n * risk_1r * (1.0 + TRAILING_MARGIN)
@@ -527,7 +539,13 @@ def price_monitor_loop():
                         stop_loss = sl_level
                         break
 
-            # 3. Проверяем SL / TP для фактического закрытия
+            # 3. Проверяем SL / TP для фактического закрытия.
+            # SL/TP проверяем только если вход был подтверждён (entry_notified=True).
+            # Если entry не достигнут — цена, прошедшая мимо SL, это не исполнение, а гэп.
+            if not entry_notified:
+                time.sleep(5)
+                continue
+
             hit_sl = (
                 (signal_type == "BUY" and current_price <= stop_loss)
                 or (signal_type == "SELL" and current_price >= stop_loss)

@@ -2109,20 +2109,35 @@ def run_analysis_cycle():
                         db_service.deactivate_range(rid, 'new_range_formed')
                         active_range = None
                         status_data['local_range_no_reason'] = 'new_range_formed'
+                        # Сбрасываем overheat-состояние: старый диапазон уже неактуален,
+                        # иначе он перезатрёт новый диапазон на следующем шаге.
+                        _overheat_previous_cycle = False
+                        _overheat_range = None
                         logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
     skip_range_creation_this_cycle = False  # Проблема 4: после подтверждённого пробоя один цикл не создаём новый диапазон
-    # Проблема 5: в прошлом цикле ждали вторую свечу подтверждения пробоя — восстановить тот же диапазон
+    # Проблема 5: в прошлом цикле ждали вторую свечу подтверждения пробоя — восстановить тот же диапазон.
+    # Не восстанавливаем если пользователь установил ручной диапазон (он имеет приоритет).
     if _breakout_wait_previous_cycle and _breakout_wait_range:
         _breakout_wait_previous_cycle = False
         saved_range = _breakout_wait_range
         _breakout_wait_range = None
-        active_range = dict(saved_range)
-        active_range['is_active'] = True
-        logger.info(
-            f"↩️ Восстановлен диапазон ожидания пробоя: "
-            f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
-        )
+        if not manual_range_active:
+            active_range = dict(saved_range)
+            active_range['is_active'] = True
+            logger.info(
+                f"↩️ Восстановлен диапазон ожидания пробоя: "
+                f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
+            )
+        else:
+            logger.info(
+                f"⏭️ Ожидание пробоя отменено: активен ручной диапазон (приоритет над авто)"
+            )
+
+    # Если active_range уже есть из DB (или восстановлен из breakout_wait) — overheat устарел, очищаем.
+    if active_range and _overheat_previous_cycle:
+        _overheat_previous_cycle = False
+        _overheat_range = None
 
     if not active_range:
         # Проблема 6: в прошлом цикле был перегрев — восстановить диапазон и попробовать снова
@@ -2369,6 +2384,13 @@ def run_analysis_cycle():
                     status_data['status'] = 'range_no_touch'
                     status_data['reason'] = f'Ложный пробой {direction_txt} — цена вернулась в диапазон'
                     logger.info(f"↩️ Ложный пробой {direction_txt} для ручного диапазона")
+                    # Сбрасываем doji_pending — ложный пробой сбивает счётчик,
+                    # иначе следующая доджи ошибочно засчитается как вторая подряд.
+                    if active_range.get('doji_pending') and active_range.get('id'):
+                        try:
+                            db_service.update_range_touch(active_range['id'], doji_pending=False)
+                        except Exception:
+                            pass
                     send_debug_notification(status_data)
                     return
 
