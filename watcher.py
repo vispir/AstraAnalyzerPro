@@ -2112,20 +2112,21 @@ def run_analysis_cycle():
                         logger.info("📐 Диапазон деактивирован: новый диапазон сформирован (overlap < 30%)")
 
     skip_range_creation_this_cycle = False  # Проблема 4: после подтверждённого пробоя один цикл не создаём новый диапазон
+    # Проблема 5: в прошлом цикле ждали вторую свечу подтверждения пробоя — восстановить тот же диапазон
+    if _breakout_wait_previous_cycle and _breakout_wait_range:
+        _breakout_wait_previous_cycle = False
+        saved_range = _breakout_wait_range
+        _breakout_wait_range = None
+        active_range = dict(saved_range)
+        active_range['is_active'] = True
+        logger.info(
+            f"↩️ Восстановлен диапазон ожидания пробоя: "
+            f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
+        )
+
     if not active_range:
-        # Проблема 5: в прошлом цикле ждали вторую свечу подтверждения пробоя — восстановить тот же диапазон
-        if _breakout_wait_previous_cycle and _breakout_wait_range:
-            _breakout_wait_previous_cycle = False
-            saved_range = _breakout_wait_range
-            _breakout_wait_range = None
-            active_range = dict(saved_range)
-            active_range['is_active'] = True
-            logger.info(
-                f"↩️ Восстановлен диапазон ожидания пробоя: "
-                f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
-            )
         # Проблема 6: в прошлом цикле был перегрев — восстановить диапазон и попробовать снова
-        elif _overheat_previous_cycle and _overheat_range:
+        if _overheat_previous_cycle and _overheat_range:
             _overheat_previous_cycle = False
             active_range = dict(_overheat_range)
             active_range['is_active'] = True
