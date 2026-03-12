@@ -365,7 +365,8 @@ def is_market_active():
     if weekday == 4 and hour >= 22:
         return False
     
-    if weekday in [0, 1, 2, 3] and hour == 22:
+    # Пн–Чт: технический rollover час 21:00–22:00 UTC (01:00–02:00 UTC+4)
+    if weekday in [0, 1, 2, 3] and hour == 21:
         return False
     
     return True
@@ -1623,8 +1624,8 @@ def run_analysis_cycle():
         weekday = now_utc.weekday()
         hour = now_utc.hour
         
-        if weekday in [0, 1, 2, 3] and hour == 22:
-            reason = '⏸ Rollover час (22:00-23:00 UTC)'
+        if weekday in [0, 1, 2, 3] and hour == 21:
+            reason = '⏸ Rollover час (21:00-22:00 UTC / 01:00-02:00 UTC+4)'
         elif weekday == 5:
             reason = 'Суббота - рынок закрыт'
         elif weekday == 6 and hour < 22:
