@@ -1527,9 +1527,11 @@ class LLMService:
         error_text = str(primary_result.get("error", "")).lower()
 
         should_fallback = (
-            status_code == 503
+            status_code in (503, 429)
             or "503" in error_text
+            or "429" in error_text
             or "timeout" in error_text
+            or "rate limit" in error_text
         )
 
         if should_fallback:

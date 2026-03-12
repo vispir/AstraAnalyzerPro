@@ -3197,9 +3197,9 @@ def run_analysis_cycle():
             is_range_rejection_confirmed = status_data.get('is_range_rejection_confirmed', False)
             if is_range_breakout_confirmed or is_range_rejection_confirmed:
                 # Range-режим имеет приоритет над Swing-фильтром; проверка уже прошла по H4.
+                # НЕ возвращаемся — продолжаем к подготовке данных и вызову LLM.
                 status_data['htf_proximity_check_needed'] = False
                 logger.info("✅ HTF Swing фильтр пропущен: активен режим диапазона (Range Breakout / Rejection).")
-                return
             swing_trend_m15 = (status_data.get('trend') or 'NEUTRAL').upper()
             smc_summary_sw = status_data.get('smc_summary') or {}
             swing_choch_confirmed = (smc_summary_sw.get('swing_choch_confirmed', 0) or 0) > 0
