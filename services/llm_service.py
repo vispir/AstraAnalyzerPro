@@ -211,10 +211,17 @@ JSON:
 </range_breakout_context>
 """
     
-    # Технические данные
+    # Технические данные — chart_images исключаем из текстового дампа:
+    # base64 изображений уже передаётся как inline_data в vision-формате,
+    # дублирование в тексте только тратит токены (400KB+ мусора).
+    if isinstance(technical_data, dict) and 'chart_images' in technical_data:
+        technical_data_for_text = {k: v for k, v in technical_data.items() if k != 'chart_images'}
+    else:
+        technical_data_for_text = technical_data
+
     prompt += f"""
 <raw_technical_data>
-{json.dumps(technical_data, indent=2)}
+{json.dumps(technical_data_for_text, indent=2)}
 </raw_technical_data>
 """
     
@@ -597,23 +604,23 @@ class LLMService:
     "3. SL и TP — см. правила ниже\n"
     "\n"
     "РАСЧЁТ SL (стоп-лосс) — следуй иерархии строго по порядку:\n"
-    "Шаг 1. Определи ширину диапазона: range_width = range_high − range_low (в пунктах).\n"
-    "Шаг 2. Выбери кандидата SL:\n"
-    "  - Если range_width ≤ 1.2×ATR (узкий диапазон):\n"
-    "      BUY: SL_candidate = range_low − 0.3×ATR (за нижнюю границу всего диапазона)\n"
-    "      SELL: SL_candidate = range_high + 0.3×ATR (за верхнюю границу всего диапазона)\n"
-    "  - Если range_width > 1.2×ATR (широкий диапазон):\n"
-    "      BUY: SL_candidate = range_high − 0.3×ATR (за ближнюю пробитую границу)\n"
-    "      SELL: SL_candidate = range_low + 0.3×ATR (за ближнюю пробитую границу)\n"
-    "Шаг 3. Проверь R:R: посчитай risk = |entry − SL_candidate|, TP_needed = entry ± risk × 1.5.\n"
-    "  - Если TP_needed укладывается в 80 пунктов от entry → используй SL_candidate.\n"
-    "  - Если TP_needed > 80 пунктов → переключись на ближнюю границу:\n"
-    "      BUY: SL = range_high − 0.3×ATR\n"
-    "      SELL: SL = range_low + 0.3×ATR\n"
+    "Шаг 1. Определи тип диапазона: поле 'is_narrow' в <range_breakout_context> (True = узкий, False = широкий).\n"
+    "  Ширина: range_width = range_high − range_low; узкий если range_width ≤ 1.2×ATR.\n"
+    "Шаг 2. Используй suggested_sl из <range_breakout_context> как ОСНОВУ — он уже рассчитан по правилу:\n"
+    "  - Узкий диапазон (is_narrow=True):\n"
+    "      BUY: SL за нижнюю границу (range_low − 0.3×ATR)\n"
+    "      SELL: SL за верхнюю границу (range_high + 0.3×ATR)\n"
+    "  - Широкий диапазон (is_narrow=False):\n"
+    "      BUY: SL за пробитую верхнюю (range_high − 0.3×ATR)\n"
+    "      SELL: SL за пробитую нижнюю (range_low + 0.3×ATR)\n"
+    "Шаг 3. Проверь R:R: посчитай risk = |entry − suggested_sl|, TP_needed = entry ± risk × 1.5.\n"
+    "  - Если TP_needed укладывается в 80 пунктов от entry → используй suggested_sl.\n"
+    "  - Если TP_needed > 80 пунктов → для широкого диапазона попробуй ближнюю пробитую границу;\n"
+    "      BUY: SL = range_high − 0.3×ATR; SELL: SL = range_low + 0.3×ATR.\n"
     "Шаг 4. Повторно проверь R:R с новым SL. Если R:R < 1.2 или TP > 80 пунктов → выдай WAIT.\n"
     "- НЕ ставь SL внутри диапазона.\n"
     "- НЕ используй OB/FVG для SL в режиме Range Breakout.\n"
-    "- НЕ ставь SL дальше от границы чем suggested_sl из <range_breakout_context> (если секция есть).\n"
+    "- НЕ ставь SL хуже (дальше от цены), чем suggested_sl из <range_breakout_context>.\n"
     "\n"
     "РАСЧЁТ TP (тейк-профит):\n"
     "- Ищи ближайший реальный уровень в направлении пробоя: Swing High/Low, EQH/EQL, DH/DL, пул ликвидности.\n"
@@ -870,6 +877,10 @@ class LLMService:
     "trade_plan.entry_warning, чтобы описать риск качества входа. НЕ переводить такой сигнал в WAIT только\n"
     "из-за entry_warning, если остальные правила (R:R, invalidation, структура) соблюдены.\n"
     "If any confluence field is false, action MUST be WAIT.\n"
+    "EXCEPTION — Range Breakout / Range Rejection mode: if <range_breakout_context> is present and 'is_confirmed'=true OR 'is_range_rejection'=true, "
+    "the system has already mathematically confirmed the breakout before calling you. "
+    "Set 'ltf_trigger_confirmed' = true unconditionally — the confirmation has already been done by the system. "
+    "Do NOT output WAIT solely because BOS/CHoCH is absent.\n"
     "\n"
     "## For WAIT:\n"
     "```json\n"
