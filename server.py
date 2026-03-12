@@ -87,8 +87,13 @@ def trigger_watcher():
     
     if run_analysis_cycle:
         logger.info("⏰ Cron Trigger: Starting analysis cycle (Watcher)...")
-        # Запускаем анализ в отдельном потоке, чтобы не блокировать HTTP-запрос
-        thread = threading.Thread(target=run_analysis_cycle, daemon=True)
+        # Запускаем анализ в отдельном потоке с безопасной обёрткой, чтобы не уронить процесс при ошибке
+        def run_safe():
+            try:
+                run_analysis_cycle()
+            except Exception as e:
+                logger.error(f"❌ Background watcher error: {e}", exc_info=True)
+        thread = threading.Thread(target=run_safe, daemon=True)
         thread.start()
         return jsonify({"success": True, "message": "Analysis started in background"}), 200
     
