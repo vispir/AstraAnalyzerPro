@@ -1217,7 +1217,7 @@ class LLMService:
                 self.OPENROUTER_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=25  # Быстрый таймаут — при зависании не блокируем Render
+                timeout=12  # Быстрый таймаут — при зависании не блокируем Render
             )
             
             response.raise_for_status()
@@ -1384,7 +1384,7 @@ class LLMService:
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=25,  # Быстрый таймаут — при зависании переключаемся на OpenRouter
+                timeout=15,  # Быстрый таймаут — при зависании переключаемся на OpenRouter
             )
 
             if response.status_code == 429:
@@ -1473,7 +1473,7 @@ class LLMService:
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {openrouter_key}",
                     },
-                    timeout=25,
+                    timeout=12,
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -1635,7 +1635,7 @@ class LLMService:
                 gateway_url,
                 headers=headers,
                 json=payload,
-                timeout=25  # Быстрый таймаут — при зависании не блокируем Render
+                timeout=12  # Быстрый таймаут — при зависании не блокируем Render
             )
             
             response.raise_for_status()

@@ -105,6 +105,9 @@ _breakout_confirmed_previous_cycle = False
 # Range Manager: в прошлом цикле ждали вторую/третью свечу подтверждения пробоя — восстановить тот же диапазон (Проблема 5)
 _breakout_wait_previous_cycle = False  # ждём вторую свечу подтверждения пробоя
 _breakout_wait_range = None  # снимок диапазона, по которому ждём подтверждения
+# Range Manager: в прошлом цикле был перегрев (overheat) — диапазон нужно сохранить для следующего цикла (Проблема 6)
+_overheat_previous_cycle = False  # при перегреве сохраняем диапазон для следующего цикла
+_overheat_range = None  # диапазон, у которого был перегрев
 
 # Task 7: Cooldown after stop loss (prevent cascade entries). 30 min для BUY/SELL после закрытия по SL.
 _last_stop_loss_time = {}
@@ -1573,7 +1576,7 @@ def run_analysis_cycle():
     - Проверка confirmed=True в каждом сигнале
     - Защита от wick breaks
     """
-    global _breakout_confirmed_previous_cycle, _breakout_wait_previous_cycle, _breakout_wait_range
+    global _breakout_confirmed_previous_cycle, _breakout_wait_previous_cycle, _breakout_wait_range, _overheat_previous_cycle, _overheat_range
     logger.info("📡 [TRIGGER] Цикл анализа v8.0 запущен")
     
     # ========================================================================
@@ -2121,6 +2124,16 @@ def run_analysis_cycle():
                 f"↩️ Восстановлен диапазон ожидания пробоя: "
                 f"[{saved_range.get('range_low')} - {saved_range.get('range_high')}]"
             )
+        # Проблема 6: в прошлом цикле был перегрев — восстановить диапазон и попробовать снова
+        elif _overheat_previous_cycle and _overheat_range:
+            _overheat_previous_cycle = False
+            active_range = dict(_overheat_range)
+            active_range['is_active'] = True
+            _overheat_range = None
+            logger.info(
+                f"↩️ Восстановлен диапазон после перегрева: "
+                f"[{active_range.get('range_low')} - {active_range.get('range_high')}]"
+            )
         # Проблема 4: только что подтвердили пробой — не воскрешать старый диапазон, не создавать новый; дать приоритет вызову LLM
         if _breakout_confirmed_previous_cycle:
             _breakout_confirmed_previous_cycle = False
@@ -2442,11 +2455,11 @@ def run_analysis_cycle():
             rejection_sell = approach_sell and two_closes_sell
             rejection_buy = approach_buy and two_closes_buy
             if rejection_sell:
-                if current_price <= range_low - 1.8 * atr_m15:
+                if current_price <= range_low - 2.0 * atr_m15:
                     status_data['status'] = 'range_rejection_overheated'
                     status_data['reason'] = (
                         f"Range Rejection: цена слишком далеко от range_low "
-                        f"({current_price:.2f} <= {range_low - 1.8 * atr_m15:.2f})"
+                        f"({current_price:.2f} <= {range_low - 2.0 * atr_m15:.2f})"
                     )
                     send_debug_notification(status_data)
                     return
@@ -2474,11 +2487,11 @@ def run_analysis_cycle():
                 is_near = True
                 logger.info(f"↩️ Range Rejection подтверждён: SELL от уровня {range_low}")
             elif rejection_buy:
-                if current_price >= range_high + 1.8 * atr_m15:
+                if current_price >= range_high + 2.0 * atr_m15:
                     status_data['status'] = 'range_rejection_overheated'
                     status_data['reason'] = (
                         f"Range Rejection: цена слишком далеко от range_high "
-                        f"({current_price:.2f} >= {range_high + 1.8 * atr_m15:.2f})"
+                        f"({current_price:.2f} >= {range_high + 2.0 * atr_m15:.2f})"
                     )
                     send_debug_notification(status_data)
                     return
@@ -2518,10 +2531,16 @@ def run_analysis_cycle():
                     f"[{range_low:.3f} - {range_high:.3f}], ждём следующей попытки"
                 )
                 status_data['status'] = 'range_internal'
-                status_data['reason'] = (
-                    f'↩️ Ложный пробой {direction_txt} — цена вернулась в диапазон '
-                    f'[{range_low:.3f} - {range_high:.3f}]. Ждём следующей попытки.'
-                )
+                if fakeout_down:
+                    status_data['reason'] = (
+                        f"↩️ Ложный пробой вниз — цена вернулась в диапазон "
+                        f"[{range_low:.3f} - {range_high:.3f}]. Ждём следующей попытки."
+                    )
+                else:
+                    status_data['reason'] = (
+                        f"↩️ Ложный пробой вверх — цена вернулась в диапазон "
+                        f"[{range_low:.3f} - {range_high:.3f}]. Ждём следующей попытки."
+                    )
                 send_debug_notification(status_data)
                 return
 
@@ -2533,14 +2552,17 @@ def run_analysis_cycle():
                 atr_m15 = atr_m15_initial or 0.0
                 if atr_m15 > 0:
                     distance = (signal_close - range_high) if breakout_up else (range_low - signal_close)
-                    if distance > 1.8 * atr_m15:
+                    if distance > 2.0 * atr_m15:
                         status_data['status'] = 'range_breakout_overheated'
                         status_data['reason'] = (
                             f"Range Breakout: подтверждение слишком далеко от уровня "
-                            f"({distance:.2f} > 1.8×ATR={1.8 * atr_m15:.2f}) — перегрев, скип"
+                            f"({distance:.2f} > 2.0×ATR={2.0 * atr_m15:.2f}) — перегрев, скип"
                         )
                         logger.warning(f"⚠️ {status_data['reason']}")
                         send_debug_notification(status_data)
+                        # Запоминаем диапазон, у которого случился перегрев, чтобы восстановить его в следующем цикле
+                        _overheat_previous_cycle = True
+                        _overheat_range = dict(active_range)
                         return
 
                 # ФИЛЬТР 2 — доджи: тело < 25% ATR
