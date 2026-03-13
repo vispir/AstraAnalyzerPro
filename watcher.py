@@ -3345,57 +3345,54 @@ def run_analysis_cycle():
             is_range_rejection_confirmed = status_data.get('is_range_rejection_confirmed', False)
             if is_range_breakout_confirmed or is_range_rejection_confirmed:
                 # Range-режим имеет приоритет над Swing-фильтром; проверка уже прошла по H4.
-                # НЕ возвращаемся — продолжаем к подготовке данных и вызову LLM.
+                # Не применяем Swing (M15) фильтр к Range-сигналам — идём к LLM.
                 status_data['htf_proximity_check_needed'] = False
                 logger.info("✅ HTF Swing фильтр пропущен: активен режим диапазона (Range Breakout / Rejection).")
-            swing_trend_m15 = (status_data.get('trend') or 'NEUTRAL').upper()
-            smc_summary_sw = status_data.get('smc_summary') or {}
-            swing_choch_confirmed = (smc_summary_sw.get('swing_choch_confirmed', 0) or 0) > 0
-            # Направление сигнала:
-            # 1) Range Breakout / Range Rejection (breakout_direction / rejection_direction)
-            # 2) Proximity / Equilibrium сигналы могут передать suggested_direction
-            signal_direction = (
-                status_data.get('breakout_direction')
-                or status_data.get('rejection_direction')
-                or status_data.get('suggested_direction')
-                or ''
-            ).strip().upper()
-            if signal_direction in ('BUY', 'SELL'):
-                if signal_direction == 'BUY' and swing_trend_m15 == 'DOWNTREND':
-                    if not swing_choch_confirmed:
-                        htf_filter_blocked = True
-                        block_reason = (
-                            "HTF фильтр: BUY против Swing DOWNTREND "
-                            "без подтверждённого CHoCH"
-                        )
-                        logger.info(f"🚫 {block_reason}")
-                        status_data['status'] = 'htf_filter_blocked'
-                        status_data['reason'] = block_reason
-                        status_data['is_range_breakout_confirmed'] = False
-                        status_data['is_range_rejection_confirmed'] = False
-                        send_debug_notification(status_data)
-                        return
-                elif signal_direction == 'SELL' and swing_trend_m15 == 'UPTREND':
-                    if not swing_choch_confirmed:
-                        htf_filter_blocked = True
-                        block_reason = (
-                            "HTF фильтр: SELL против Swing UPTREND "
-                            "без подтверждённого CHoCH"
-                        )
-                        logger.info(f"🚫 {block_reason}")
-                        status_data['reason'] = block_reason
-                        status_data['status'] = 'htf_filter_blocked'
-                        status_data['is_range_breakout_confirmed'] = False
-                        status_data['is_range_rejection_confirmed'] = False
-                        send_debug_notification(status_data)
-                        return
             else:
-                # Proximity/Equilibrium: направление явно не задано.
-                # Блокируем только контртрендовые сигналы на уровне LLM-постпроверки.
-                # Здесь НЕ блокируем вызов LLM, а лишь сохраняем контекст HTF для последующей проверки вердикта.
-                status_data['htf_proximity_check_needed'] = True
-                status_data['htf_proximity_trend'] = swing_trend_m15
-                status_data['htf_proximity_choch'] = swing_choch_confirmed
+                # Swing-фильтр только для не-Range триггеров (Proximity, Impulse и т.д.)
+                swing_trend_m15 = (status_data.get('trend') or 'NEUTRAL').upper()
+                smc_summary_sw = status_data.get('smc_summary') or {}
+                swing_choch_confirmed = (smc_summary_sw.get('swing_choch_confirmed', 0) or 0) > 0
+                signal_direction = (
+                    status_data.get('breakout_direction')
+                    or status_data.get('rejection_direction')
+                    or status_data.get('suggested_direction')
+                    or ''
+                ).strip().upper()
+                if signal_direction in ('BUY', 'SELL'):
+                    if signal_direction == 'BUY' and swing_trend_m15 == 'DOWNTREND':
+                        if not swing_choch_confirmed:
+                            htf_filter_blocked = True
+                            block_reason = (
+                                "HTF фильтр: BUY против Swing DOWNTREND "
+                                "без подтверждённого CHoCH"
+                            )
+                            logger.info(f"🚫 {block_reason}")
+                            status_data['status'] = 'htf_filter_blocked'
+                            status_data['reason'] = block_reason
+                            status_data['is_range_breakout_confirmed'] = False
+                            status_data['is_range_rejection_confirmed'] = False
+                            send_debug_notification(status_data)
+                            return
+                    elif signal_direction == 'SELL' and swing_trend_m15 == 'UPTREND':
+                        if not swing_choch_confirmed:
+                            htf_filter_blocked = True
+                            block_reason = (
+                                "HTF фильтр: SELL против Swing UPTREND "
+                                "без подтверждённого CHoCH"
+                            )
+                            logger.info(f"🚫 {block_reason}")
+                            status_data['reason'] = block_reason
+                            status_data['status'] = 'htf_filter_blocked'
+                            status_data['is_range_breakout_confirmed'] = False
+                            status_data['is_range_rejection_confirmed'] = False
+                            send_debug_notification(status_data)
+                            return
+                else:
+                    # Proximity/Equilibrium: направление явно не задано.
+                    status_data['htf_proximity_check_needed'] = True
+                    status_data['htf_proximity_trend'] = swing_trend_m15
+                    status_data['htf_proximity_choch'] = swing_choch_confirmed
 
     # ========================================================================
     # v8.4: Создаем оптимизированную версию analysis для LLM (убираем all_* массивы)
