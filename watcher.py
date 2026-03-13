@@ -1202,10 +1202,11 @@ def format_debug_report(status_data):
         'trade_limit_reached': '🛑',
         'hunter_memory_skip': '🧠',
         'range_internal': '⚪',
-        'range_breakout_wait_confirmation': '⏳',
+        'range_watching': '⚪',
+        'range_breakout_wait_confirmation': '⚪',
         'range_breakout_no_structure': '⚠️',
         'range_breakout_overheated': '🌡️',
-        'range_breakout_doji': '🕯️',
+        'range_breakout_doji': '⚪',
         'range_no_touch': '⚠️',
         'range_fakeout': '↩️',
         'range_rejection_doji': '🕯️',
@@ -1249,11 +1250,12 @@ def format_debug_report(status_data):
         'trade_cancelled_no_fill': 'Manager: Сделка отменена — Entry не достигнут за таймаут',
         'trade_limit_reached': 'Лимит сделок за день (3/3) — анализ не выполняется, вызов LLM пропущен',
         'hunter_memory_skip': 'Цена мало изменилась — вызов LLM пропущен (память охотника)',
-        'range_internal': '⚪ Цена внутри диапазона (нет пробоя)',
-        'range_breakout_wait_confirmation': '⏳ Range Breakout: ждём второй свечи',
+        'range_internal': '⚪ Цена в локальном диапазоне',
+        'range_watching': '⚪ Цена в локальном диапазоне',
+        'range_breakout_wait_confirmation': '⏳ Цена пробила границу диапазона — ждём вторую свечу',
         'range_breakout_no_structure': '⚠️ Range Breakout без BOS/CHoCH — скип',
         'range_breakout_overheated': 'Range Breakout: перегрев — цена слишком далеко от уровня',
-        'range_breakout_doji': 'Range Breakout: доджи — нет подтверждения силы',
+        'range_breakout_doji': '⏳ Вторая свеча — доджи, ждём третью свечу за границей',
         'range_no_touch': '⚠️ Диапазон активен — накапливаем свечи внутри (нужно ≥2)',
         'range_fakeout': '↩️ Ложный пробой — цена вернулась в диапазон',
         'htf_filter_blocked': '🚫 Range сигнал заблокирован (против H4 тренда)',
@@ -1280,7 +1282,27 @@ def format_debug_report(status_data):
             msg += f"└ {escape_html(reason)}\n"
         msg += "\n"
     
-    msg += f"<b>📋 Решение:</b> {escape_html(status_texts.get(status, 'Неизвестно'))}\n\n"
+    # Динамический текст решения для range-статусов
+    _ar_high = status_data.get('local_range_high') or 0
+    _ar_low  = status_data.get('local_range_low')  or 0
+    _b_dir   = status_data.get('breakout_direction', '')
+    _b_bnd   = status_data.get('breakout_boundary') or 0
+    _d_body  = status_data.get('doji_body') or 0
+    _d_thr   = status_data.get('doji_threshold') or 0
+
+    _decision = None
+    if status in ('range_internal', 'range_watching') and _ar_high > 0 and _ar_low > 0:
+        _decision = f'⚪ Цена в локальном диапазоне [{_ar_low:.1f} – {_ar_high:.1f}]'
+    elif status == 'range_breakout_wait_confirmation' and _b_dir:
+        _side = 'верхнюю' if _b_dir == 'вверх' else 'нижнюю'
+        _decision = f'⏳ Цена пробила {_side} границу диапазона — ждём вторую свечу'
+    elif status == 'range_breakout_doji' and _b_dir:
+        _side = 'вверх' if _b_dir == 'вверх' else 'вниз'
+        _bnd_txt = f' ({_b_bnd:.1f})' if _b_bnd > 0 else ''
+        _body_txt = f' — тело {_d_body:.2f} < {_d_thr:.2f}' if _d_body > 0 else ''
+        _decision = f'⏳ Первый пробой {_side}{_bnd_txt}: вторая свеча — доджи{_body_txt}, ждём третью за границей'
+
+    msg += f"<b>📋 Решение:</b> {escape_html(_decision if _decision else status_texts.get(status, 'Неизвестно'))}\n\n"
     
     # v8.5: явно показываем, почему запустился анализ (триггер: OB/FVG или ключевые уровни)
     trigger_parts = []
@@ -2381,6 +2403,7 @@ def run_analysis_cycle():
                     f"восстановлен контекст [{w_range_low:.3f} - {w_range_high:.3f}]"
                 )
 
+    if active_range:
         # Рабочие свечи для анализа диапазона:
         # - breakout_candle: первая свеча потенциального пробоя (полностью закрыта)
         # - signal_candle: вторая свеча (подтверждение / отмена пробоя)
@@ -2445,6 +2468,8 @@ def run_analysis_cycle():
                     boundary = range_low if only_signal_below else range_high
                     db_service.update_range_touch(active_range['id'])
                     status_data['status'] = 'range_breakout_wait_confirmation'
+                    status_data['breakout_direction'] = direction_txt
+                    status_data['breakout_boundary'] = boundary
                     status_data['reason'] = (
                         f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
@@ -2464,12 +2489,18 @@ def run_analysis_cycle():
                     body_threshold = 0.25 * atr_m15 if atr_m15 > 0 else 0.0
                     if candle_body < body_threshold:
                         # Доджи — ждём третью свечу.
+                        _doji_dir_m = 'вверх' if both_above else 'вниз'
+                        _doji_bnd_m = range_high if both_above else range_low
                         db_service.update_range_touch(active_range['id'], doji_pending=True)
                         active_range['doji_pending'] = True
                         status_data['status'] = 'range_breakout_doji'
+                        status_data['breakout_direction'] = _doji_dir_m
+                        status_data['breakout_boundary'] = _doji_bnd_m
+                        status_data['doji_body'] = round(candle_body, 2)
+                        status_data['doji_threshold'] = round(body_threshold, 2)
                         status_data['reason'] = (
-                            f'Range Breakout: вторая свеча — доджи '
-                            f'(тело {candle_body:.2f} < {body_threshold:.2f}) — ждём третью свечу'
+                            f'⏳ Первый пробой {_doji_dir_m} ({_doji_bnd_m:.1f}): вторая свеча — доджи '
+                            f'(тело {candle_body:.2f} < {body_threshold:.2f}) — ждём третью свечу за границей'
                         )
                         send_debug_notification(status_data)
                         return
@@ -2664,12 +2695,18 @@ def run_analysis_cycle():
                 if signal_is_doji and not three_candle_ok:
                     if not doji_pending:
                         # Первая доджи — помечаем pending и ждём третью свечу
+                        _doji_dir_main = 'вверх' if breakout_up else 'вниз'
+                        _doji_bnd_main = range_high if breakout_up else range_low
                         db_service.update_range_touch(active_range['id'], doji_pending=True)
                         active_range['doji_pending'] = True
                         status_data['status'] = 'range_breakout_doji'
+                        status_data['breakout_direction'] = _doji_dir_main
+                        status_data['breakout_boundary'] = _doji_bnd_main
+                        status_data['doji_body'] = round(candle_body, 2)
+                        status_data['doji_threshold'] = round(body_threshold, 2)
                         status_data['reason'] = (
-                            f"Range Breakout: свеча подтверждения — доджи "
-                            f"(тело {candle_body:.2f} < {body_threshold:.2f} пт) — ждём третью свечу за границей"
+                            f'⏳ Первый пробой {_doji_dir_main} ({_doji_bnd_main:.1f}): вторая свеча — доджи '
+                            f'(тело {candle_body:.2f} < {body_threshold:.2f} пт) — ждём третью свечу за границей'
                         )
                         logger.warning(f"⚠️ {status_data['reason']}")
                         send_debug_notification(status_data)
@@ -2769,6 +2806,8 @@ def run_analysis_cycle():
                         f"signal={signal_close:.3f}, граница={boundary:.3f} — ждём второй свечи"
                     )
                     status_data['status'] = 'range_breakout_wait_confirmation'
+                    status_data['breakout_direction'] = direction_txt
+                    status_data['breakout_boundary'] = boundary
                     status_data['reason'] = (
                         f'⏳ Первый пробой {direction_txt}: signal={signal_close:.3f}, '
                         f'граница={boundary:.3f} — ждём закрепления второй свечой'
