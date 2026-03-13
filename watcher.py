@@ -60,6 +60,7 @@ ENTRY_FILL_TIMEOUT_MINUTES = 30
 MANAGER_LLM_COOLDOWN_MINUTES = 5
 # При 1R+5% (цена прошла 1R с запасом) переводим SL с входа (BE) на уровень 1R — гарантированный плюс даже без LLM
 MANAGER_1R_LOCK_MARGIN = 0.05
+TRAILING_MIN_MINUTES = 15
 FRESH_SIGNAL_BARS = 25
 LOOKBACK_BARS = 600  # Увеличено до 600 для правильного Price Discovery (нужно найти пивоты до 331 баров назад)
 EXTREME_DISCOUNT_THRESHOLD = 15.0
@@ -616,7 +617,7 @@ def extract_llm_verdict(parsed):
 
 def validate_stop_loss(entry, sl, atr, tp=None):
     """
-    Мягкий страж SL: только абсолютный минимум $5 (защита от бага LLM).
+    Мягкий страж SL: динамический минимум по ATR (защита от бага LLM).
     Узкий/широкий SL по ATR — только WARNING в лог, не отклонение.
     Главный фильтр плохих сделок — R:R ≥ 1.2 (и 1.5 при широком SL).
 
@@ -638,19 +639,19 @@ def validate_stop_loss(entry, sl, atr, tp=None):
             return True, "SL valid"
         sl_in_atr = round(sl_distance / atr_f, 2)
 
-        MIN_SL_FIXED = 5.0
-        MIN_SL_ATR_MULTIPLIER = 1.0   # мягкий порог (только WARNING если < 1.0×ATR)
+        MIN_SL_ATR_MULTIPLIER = 1.0   # жёсткий минимум: SL не ближе чем 1.0×ATR от entry
         MAX_SL_ATR_MULTIPLIER = 6.0   # мягкий порог (только WARNING если > 6.0×ATR)
         SL_RR_THRESHOLD_ATR = 3.5     # выше этого порога требуем R:R ≥ 1.5
 
-        # Абсолютный минимум $5 (защита от бага LLM)
-        if sl_distance < MIN_SL_FIXED:
-            return False, f"SL too small: ${sl_distance:.2f} < $5.00 (technical error)"
+        # Динамический минимум: SL не может быть ближе чем 1.0×ATR от цены входа
+        min_sl_distance = MIN_SL_ATR_MULTIPLIER * atr_f
+        if sl_distance < min_sl_distance:
+            return False, f"SL too small: distance={sl_distance:.2f} < 1.0×ATR={min_sl_distance:.2f} (technical error)"
 
         # Мягкие пределы ATR (только WARNING, не отклонение)
-        if sl_in_atr < 1.0:
+        if sl_in_atr < MIN_SL_ATR_MULTIPLIER:
             logger.warning(
-                f"⚠️ SL узкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR < 1.0×ATR), но LLM знает что делает"
+                f"⚠️ SL узкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR < {MIN_SL_ATR_MULTIPLIER:.1f}×ATR), но LLM знает что делает"
             )
         if sl_in_atr > MAX_SL_ATR_MULTIPLIER:
             logger.warning(
@@ -4523,7 +4524,21 @@ def run_trade_manager_cycle():
         # После перевода в BE продолжаем менеджмент (вдруг есть LLM-триггеры)
 
     # 3.2b. При 1R+5%: если SL уже в BE, переводим SL на уровень 1R (гарантированный плюс, защита если LLM не сработает)
+    # Не двигаем SL первые TRAILING_MIN_MINUTES минут после активации входа
     if risk_amount > 0 and sl_is_be:
+        entry_triggered_at = trade.get('entry_triggered_at') or trade.get('updated_at') or trade.get('created_at')
+        if entry_triggered_at:
+            try:
+                entry_dt = datetime.fromisoformat(str(entry_triggered_at).replace('Z', '+00:00'))
+                minutes_since_entry = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 60.0
+                if minutes_since_entry < TRAILING_MIN_MINUTES:
+                    logger.info(
+                        f"⏳ Трейлинг SL на 1R пропущен — прошло {minutes_since_entry:.1f} мин "
+                        f"(минимум {TRAILING_MIN_MINUTES} мин)"
+                    )
+                    return
+            except Exception:
+                pass
         at_1r_plus_margin = False
         sl_1r_level = entry_price + risk_amount if signal_type == 'BUY' else entry_price - risk_amount
         if signal_type == 'BUY':
