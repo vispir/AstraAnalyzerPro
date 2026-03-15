@@ -3418,7 +3418,8 @@ def run_analysis_cycle():
             direction_rb = status_data.get('breakout_direction')
             rh = safe_float(active_range_rb.get('range_high'), 0.0)
             rl = safe_float(active_range_rb.get('range_low'), 0.0)
-            buf = 0.3 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
+            # Буфер от границы: 1.0×ATR (как в промпте LLM и validate_stop_loss), чтобы SL не выбивало шумом и проходила валидация
+            buf = 1.0 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
             entry_hint = current_price  # ориентировочный вход — текущая цена при пробое
 
             # SL логика: узкий (≤1.2×ATR) → за противоположную границу; широкий → за пробитую.
@@ -3531,7 +3532,7 @@ def run_analysis_cycle():
             rej_level = status_data.get('rejection_level')
             rh = safe_float(active_range_rj.get('range_high'), 0.0)
             rl = safe_float(active_range_rj.get('range_low'), 0.0)
-            buf = 0.3 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
+            buf = 1.0 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
             entry_hint = current_price
             suggested_sl = None
             if direction_rj == 'BUY' and rej_level is not None:

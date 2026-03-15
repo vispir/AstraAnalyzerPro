@@ -176,8 +176,8 @@ ATR_M15(14): {atr_m15}
 RULES:
 - For BUY: Stop Loss MUST be at or BELOW invalidation_buy (structure invalidation). Otherwise the setup is invalid → WAIT.
 - For SELL: Stop Loss MUST be at or ABOVE invalidation_sell. Otherwise → WAIT.
-- Range Breakout SELL: SL = range_low + 0.3×ATR (just above broken lower range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_sell from OB/FVG, ignore it completely.
-- Range Breakout BUY: SL = range_high - 0.3×ATR (just below broken upper range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_buy from OB/FVG, ignore it completely.
+- Range Breakout SELL: SL = range_low + 1.0×ATR (above broken lower range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_sell from OB/FVG, ignore it completely.
+- Range Breakout BUY: SL = range_high - 1.0×ATR (below broken upper range boundary). For Range Breakout, the range boundary IS the invalidation — do NOT use invalidation_buy from OB/FVG, ignore it completely.
 - SL width should not exceed 2.0 × ATR (unless structure clearly requires it) to keep risk acceptable.
 - Entry: найди ЛОГИЧНУЮ точку входа рядом с CURRENT_PRICE:
   • ретест пробитой границы диапазона (range_high/low), или
@@ -198,7 +198,7 @@ INVALIDATION LEVELS:
 When 'is_confirmed' is true, the system has detected a confirmed Range Breakout and precomputed recommended levels:
 - direction: BUY or SELL (matches breakout_direction)
 - entry_hint: approximate entry near current price at confirmation
-- suggested_sl: Stop Loss placed just beyond the broken range boundary with ~0.3×ATR buffer
+- suggested_sl: Stop Loss placed just beyond the range boundary with 1.0×ATR buffer
 - suggested_tp: Take Profit near the next key level in breakout direction or at least 1.5R from entry_hint
 - suggested_rr: approximate R:R based on entry_hint, suggested_sl and suggested_tp
 
@@ -211,11 +211,11 @@ JSON:
 </range_breakout_context>
 """
     
-    # Технические данные — chart_images исключаем из текстового дампа:
-    # base64 изображений уже передаётся как inline_data в vision-формате,
-    # дублирование в тексте только тратит токены (400KB+ мусора).
-    if isinstance(technical_data, dict) and 'chart_images' in technical_data:
-        technical_data_for_text = {k: v for k, v in technical_data.items() if k != 'chart_images'}
+    # Технические данные — убираем из сырого дампа то, что уже подано отдельными блоками
+    # (chart_images, range_breakout_context, recent_local_ranges), чтобы не дублировать и не путать модель.
+    exclude_from_raw = {'chart_images', 'range_breakout_context', 'recent_local_ranges'}
+    if isinstance(technical_data, dict):
+        technical_data_for_text = {k: v for k, v in technical_data.items() if k not in exclude_from_raw}
     else:
         technical_data_for_text = technical_data
 
@@ -557,10 +557,10 @@ class LLMService:
     "- **Entry**: Current price or limit at OB/FVG\n"
     "- **Stop Loss**: Beyond LOCAL (Internal M15) invalidation structure + $0.50-1.00 buffer\n"
     "  * Use NEAREST Internal OB or FVG for SL — NOT Swing High/Low\n"
-    "  * EXCEPTION — Range Breakout mode: SL = range boundary ± 0.3×ATR (see RANGE BREAKOUT section). Do NOT use OB/FVG for SL in Range Breakout mode.\n"
-    "  * EXCEPTION — Range Rejection mode: SL = range boundary ± 0.3×ATR (see RANGE REJECTION section). Do NOT use OB/FVG for SL in Range Rejection mode.\n"
+    "  * EXCEPTION — Range Breakout mode: SL = range boundary ± 1.0×ATR (see RANGE BREAKOUT section). Do NOT use OB/FVG for SL in Range Breakout mode.\n"
+    "  * EXCEPTION — Range Rejection mode: SL = range boundary ± 1.0×ATR (see RANGE REJECTION section). Do NOT use OB/FVG for SL in Range Rejection mode.\n"
     "  * Keep SL within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
-    "  * SL < 1.0×ATR or SL > 6.0×ATR will trigger WARNING but trade allowed if R:R ≥ 1.5\n"
+    "  * SL distance from entry < 1.0×ATR → REJECT. SL > 6.0×ATR → WARNING but trade allowed if R:R ≥ 1.5\n"
     "  * Typical SL for Gold M15: 1.5-3.0×ATR ($12-24 with ATR=$8)\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5138 (1.5×ATR, 12 points) ✓\n"
     "  * Example CORRECT SL (BUY): entry $5150, nearest BULL OB bottom $5138, ATR $8 → SL = $5134 (2.0×ATR, 16 points) ✓\n"
@@ -650,7 +650,7 @@ class LLMService:
     "НЕ выдавай WAIT. Используй ATR для TP:\n"
     "- BUY: TP = entry + 2.0×ATR\n"
     "- SELL: TP = entry - 2.0×ATR\n"
-    "SL по-прежнему за границей диапазона (range_high - 0.3×ATR для BUY, range_low + 0.3×ATR для SELL).\n"
+    "SL по-прежнему за границей диапазона (range_high − 1.0×ATR для BUY, range_low + 1.0×ATR для SELL).\n"
     "Это даёт адекватный R:R даже без исторических уровней.\n"
     "\n"
     "- При наличии suggested_tp в <range_breakout_context> используй его как базовый таргет и при необходимости скорректируй по структуре.\n"
@@ -695,8 +695,8 @@ class LLMService:
     "3. Confidence: применяй стандартный scoring, но +10 если виден чёткий rejection candle у границы\n"
     "\n"
     "РАСЧЁТ SL (Range Rejection):\n"
-    "- BUY от range_low: SL = range_low − 0.3×ATR (чуть ниже границы)\n"
-    "- SELL от range_high: SL = range_high + 0.3×ATR (чуть выше границы)\n"
+    "- BUY от range_low: SL = range_low − 1.0×ATR (ниже границы)\n"
+    "- SELL от range_high: SL = range_high + 1.0×ATR (выше границы)\n"
     "- НЕ используй OB/FVG для SL в этом режиме\n"
     "\n"
     "РАСЧЁТ TP:\n"
@@ -730,8 +730,8 @@ class LLMService:
     "BUY: range_high = поддержка → цена отбивается вверх\n"
     "\n"
     "SL:\n"
-    "- SELL: range_low + 0.3×ATR\n"
-    "- BUY: range_high - 0.3×ATR\n"
+    "- SELL: range_low + 1.0×ATR\n"
+    "- BUY: range_high - 1.0×ATR\n"
     "\n"
     "TP: ближайший уровень R:R >= 1.5, по телу свечи не по тени.\n"
     "При историческом хай/лоу: TP = entry ± 2.0×ATR\n"
@@ -793,8 +793,7 @@ class LLMService:
     "- Internal-only against swing trend → MAX 50 → WAIT\n"
     "- No identifiable entry model (see Step 2) → MAX 45 → WAIT\n"
     "- SL should be within 1.0–6.0×ATR from entry (Gold M15 typical: $8–48)\n"
-    "- SL < 1.0×ATR or SL > 6.0×ATR → WARNING logged, but trade allowed if R:R ≥ 1.5\n"
-    "- SL < $5.00 → REJECT TRADE → WAIT (technical error protection)\n"
+    "- SL distance from entry < 1.0×ATR → REJECT (technical error). SL > 6.0×ATR → WARNING only, trade allowed if R:R ≥ 1.5\n"
     "\n"
     "# WHEN TO TRADE\n"
     "✅ Clear trend on HTF with LTF entry signal\n"
