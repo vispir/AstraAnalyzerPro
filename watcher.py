@@ -332,6 +332,11 @@ def is_entry_filled(trade, candles_m5):
     BUY: хотя бы одна свеча с low <= entry_price.
     SELL: хотя бы одна свеча с high >= entry_price.
     """
+    # Жёсткая защита от рассинхронизации:
+    # если Price Monitor уже пометил `entry_notified=True`, то таймаут "Entry not reached" менеджером
+    # не должен отменять сделку даже при редких ситуациях, когда is_entry_filled() не находит свечу в окне M5.
+    if trade.get('entry_notified') or trade.get('entry_notified_at'):
+        return True
     entry_price = safe_float(trade.get('entry_price'), 0.0)
     if entry_price <= 0:
         return False
@@ -640,22 +645,19 @@ def validate_stop_loss(entry, sl, atr, tp=None):
         sl_in_atr = round(sl_distance / atr_f, 2)
 
         MIN_SL_ATR_MULTIPLIER = 1.0   # жёсткий минимум: SL не ближе чем 1.0×ATR от entry
-        MAX_SL_ATR_MULTIPLIER = 6.0   # мягкий порог (только WARNING если > 6.0×ATR)
-        SL_RR_THRESHOLD_ATR = 3.5     # выше этого порога требуем R:R ≥ 1.5
+        MAX_SL_ATR_MULTIPLIER = 2.0   # жёсткий максимум: SL не дальше чем 2.0×ATR от entry
+        SL_RR_THRESHOLD_ATR = 2.0     # выше этого порога (почти не должно случаться) требуем R:R ≥ 1.5
 
         # Динамический минимум: SL не может быть ближе чем 1.0×ATR от цены входа
         min_sl_distance = MIN_SL_ATR_MULTIPLIER * atr_f
         if sl_distance < min_sl_distance:
             return False, f"SL too small: distance={sl_distance:.2f} < 1.0×ATR={min_sl_distance:.2f} (technical error)"
 
-        # Мягкие пределы ATR (только WARNING, не отклонение)
-        if sl_in_atr < MIN_SL_ATR_MULTIPLIER:
-            logger.warning(
-                f"⚠️ SL узкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR < {MIN_SL_ATR_MULTIPLIER:.1f}×ATR), но LLM знает что делает"
-            )
+        # Жёсткий максимум по ATR: SL не может быть шире чем 2.0×ATR от цены входа
         if sl_in_atr > MAX_SL_ATR_MULTIPLIER:
-            logger.warning(
-                f"⚠️ SL широкий: ${sl_distance:.2f} ({sl_in_atr:.2f}×ATR > {MAX_SL_ATR_MULTIPLIER}×ATR), но LLM знает что делает"
+            return False, (
+                f"SL too wide: distance={sl_distance:.2f} "
+                f"({sl_in_atr:.2f}×ATR > {MAX_SL_ATR_MULTIPLIER:.1f}×ATR максимум)"
             )
 
         # R:R — главный фильтр (отсечёт плохие сделки)
@@ -2519,14 +2521,47 @@ def run_analysis_cycle():
                     return
             else:
                 # Автоматический диапазон — старая логика: требуем 2 свечи внутри.
-                status_data['status'] = 'range_no_touch'
-                status_data['reason'] = (
-                    f'Диапазон [{range_low:.3f} - {range_high:.3f}]: меньше 2 свечей закрылись внутри — пробой невалиден'
-                )
-                logger.warning(
-                    f"⚠️ Range пробой пропущен: в диапазоне [{range_low:.3f} - {range_high:.3f}] не закрылись 2 свечи"
-                )
-                skip_range_breakout = True
+                both_below = breakout_close < range_low and signal_close < range_low
+                both_above = breakout_close > range_high and signal_close > range_high
+                only_signal_below = signal_close < range_low and breakout_close >= range_low
+                only_signal_above = signal_close > range_high and breakout_close <= range_high
+
+                # NEW: если уже произошёл "первый пробой" (вторая свеча закрылась за границей),
+                # то для авто диапазона тоже переводим в WAIT и сохраняем диапазон на следующий цикл.
+                # Это предотвращает потерю сетапа из-за пересоздания auto-range между 1-й и 2-й свечой подтверждения.
+                if only_signal_below or only_signal_above:
+                    direction_txt = 'вниз' if only_signal_below else 'вверх'
+                    boundary = range_low if only_signal_below else range_high
+                    db_service.update_range_touch(active_range['id'])
+                    status_data['status'] = 'range_breakout_wait_confirmation'
+                    status_data['breakout_direction'] = direction_txt
+                    status_data['breakout_boundary'] = boundary
+                    status_data['reason'] = (
+                        f'⏳ (AUTO) Первый пробой {direction_txt}: signal={signal_close:.3f}, '
+                        f'граница={boundary:.3f} — ждём закрепления второй свечой'
+                    )
+                    send_debug_notification(status_data)
+                    _breakout_wait_previous_cycle = True
+                    _breakout_wait_range = dict(active_range)
+                    return
+
+                # Если две свечи уже за границей — пробой подтвердится стандартной логикой ниже.
+                if both_below or both_above:
+                    logger.info(
+                        f"✅ (AUTO) Range Breakout: обе свечи вне границ [{range_low:.3f} - {range_high:.3f}] "
+                        f"при candles_inside<{2} — разрешаем подтверждение"
+                    )
+                    # skip_range_breakout оставляем False
+                else:
+                    status_data['status'] = 'range_no_touch'
+                    status_data['reason'] = (
+                        f'Диапазон [{range_low:.3f} - {range_high:.3f}]: меньше 2 свечей закрылись внутри — пробой невалиден'
+                    )
+                    logger.warning(
+                        f"⚠️ Range пробой пропущен (AUTO): в диапазоне [{range_low:.3f} - {range_high:.3f}] "
+                        f"не закрылись 2 свечи и нет первого пробоя"
+                    )
+                    skip_range_breakout = True
 
         # ---------- RANGE REJECTION: отбой от границы снаружи (цена не жила внутри) ----------
         if range_just_created:
@@ -3422,7 +3457,9 @@ def run_analysis_cycle():
             buf = 1.0 * atr_m15 if atr_m15 and atr_m15 > 0 else 0.0
             entry_hint = current_price  # ориентировочный вход — текущая цена при пробое
 
-            # SL логика: узкий (≤1.2×ATR) → за противоположную границу; широкий → за пробитую.
+            # SL логика:
+            # - узкий (≤1.2×ATR) → за противоположную границу
+            # - широкий → за пробитую границу + буфер, учитывающий тени свечей пробоя (если доступны)
             range_width_rb = rh - rl
             is_narrow_rb = (atr_m15 > 0) and (range_width_rb <= 1.2 * atr_m15) and (range_width_rb > 0)
             suggested_sl = None
@@ -3430,12 +3467,36 @@ def run_analysis_cycle():
                 if is_narrow_rb:
                     suggested_sl = rl - buf if buf > 0 else rl   # за НИЖНЮЮ границу (широкий SL)
                 else:
-                    suggested_sl = rh - buf if buf > 0 else rh   # за пробитую ВЕРХНЮЮ
+                    # Широкий диапазон: SL за пробитую ВЕРХНЮЮ + учёт нижних теней свечей пробоя
+                    wick_pack = status_data.get('range_breakout_wicks') or {}
+                    lows = []
+                    for k in ('first', 'second', 'third'):
+                        v = wick_pack.get(k) if isinstance(wick_pack, dict) else None
+                        if isinstance(v, dict) and v.get('low') is not None:
+                            lows.append(safe_float(v.get('low'), 0.0))
+                    deepest_low = min([x for x in lows if x > 0], default=0.0)
+                    wick_pullback = max(rh - deepest_low, 0.0) if deepest_low > 0 else 0.0
+                    extra = max(0.2 * atr_m15, 2.0) if atr_m15 and atr_m15 > 0 else 2.0
+                    wick_buffer = wick_pullback + extra if wick_pullback > 0 else 0.0
+                    needed = max(buf, wick_buffer) if (buf > 0 or wick_buffer > 0) else 0.0
+                    suggested_sl = rh - needed if needed > 0 else rh
             elif direction_rb == 'SELL':
                 if is_narrow_rb:
                     suggested_sl = rh + buf if buf > 0 else rh   # за ВЕРХНЮЮ границу (широкий SL)
                 else:
-                    suggested_sl = rl + buf if buf > 0 else rl   # за пробитую НИЖНЮЮ
+                    # Широкий диапазон: SL за пробитую НИЖНЮЮ + учёт верхних теней свечей пробоя
+                    wick_pack = status_data.get('range_breakout_wicks') or {}
+                    highs = []
+                    for k in ('first', 'second', 'third'):
+                        v = wick_pack.get(k) if isinstance(wick_pack, dict) else None
+                        if isinstance(v, dict) and v.get('high') is not None:
+                            highs.append(safe_float(v.get('high'), 0.0))
+                    highest_high = max([x for x in highs if x > 0], default=0.0)
+                    wick_pullback = max(highest_high - rl, 0.0) if highest_high > 0 else 0.0
+                    extra = max(0.2 * atr_m15, 2.0) if atr_m15 and atr_m15 > 0 else 2.0
+                    wick_buffer = wick_pullback + extra if wick_pullback > 0 else 0.0
+                    needed = max(buf, wick_buffer) if (buf > 0 or wick_buffer > 0) else 0.0
+                    suggested_sl = rl + needed if needed > 0 else rl
 
             # Подбор целевого уровня TP по ключевым уровням и структуре
             suggested_tp = None
