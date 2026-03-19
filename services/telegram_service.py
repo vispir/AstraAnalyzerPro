@@ -93,6 +93,12 @@ class TelegramService:
         @self.bot.callback_query_handler(func=lambda call: True)
         def handle_callback(call):
             self._handle_callback_query(call)
+
+        # Signal Bot: отдельный обработчик inline-кнопок (callback'ов)
+        if self.bot_signals:
+            @self.bot_signals.callback_query_handler(func=lambda call: True)
+            def handle_signal_callback(call):
+                self._handle_signal_bot_callback_query(call)
         
         # Текстовые сообщения (кнопки внизу экрана)
         @self.bot.message_handler(func=lambda message: True)
@@ -385,6 +391,11 @@ class TelegramService:
             
             # Отвечаем на callback чтобы убрать "крутилку"
             self.bot.answer_callback_query(call.id)
+
+            # Callback'ы, которые приходят из Signal Bot, игнорируем в основном боте,
+            # чтобы не было "Unknown callback_data".
+            if call.data and str(call.data).startswith("close_manual_trade:"):
+                return
             
             # Проверяем что call.message существует
             if not call.message:
@@ -442,6 +453,94 @@ class TelegramService:
                 )
             except Exception as e2:
                 logger.error(f"❌ Не удалось отправить сообщение об ошибке: {e2}")
+
+    def _handle_signal_bot_callback_query(self, call):
+        """Обработка callback'ов в Astra Signal Bot (TELEGRAM_BOT_TOKEN_SIGNALS)."""
+        try:
+            if not self.bot_signals:
+                return
+            self.bot_signals.answer_callback_query(call.id)
+            if not call.data:
+                return
+
+            if call.data.startswith("close_manual_trade:"):
+                parts = call.data.split(":", 1)
+                if len(parts) != 2:
+                    return
+                signal_id = int(parts[1])
+                chat_id = call.from_user.id
+
+                # Убираем кнопку сразу, чтобы она "пропадала" после нажатия.
+                if call.message:
+                    try:
+                        self.bot_signals.edit_message_reply_markup(
+                            chat_id=call.message.chat.id,
+                            message_id=call.message.message_id,
+                            reply_markup=None
+                        )
+                    except Exception:
+                        pass
+
+                # Проверяем авторизацию пользователя
+                if not self._is_authorized_user(chat_id):
+                    self.bot_signals.send_message(chat_id, "⚠️ Недоступно: вы не авторизованы.", parse_mode='HTML')
+                    return
+
+                from services.db_service import db_service, safe_float
+                from services.oanda_service import oanda_service
+
+                signal = db_service.get_signal_by_id(signal_id)
+                if not signal:
+                    self.bot_signals.send_message(chat_id, "❌ Сделка не найдена в БД.", parse_mode='HTML')
+                    return
+
+                status = (signal.get("status") or "").lower()
+                if status not in ("active", "be_set", "tp1_reached"):
+                    self.bot_signals.send_message(chat_id, "ℹ️ Сделка уже закрыта.", parse_mode='HTML')
+                    return
+
+                entry_price = safe_float(signal.get("entry_price"), 0.0)
+                signal_type = (signal.get("signal_type") or "").upper()
+                if entry_price <= 0 or signal_type not in ("BUY", "SELL"):
+                    self.bot_signals.send_message(chat_id, "❌ Некорректные параметры сделки.", parse_mode='HTML')
+                    return
+
+                # Текущая цена
+                price_data = oanda_service.get_candles(timeframe="S5", limit=1)
+                candles = price_data.get("candles") if isinstance(price_data, dict) else None
+                if not candles:
+                    self.bot_signals.send_message(chat_id, "❌ Не удалось получить текущую цену.", parse_mode='HTML')
+                    return
+
+                last_c = candles[-1]
+                close_price = safe_float(last_c.get("close"), 0.0)
+                if close_price <= 0:
+                    self.bot_signals.send_message(chat_id, "❌ Некорректная текущая цена.", parse_mode='HTML')
+                    return
+
+                # PnL (как в Price Monitor): SELL = entry - close, BUY = close - entry
+                result_pnl = entry_price - close_price if signal_type == "SELL" else close_price - entry_price
+
+                ok = db_service.update_signal_result(signal_id, result_pnl, close_price, status="closed_manual")
+                if not ok:
+                    self.bot_signals.send_message(chat_id, "❌ Ошибка закрытия сделки в БД.", parse_mode='HTML')
+                    return
+
+                report = (
+                    "🛑 <b>Закрыто вручную</b>\n\n"
+                    f"id={signal_id} | {signal_type}\n"
+                    f"Вход: <b>{entry_price:.2f}</b>\n"
+                    f"Выход: <b>{close_price:.2f}</b>\n"
+                    f"PnL: <b>{result_pnl:.2f}</b>"
+                )
+                self.bot_signals.send_message(chat_id, report, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"❌ Signal Bot callback error: {e}", exc_info=True)
+            try:
+                if self.bot_signals and call:
+                    self.bot_signals.send_message(call.from_user.id, "❌ Ошибка обработки кнопки.", parse_mode='HTML')
+            except Exception:
+                pass
     
     def _handle_approve_login(self, call):
         """Обработка подтверждения входа"""
@@ -782,7 +881,7 @@ class TelegramService:
         logger.info(f"📤 Рассылка завершена: {success_count}/{len(user_ids)} доставлено")
         return success_count
     
-    def broadcast_deals_only(self, user_ids, message):
+    def broadcast_deals_only(self, user_ids, message, reply_markup=None):
         """
         Рассылка ТОЛЬКО в Astra Signal Bot (@AstraSignal_Bot).
         Используется для BUY/SELL — без анализа каждые 15 мин и без WAIT.
@@ -792,7 +891,12 @@ class TelegramService:
         success_count = 0
         for i, user_id in enumerate(user_ids):
             try:
-                self.bot_signals.send_message(user_id, message, parse_mode='HTML')
+                self.bot_signals.send_message(
+                    user_id,
+                    message,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
                 success_count += 1
             except Exception as e:
                 logger.warning(f"Signal Bot: не удалось отправить user {user_id}: {e}")
@@ -801,6 +905,16 @@ class TelegramService:
                 time.sleep(1)
         logger.info(f"📤 Astra Signal Bot: {success_count}/{len(user_ids)} доставлено")
         return success_count
+
+    def _get_manual_close_trade_markup(self, signal_id: int):
+        """Inline-кнопка ручного закрытия сделки (Signal Bot)."""
+        markup = types.InlineKeyboardMarkup()
+        btn_close = types.InlineKeyboardButton(
+            "🛑 Закрыть сделку вручную",
+            callback_data=f"close_manual_trade:{signal_id}"
+        )
+        markup.add(btn_close)
+        return markup
     
     def send_approval_notification(self, user_id, user_name):
         """
@@ -856,6 +970,9 @@ class TelegramService:
         try:
             update = telebot.types.Update.de_json(update_dict)
             self.bot.process_new_updates([update])
+            # Для inline-кнопок, которые отправляются Signal Bot'ом, обрабатываем update также вторым bot'ом.
+            if self.bot_signals:
+                self.bot_signals.process_new_updates([update])
             logger.debug(f"✅ Webhook update обработан: {update.update_id}")
         except Exception as e:
             logger.error(f"❌ Ошибка обработки webhook update: {e}")

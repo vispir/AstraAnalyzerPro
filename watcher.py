@@ -4267,7 +4267,12 @@ def run_trade_manager_cycle():
                 f"id={trade_id} | {signal_type} | цена входа <b>{entry_price:.2f}</b> достигнута.\n"
                 f"Текущая цена: {current_price:.2f}. Менеджер ведёт сделку (SL/TP)."
             )
-            telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
+            # Inline-кнопка ручного закрытия (работает только в Signal Bot)
+            try:
+                reply_markup = telegram_service._get_manual_close_trade_markup(trade_id)
+            except Exception:
+                reply_markup = None
+            telegram_service.broadcast_deals_only(user_ids_filled, msg_filled, reply_markup=reply_markup)
         db_service.mark_entry_notified(trade_id)
     logger.info(
         f"💼 Manager: активная сделка id={trade_id}, type={signal_type}, "

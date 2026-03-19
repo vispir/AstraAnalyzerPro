@@ -554,6 +554,31 @@ class DBService:
             logger.error(f"❌ Ошибка получения истории сигналов: {e}")
             return []
 
+    def get_signal_by_id(self, signal_id: int) -> dict:
+        """
+        Возвращает сигнал по id (BUY/SELL/WAIT и т.д.).
+        Используется для ручного закрытия по inline-кнопке.
+        """
+        if not self.url or not signal_id:
+            return {}
+        target_url = f"{self.url}/rest/v1/signals?id=eq.{signal_id}&select=*&limit=1"
+        try:
+            response = requests.get(
+                target_url,
+                headers={
+                    "apikey": self.key,
+                    "Authorization": f"Bearer {self.key}"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list) and data:
+                return data[0]
+            return {}
+        except Exception as e:
+            logger.warning(f"⚠️ get_signal_by_id({signal_id}): {e}")
+            return {}
+
     def get_signals_stats(self):
         """
         Получает статистику по сигналам через представление signals_stats

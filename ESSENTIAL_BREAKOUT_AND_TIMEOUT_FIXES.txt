@@ -1,0 +1,79 @@
+Essential fixes for:
+1) Breakout confirmation (auto-range) not lost
+2) Entry-timeout cancellation not happening after entry_notified=true
+
+Purpose
+-------
+You reported two production issues that look unrelated to SL math:
+1) For AUTO local ranges, the first breakout candle happened, but the system did not progress to confirmation on the next candle, so the trade got missed.
+2) “Entry reached” was broadcast, but later the trade was cancelled as “Entry not reached” due to the 30-min fill timeout.
+
+This file summarizes the two fixes you should keep when moving/cherry-picking onto the older “good SL” version (e.g., the 6.6 / e79bcc5 baseline).
+
+Fix #1 (AUTO range): first breakout must switch to WAIT confirmation
+----------------------------------------------------------------------
+File: watcher.py
+Where: Range Manager block for local_range breakout logic
+When:
+  - active_range exists
+  - price_was_inside is NOT yet >= 2 (candles_inside < 2)
+  - active_range is AUTO (is_manual_range == False)
+  - the last TWO closes match the “first breakout” pattern:
+      only_signal_below  (SELL breakout candidate)
+      only_signal_above  (BUY breakout candidate)
+What it does:
+  - Instead of treating it as “range_no_touch” and skipping,
+    set:
+      status_data['status'] = 'range_breakout_wait_confirmation'
+      status_data['breakout_direction'] = 'вниз' or 'вверх'
+      status_data['breakout_boundary'] = range_low or range_high
+  - Store the range snapshot for the next cycle:
+      _breakout_wait_previous_cycle = True
+      _breakout_wait_range = dict(active_range)
+  - return immediately.
+Why it fixes your missed entry:
+  - auto ranges may be replaced quickly by the detector between candle #1 and candle #2.
+  - the system must “pin” the setup state so candle #2 confirmation is evaluated against the same range.
+
+Fix #2 (Trade timeout): never cancel as “Entry not reached” after entry_notified=true
+----------------------------------------------------------------------------------------
+File: watcher.py
+Where: function is_entry_filled(trade, candles_m5)
+Change:
+  - add an early guard at the top:
+      if trade.get('entry_notified') or trade.get('entry_notified_at'):
+          return True
+Why it fixes your timeout contradiction:
+  - Price Monitor marks/calls entry reached and sets entry_notified in DB.
+  - Trade Manager still decides based on M5 candle window (limited lookback).
+  - In rare cases the candle that proved entry is outside the M5 window anymore,
+    causing is_entry_filled() to return False.
+  - Without this guard, manager cancels the trade after ENTRY_FILL_TIMEOUT_MINUTES.
+  - With this guard, manager stops treating it as “not filled”.
+
+Independence from SL fixes
+---------------------------
+Both fixes do not change SL/TP math.
+You can safely apply them on top of a “good SL behavior” baseline without pulling
+the SL-related changes.
+
+How to re-apply onto a baseline commit (e.g., 6.6 / e79bcc5)
+---------------------------------------------------------------
+Option A: copy-paste the two exact code blocks into your baseline watcher.py
+  1) In is_entry_filled(): add the early return guard.
+  2) In auto-range breakout logic: replace the “range_no_touch” skip branch with
+     the WAIT confirmation transition (status_data['range_breakout_wait_confirmation']
+     + _breakout_wait_previous_cycle/_breakout_wait_range snapshot).
+
+Option B: cherry-pick only the two hunks (recommended if you use git)
+  - watcher.py changes only; do not include any SL-related hunks.
+
+Quick expected results after applying both fixes
+---------------------------------------------------
+1) When auto-range first breakout candle appears:
+   - you should see status_data == 'range_breakout_wait_confirmation'
+   - the next candle should progress to confirmed breakout / doji branch and then to LLM
+     (instead of repeating “range watching / proximity”).
+2) When entry is reached and broadcasted:
+   - you should NOT later see “cancelled_no_fill / Entry not reached after 30 min”.
+

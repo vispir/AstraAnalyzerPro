@@ -425,7 +425,12 @@ def price_monitor_loop():
                         f"id={signal_id} | {signal_type} | цена входа <b>{entry_price:.2f}</b> достигнута.\n"
                         f"Текущая цена: {current_price:.2f}. Менеджер/монитор ведут сделку (SL/TP)."
                     )
-                    telegram_service.broadcast_deals_only(user_ids_filled, msg_filled)
+                    # Inline-кнопка ручного закрытия (убирается после нажатия)
+                    try:
+                        reply_markup = telegram_service._get_manual_close_trade_markup(signal_id)
+                    except Exception:
+                        reply_markup = None
+                    telegram_service.broadcast_deals_only(user_ids_filled, msg_filled, reply_markup=reply_markup)
 
             # --- ТРЕЙЛИНГ СТОП: 1) BE (всегда), 2) Trailing по R:R (max_trailing_level = floor(rr_ratio)-1, cap 5) ---
             # risk от original_stop_loss (_original_sl_cache)
