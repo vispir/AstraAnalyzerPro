@@ -51,6 +51,15 @@ Bug-fix changes you likely want to KEEP (do not revert unless you choose full re
    - This prevents the manager from cancelling as "Entry not reached" after the monitor already
      broadcasted "entry reached".
 
+3) watcher.py: validate_llm_verdict_strict — правильная сторона SL/TP относительно входа (KEEP)
+   - После корректировки entry на current_price проверяется геометрия сделки:
+     * BUY: SL строго НИЖЕ входа, TP строго ВЫШЕ входа; иначе → WAIT.
+     * SELL: SL строго ВЫШЕ входа, TP строго НИЖЕ входа; иначе → WAIT.
+   - Зачем: LLM иногда выдаёт «перевёрнутый» стоп (напр. SELL со SL ниже входа). Тогда Price Monitor
+     считает SL hit по условию price >= stop_loss сразу после входа — ложное закрытие и бессмысленный PnL.
+   - Этот фикс НЕ относится к спорным лимитам 2.0×ATR vs 6.0×ATR (пункты A/B/C выше).
+     При откате SL-математики к 6.6 — логику направления SL/TP лучше ОСТАВИТЬ (не откатывать).
+
 
 Recommended deployment options
 -------------------------------
@@ -73,6 +82,7 @@ Revert ONLY the parts that were introduced to improve SL harshness / wick-buffer
 KEEP:
   - the auto-range first breakout confirmation fix (prevents losing good setups)
   - the is_entry_filled guard (prevents cancelled_no_fill after entry_notified=true)
+  - validate_llm_verdict_strict: direction checks for SL/TP vs entry (BUY/SELL geometry; see item 3 above)
 
 How to implement Option B (edit checklist)
 --------------------------------------------
@@ -94,6 +104,9 @@ How to implement Option B (edit checklist)
      * "Keep SL within 1.0–6.0 x ATR from entry"
      * "SL distance from entry < 1.0 x ATR -> REJECT"
      * "SL > 6.0 x ATR -> WARNING but trade allowed if R:R meets the rule"
+
+   Do NOT remove the direction-safety block in validate_llm_verdict_strict (watcher.py) unless you
+   intentionally want to allow inverted SL again.
 
 
 Validation to run after deployment (tomorrow test)

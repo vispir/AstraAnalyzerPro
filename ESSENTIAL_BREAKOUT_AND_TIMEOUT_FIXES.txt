@@ -77,3 +77,57 @@ Quick expected results after applying both fixes
 2) When entry is reached and broadcasted:
    - you should NOT later see “cancelled_no_fill / Entry not reached after 30 min”.
 
+Fix #3 (Signal Bot): manual close button for active trade
+----------------------------------------------------------
+Files:
+  - services/telegram_service.py
+  - services/db_service.py
+  - watcher.py
+  - server.py
+
+Goal:
+  - In Astra Signal Bot message "Entry reached / trade activated", show inline button:
+      "🛑 Закрыть сделку вручную"
+  - On click: close trade immediately with market price and save status=closed_manual.
+
+Required changes:
+1) telegram_service.py
+   - Add helper to build inline keyboard:
+       _get_manual_close_trade_markup(signal_id)
+   - Update broadcast_deals_only(...) to accept optional reply_markup and pass it to send_message.
+   - Register callback handler for bot_signals and route to dedicated method:
+       _handle_signal_bot_callback_query(call)
+   - Implement callback "close_manual_trade:<id>":
+       a) remove button from original message (edit_message_reply_markup(..., reply_markup=None))
+       b) check user is authorized
+       c) load signal by id from DB
+       d) reject if trade already closed (status not in active/be_set/tp1_reached)
+       e) get current market price (OANDA S5)
+       f) compute PnL:
+            BUY  => close - entry
+            SELL => entry - close
+       g) save close to DB with:
+            update_signal_result(signal_id, pnl, close_price, status="closed_manual")
+       h) send confirmation report:
+            "🛑 Закрыто вручную ... id / entry / exit / pnl"
+   - In main bot callback handler, ignore "close_manual_trade:*" callbacks (they belong to Signal Bot).
+   - In webhook processing, ensure updates are handled by both bots (main + signal bot instances).
+
+2) db_service.py
+   - Add helper:
+       get_signal_by_id(signal_id)
+     Returns one signal row for callback flow.
+
+3) watcher.py and server.py
+   - In message "✅ Вход достигнут — сделка активирована", attach:
+       reply_markup = telegram_service._get_manual_close_trade_markup(signal_id or trade_id)
+     and pass it to:
+       telegram_service.broadcast_deals_only(..., reply_markup=reply_markup)
+
+Deployment note:
+  - Manual-close button requires webhook for Signal Bot token.
+  - Verify:
+      GET https://api.telegram.org/bot<SIGNAL_BOT_TOKEN>/getWebhookInfo
+    result.url must be:
+      https://astraanalyzerpro-q6up.onrender.com/api/tg/webhook
+

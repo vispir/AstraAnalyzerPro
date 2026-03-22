@@ -952,6 +952,30 @@ def validate_llm_verdict_strict(verdict, current_price, invalidation_levels, min
             logger.info(f"🔄 v8.6: Entry скорректирован с {entry_f:.2f} на current_price {current_price:.2f} (отклонение {pct_diff:.1f}%)")
             entry_f = current_price
 
+    # Жёсткая проверка стороны SL/TP относительно входа (после корректировки entry).
+    # Для SELL: SL должен быть ВЫШЕ входа, TP — НИЖЕ; для BUY — наоборот.
+    # Иначе Price Monitor сразу даст «SL hit» (например SELL + SL ниже входа → price >= stop_loss всегда).
+    if action == 'BUY':
+        if sl_f >= entry_f:
+            return 'WAIT', entry_f, sl_f, tp_f, (
+                f'SL для BUY ({sl_f:.2f}) должен быть НИЖЕ входа ({entry_f:.2f}). '
+                f'Иначе стоп на стороне прибыли — техническая ошибка.'
+            )
+        if tp_f <= entry_f:
+            return 'WAIT', entry_f, sl_f, tp_f, (
+                f'TP для BUY ({tp_f:.2f}) должен быть ВЫШЕ входа ({entry_f:.2f}).'
+            )
+    else:  # SELL
+        if sl_f <= entry_f:
+            return 'WAIT', entry_f, sl_f, tp_f, (
+                f'SL для SELL ({sl_f:.2f}) должен быть ВЫШЕ входа ({entry_f:.2f}). '
+                f'Иначе стоп на стороне прибыли — техническая ошибка.'
+            )
+        if tp_f >= entry_f:
+            return 'WAIT', entry_f, sl_f, tp_f, (
+                f'TP для SELL ({tp_f:.2f}) должен быть НИЖЕ входа ({entry_f:.2f}).'
+            )
+
     # Double TP валидация: проверяем порядок уровней (tp1 должен быть между entry и tp)
     if tp1_f and tp1_f > 0:
         if action == 'BUY':
@@ -2324,52 +2348,61 @@ def run_analysis_cycle():
 
     def _apply_htf_watch(watch, ref_range_high, ref_range_low):
         """Проверяем HTF Watch и при сработке устанавливаем флаги is_range_rejection_confirmed.
-        Возвращает True если watch сработал."""
+        Возвращает True если watch сработал.
+
+        Триггер: close последней *закрытой* M15 (candles[-2]) оказался строго внутри бокса
+        (range_low < close < range_high) — возврат в диапазон после блокировки пробоя по H4.
+        Сброс watch в БД — сразу после срабатывания (как раньше).
+        """
         nonlocal is_near
         if not watch:
             return False
         watch_dir = watch.get('watch_direction')
         watch_level = safe_float(watch.get('level'), 0.0)
         trend_htf = watch.get('trend')
-        atr_ref = atr_m15_initial or 0.0
-        # Proximity: цена должна быть в пределах 1.5×ATR от границы (не срабатывать когда цена далеко)
-        prox = 1.5 * atr_ref if atr_ref > 0 else 30.0
-        # BUY от нижней границы при H4 UPTREND
-        if watch_dir == 'BUY' and trend_htf == 'UPTREND' and ref_range_low > 0:
-            near_low = ref_range_low <= current_price <= ref_range_low + prox
-            if near_low:
-                status_data['is_range_rejection_confirmed'] = True
-                status_data['rejection_direction'] = 'BUY'
-                status_data['rejection_level'] = ref_range_low
-                status_data['htf_rejection_watch'] = True
-                is_near = True
-                logger.info(
-                    f"↩️ HTF Range Rejection BUY: цена вернулась к поддержке range_low={ref_range_low:.3f} при H4 UPTREND "
-                    f"(watch_level={watch_level:.3f}, current_price={current_price:.3f}, prox±{prox:.1f})"
-                )
-                try:
-                    db_service.set_htf_rejection_watch(None)
-                except Exception as e:
-                    logger.warning(f"⚠️ reset htf_rejection_watch error: {e}")
-                return True
-        # SELL от верхней границы при H4 DOWNTREND
-        elif watch_dir == 'SELL' and trend_htf == 'DOWNTREND' and ref_range_high > 0:
-            near_high = ref_range_high - prox <= current_price <= ref_range_high
-            if near_high:
-                status_data['is_range_rejection_confirmed'] = True
-                status_data['rejection_direction'] = 'SELL'
-                status_data['rejection_level'] = ref_range_high
-                status_data['htf_rejection_watch'] = True
-                is_near = True
-                logger.info(
-                    f"↩️ HTF Range Rejection SELL: цена вернулась к сопротивлению range_high={ref_range_high:.3f} при H4 DOWNTREND "
-                    f"(watch_level={watch_level:.3f}, current_price={current_price:.3f}, prox±{prox:.1f})"
-                )
-                try:
-                    db_service.set_htf_rejection_watch(None)
-                except Exception as e:
-                    logger.warning(f"⚠️ reset htf_rejection_watch error: {e}")
-                return True
+        last_close = 0.0
+        if candles and len(candles) >= 2:
+            last_close = safe_float(candles[-2].get('close'), 0.0)
+        if last_close <= 0:
+            last_close = safe_float(current_price, 0.0)
+        rh = safe_float(ref_range_high, 0.0)
+        rl = safe_float(ref_range_low, 0.0)
+        if rh <= 0 or rl <= 0 or rl >= rh:
+            return False
+        # Эквивалентно: (close > range_low) и (close < range_high) — «вернулась внутрь»
+        returned_inside = rl < last_close < rh
+
+        if watch_dir == 'BUY' and trend_htf == 'UPTREND' and returned_inside:
+            status_data['is_range_rejection_confirmed'] = True
+            status_data['rejection_direction'] = 'BUY'
+            status_data['rejection_level'] = rl
+            status_data['htf_rejection_watch'] = True
+            is_near = True
+            logger.info(
+                f"↩️ HTF Range Rejection BUY: M15 close={last_close:.3f} внутри ({rl:.3f}-{rh:.3f}), H4 UPTREND "
+                f"(watch_level={watch_level:.3f})"
+            )
+            try:
+                db_service.set_htf_rejection_watch(None)
+            except Exception as e:
+                logger.warning(f"⚠️ reset htf_rejection_watch error: {e}")
+            return True
+
+        if watch_dir == 'SELL' and trend_htf == 'DOWNTREND' and returned_inside:
+            status_data['is_range_rejection_confirmed'] = True
+            status_data['rejection_direction'] = 'SELL'
+            status_data['rejection_level'] = rh
+            status_data['htf_rejection_watch'] = True
+            is_near = True
+            logger.info(
+                f"↩️ HTF Range Rejection SELL: M15 close={last_close:.3f} внутри ({rl:.3f}-{rh:.3f}), H4 DOWNTREND "
+                f"(watch_level={watch_level:.3f})"
+            )
+            try:
+                db_service.set_htf_rejection_watch(None)
+            except Exception as e:
+                logger.warning(f"⚠️ reset htf_rejection_watch error: {e}")
+            return True
         return False
 
     if active_range:

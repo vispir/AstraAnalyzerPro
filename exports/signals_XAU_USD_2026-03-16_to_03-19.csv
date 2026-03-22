@@ -1,0 +1,421 @@
+﻿close_price,close_timestamp,created_at,current_price,entry_notified,entry_notified_at,entry_price,id,llm_confidence,llm_full_response,llm_reason,near_structures,patterns,result_pnl,signal_type,smc_summary,status,stop_loss,symbol,take_profit,take_profit_1,timestamp,trend,updated_at,zone
+4976.89,2026-03-16T09:46:28.037999+00:00,2026-03-16T08:16:03.723643+00:00,4988.96,True,2026-03-16T08:16:07.641235+00:00,4992.85,597,75,"```json
+{
+  ""executive_summary"": ""Цена успешно пробила локальный диапазон консолидации [4999.57 - 5019.17] вниз, закрепившись двумя свечами ниже границы 4999.57. На часовом таймфрейме (H1) доминирует нисходящий тренд, что подтверждает медвежий приоритет. Недавнее снятие ликвидности с максимумов (5031.01) обеспечило необходимый институциональный приток для импульсного движения. В данный момент сформирован медвежий FVG в зоне 4989.51 - 4992.85, который выступает оптимальной зоной для входа на откате. Целью является пул ликвидности на уровне Weak Low (4967.77)."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 75,
+    ""setup_grade"": ""A"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""range_breakout_confirmed"": true,
+      ""h1_trend_aligned"": true,
+      ""liquidity_sweep_recent"": true,
+      ""fvg_at_entry"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4992.85,
+    ""buffered_stop_loss"": 5009.18,
+    ""target_price"": 4967.77,
+    ""risk_amount"": 16.33,
+    ""reward_amount"": 25.08,
+    ""calculated_rr"": 1.53
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4992.85,
+    ""final_sl"": 5009.18,
+    ""final_tp"": 4967.77,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрепление цены выше уровня 5009.18 (возврат в диапазон с поглощением пробойного импульса) отменяет медвежий сценарий.""
+  }
+}
+```","Цена успешно пробила локальный диапазон консолидации [4999.57 - 5019.17] вниз, закрепившись двумя свечами ниже границы 4999.57. На часовом таймфрейме (H1) доминирует нисходящий тренд, что подтверждает медвежий приоритет. Недавнее снятие ликвидности с максимумов (5031.01) обеспечило необходимый институциональный приток для импульсного движения. В данный момент сформирован медвежий FVG в зоне 4989.51 - 4992.85, который выступает оптимальной зоной для входа на откате. Целью является пул ликвидности на уровне Weak Low (4967.77).",,"['INT_BOS (BULLISH_BOS, 9 bars ago)', 'INT_CHOCH (BULLISH_CHOCH, 19 bars ago)', 'INT_OB (BULL_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BEAR_OB)', 'INT_OB (BEAR_OB)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",16.33,SELL,"{'ob': 4, 'fvg': 4, 'int_bos': 1, 'int_choch': 1, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 10, 'confirmed_total': 0, 'int_choch_total': 14, 'swing_bos_total': 4, 'int_bos_confirmed': 0, 'swing_choch_total': 0, '_trigger_structure': {'bar_index': 533, 'structure': 'BEARISH_BOS'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,4976.52,XAU_USD,4967.77,0,2026-03-16T08:16:03.587152+00:00,DOWNTREND,2026-03-16T09:46:28.212318+00:00,DISCOUNT
+5014.38,2026-03-16T12:20:07.16301+00:00,2026-03-16T12:01:05.330306+00:00,4997.34,True,2026-03-16T12:01:12.585075+00:00,4997.34,603,65,"```json
+{
+  ""executive_summary"": ""На рынке XAUUSD наблюдается доминирование медвежьего давления. На таймфрейме H1 сохраняется нисходящий тренд. На M15 цена протестировала свежий медвежий ордер-блок (5002.66 – 5022.82) и показала резкую нисходящую реакцию, сформировав медвежий FVG (5013.88 – 4997.49). Хотя цена находится в зоне Discount относительно широкого диапазона, текущий сильный импульс (100%) и структура указывают на высокую вероятность продолжения падения к ликвидности на уровне минимума дня (DL 4967.77). Сделка опирается на модель ретеста OB и заполнение неэффективности."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 65,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""OB_RETEST"",
+    ""model"": ""OB_RETEST"",
+    ""model_completeness"": {
+      ""quality_ob_identified"": true,
+      ""price_returned_to_zone"": true,
+      ""rejection_visible"": true,
+      ""no_opposing_structure_break"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4997.34,
+    ""buffered_stop_loss"": 5014.38,
+    ""target_price"": 4967.77,
+    ""risk_amount"": 17.04,
+    ""reward_amount"": 29.57,
+    ""calculated_rr"": 1.73
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4997.34,
+    ""final_sl"": 5014.38,
+    ""final_tp"": 4967.77,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""OK"",
+    ""entry_warning"": ""LATE_ENTRY"",
+    ""invalidation_condition"": ""Закрепление цены выше уровня 5014.38 (верхняя граница FVG и локальный максимум) отменяет медвежий сценарий.""
+  }
+}
+```","На рынке XAUUSD наблюдается доминирование медвежьего давления. На таймфрейме H1 сохраняется нисходящий тренд. На M15 цена протестировала свежий медвежий ордер-блок (5002.66 – 5022.82) и показала резкую нисходящую реакцию, сформировав медвежий FVG (5013.88 – 4997.49). Хотя цена находится в зоне Discount относительно широкого диапазона, текущий сильный импульс (100%) и структура указывают на высокую вероятность продолжения падения к ликвидности на уровне минимума дня (DL 4967.77). Сделка опирается на модель ретеста OB и заполнение неэффективности.",,"['INT_BOS (BULLISH_BOS, 24 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BEAR_OB)', 'FVG (BEAR_FVG)', 'FVG (BULL_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP']",-17.04,SELL,"{'ob': 4, 'fvg': 3, 'int_bos': 1, 'int_choch': 0, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 10, 'confirmed_total': 0, 'int_choch_total': 13, 'swing_bos_total': 4, 'int_bos_confirmed': 0, 'swing_choch_total': 0, '_trigger_structure': {'bar_index': 518, 'structure': 'BEARISH_BOS'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,5014.38,XAU_USD,4967.77,0,2026-03-16T12:01:05.160254+00:00,DOWNTREND,2026-03-16T12:20:07.432216+00:00,DISCOUNT
+5044.05,2026-03-17T05:18:03.067979+00:00,2026-03-16T14:46:06.439424+00:00,5001.19,True,2026-03-16T14:46:15.950076+00:00,5001.19,609,65,"```json
+{
+  ""executive_summary"": ""Цена пробила локальный диапазон консолидации [5020.06 - 5031.63] двумя свечами вниз, закрепившись ниже уровня 5020.06. Это подтвержденный сетап Range Breakout, который согласуется с нисходящим трендом на таймфрейме H1. На графике M15 сформировался медвежий FVG [5002.06 - 5014.63], подтверждающий силу импульса. Вход выполняется по текущей рыночной цене. Стоп-лосс установлен за противоположную (верхнюю) границу диапазона с учетом фильтра 1.0x ATR, так как диапазон классифицирован как узкий (is_narrow: true). Тейк-профит определен на уровне 4936.90 для достижения целевого соотношения риск/прибыль 1.5, что является приоритетным в данной волатильной среде."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 65,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""BOS_CONTINUATION"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""range_breakout_confirmed"": true,
+      ""h1_trend_aligned"": true,
+      ""fvg_confluence"": true,
+      ""session_active"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 5001.19,
+    ""buffered_stop_loss"": 5044.05,
+    ""target_price"": 4936.9,
+    ""risk_amount"": 42.86,
+    ""reward_amount"": 64.29,
+    ""calculated_rr"": 1.5
+  },
+  ""trade_plan"": {
+    ""final_entry"": 5001.19,
+    ""final_sl"": 5044.05,
+    ""final_tp"": 4936.9,
+    ""tp_logic"": ""FIXED_RR"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 выше верхней границы пробитого диапазона 5031.63 или срабатывание стоп-лосса на 5044.05.""
+  }
+}
+```","Цена пробила локальный диапазон консолидации [5020.06 - 5031.63] двумя свечами вниз, закрепившись ниже уровня 5020.06. Это подтвержденный сетап Range Breakout, который согласуется с нисходящим трендом на таймфрейме H1. На графике M15 сформировался медвежий FVG [5002.06 - 5014.63], подтверждающий силу импульса. Вход выполняется по текущей рыночной цене. Стоп-лосс установлен за противоположную (верхнюю) границу диапазона с учетом фильтра 1.0x ATR, так как диапазон классифицирован как узкий (is_narrow: true). Тейк-профит определен на уровне 4936.90 для достижения целевого соотношения риск/прибыль 1.5, что является приоритетным в данной волатильной среде.",,"['INT_OB (BULL_OB)', 'INT_OB (BULL_OB)', 'FVG (BULL_FVG)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",-42.86,SELL,"{'ob': 2, 'fvg': 3, 'int_bos': 0, 'int_choch': 0, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 10, 'confirmed_total': 0, 'int_choch_total': 12, 'swing_bos_total': 4, 'int_bos_confirmed': 0, 'swing_choch_total': 0, '_trigger_structure': {'bar_index': 507, 'structure': 'BEARISH_BOS'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,5044.05,XAU_USD,4936.9,0,2026-03-16T14:46:06.154247+00:00,DOWNTREND,2026-03-17T05:18:03.314322+00:00,DISCOUNT
+5005.58,2026-03-17T10:07:43.445046+00:00,2026-03-17T09:31:02.535064+00:00,5017.71,True,2026-03-17T09:31:08.955056+00:00,5017.71,613,70,"```json
+{
+  ""executive_summary"": ""Цена пробила локальный диапазон консолидации [5022.77 - 5032.7] вниз, что является приоритетным сигналом. Пробой подтвержден двумя последовательными свечами M15, закрывшимися ниже границы 5022.77. На старших таймфреймах (H1/H4) наблюдается нейтральный тренд, однако локальное давление продавцов после снятия ликвидности на уровне 5038.15 указывает на потенциал снижения к следующему пулу ликвидности. Целью выступает нижняя граница предыдущего диапазона в районе 4998.06."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 70,
+    ""setup_grade"": ""A"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""element_1"": true,
+      ""element_2"": true,
+      ""element_3"": true,
+      ""element_4"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 5017.71,
+    ""buffered_stop_loss"": 5030.81,
+    ""target_price"": 4998.06,
+    ""risk_amount"": 13.1,
+    ""reward_amount"": 19.65,
+    ""calculated_rr"": 1.5
+  },
+  ""trade_plan"": {
+    ""final_entry"": 5017.71,
+    ""final_sl"": 5030.81,
+    ""final_tp"": 4998.06,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрепление цены выше уровня 5022.77 (возврат внутрь пробитого диапазона) отменяет медвежий сценарий.""
+  }
+}
+```","Цена пробила локальный диапазон консолидации [5022.77 - 5032.7] вниз, что является приоритетным сигналом. Пробой подтвержден двумя последовательными свечами M15, закрывшимися ниже границы 5022.77. На старших таймфреймах (H1/H4) наблюдается нейтральный тренд, однако локальное давление продавцов после снятия ликвидности на уровне 5038.15 указывает на потенциал снижения к следующему пулу ликвидности. Целью выступает нижняя граница предыдущего диапазона в районе 4998.06.",,"['SWING_CHOCH (BULLISH_CHOCH, 20 bars ago)', 'INT_OB (BULL_OB)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",13.1,SELL,"{'ob': 3, 'fvg': 1, 'int_bos': 0, 'int_choch': 0, 'swing_bos': 0, 'swing_choch': 1, 'int_bos_total': 9, 'confirmed_total': 0, 'int_choch_total': 12, 'swing_bos_total': 4, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 579, 'structure': 'BULLISH_CHOCH'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,5004.61,XAU_USD,4998.06,0,2026-03-17T09:31:02.357415+00:00,UPTREND,2026-03-17T10:07:43.606021+00:00,EQUILIBRIUM
+4991.24,2026-03-18T05:30:11.79374+00:00,2026-03-18T03:15:54.503464+00:00,4994.36,True,2026-03-18T03:15:58.054451+00:00,4994.36,617,70,"```json
+{
+  ""executive_summary"": ""Цена успешно пробила локальный диапазон консолидации [4999.31 - 5009.55] вниз, закрепившись двумя свечами ниже уровня 4999.31. Сетап усиливается недавним снятием ликвидности (Liquidity Sweep) на уровне 5012.24, за которым последовал медвежий CHoCH (4993.39). Несмотря на то, что HTF (H4/H1) находится в зоне Discount, локальный медвежий импульс и подтвержденный пробой диапазона открывают дорогу к тестированию Strong Low на уровне 4973.72. Длинная нижняя тень на второй свече подтверждения (long_lower=true) указывает на локальное давление покупателей, что требует осторожности при входе."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 70,
+    ""setup_grade"": ""A"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""LIQUIDITY_SWEEP_REVERSAL"",
+    ""model_completeness"": {
+      ""liquidity_taken"": true,
+      ""structure_break"": true,
+      ""entry_zone"": true,
+      ""reaction"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4994.36,
+    ""buffered_stop_loss"": 5007.82,
+    ""target_price"": 4973.72,
+    ""risk_amount"": 13.46,
+    ""reward_amount"": 20.64,
+    ""calculated_rr"": 1.53
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4994.36,
+    ""final_sl"": 5007.82,
+    ""final_tp"": 4973.72,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""OK"",
+    ""entry_warning"": ""WEAK_STRUCTURE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 выше границы пробитого диапазона 4999.31 или срабатывание стоп-лосса на 5007.82""
+  }
+}
+```","Цена успешно пробила локальный диапазон консолидации [4999.31 - 5009.55] вниз, закрепившись двумя свечами ниже уровня 4999.31. Сетап усиливается недавним снятием ликвидности (Liquidity Sweep) на уровне 5012.24, за которым последовал медвежий CHoCH (4993.39). Несмотря на то, что HTF (H4/H1) находится в зоне Discount, локальный медвежий импульс и подтвержденный пробой диапазона открывают дорогу к тестированию Strong Low на уровне 4973.72. Длинная нижняя тень на второй свече подтверждения (long_lower=true) указывает на локальное давление покупателей, что требует осторожности при входе.",,"['INT_CHOCH (BEARISH_CHOCH, 2 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BEAR_OB)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",0.0,SELL,"{'ob': 2, 'fvg': 2, 'int_bos': 0, 'int_choch': 1, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 8, 'confirmed_total': 1, 'int_choch_total': 11, 'swing_bos_total': 3, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 512, 'structure': 'BULLISH_CHOCH'}, 'int_choch_confirmed': 1, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",cancelled_no_fill,5007.82,XAU_USD,4973.72,0,2026-03-18T03:15:54.323566+00:00,UPTREND,2026-03-18T05:30:12.062454+00:00,DISCOUNT
+5001.14,2026-03-18T07:45:20.809968+00:00,2026-03-18T06:15:56.804662+00:00,5009.31,True,2026-03-18T06:16:03.154346+00:00,5009.31,619,65,"```json
+{
+  ""executive_summary"": ""На 15-минутном таймфрейме зафиксирован бычий CHoCH (слом характера) на уровне 4997.60, что подтверждает переход внутренней структуры в восходящую фазу. Импульс сформировал свежий бычий FVG в диапазоне 5002.85 – 5008.88, который служит зоной поддержки. Хотя макро-тренд (H4/H1) остается нейтральным, цена находится в глубоком дисконте (Discount Zone) относительно старших диапазонов, что создает благоприятный контекст для покупок. Вход планируется от верхней границы FVG с целью на уровне ликвидности предыдущего локального диапазона 5024.95."",
+  ""signal"": {
+    ""action"": ""BUY"",
+    ""confidence"": 65,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""swing_bos_confirmed"": false,
+      ""pullback_to_fvg_ob"": true,
+      ""internal_structure_confirmation"": true,
+      ""htf_alignment"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 5009.31,
+    ""buffered_stop_loss"": 5001.35,
+    ""target_price"": 5025.0,
+    ""risk_amount"": 7.96,
+    ""reward_amount"": 15.69,
+    ""calculated_rr"": 1.97
+  },
+  ""trade_plan"": {
+    ""final_entry"": 5009.31,
+    ""final_sl"": 5001.35,
+    ""final_tp"": 5025.0,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 ниже уровня 5002.35 (invalidation_buy) отменяет бычий сценарий.""
+  }
+}
+```","На 15-минутном таймфрейме зафиксирован бычий CHoCH (слом характера) на уровне 4997.60, что подтверждает переход внутренней структуры в восходящую фазу. Импульс сформировал свежий бычий FVG в диапазоне 5002.85 – 5008.88, который служит зоной поддержки. Хотя макро-тренд (H4/H1) остается нейтральным, цена находится в глубоком дисконте (Discount Zone) относительно старших диапазонов, что создает благоприятный контекст для покупок. Вход планируется от верхней границы FVG с целью на уровне ликвидности предыдущего локального диапазона 5024.95.",,"['INT_CHOCH (BEARISH_CHOCH, 14 bars ago)', 'INT_CHOCH (BULLISH_CHOCH, 3 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'FVG (BULL_FVG)', 'FVG (BULL_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",-7.96,BUY,"{'ob': 2, 'fvg': 2, 'int_bos': 0, 'int_choch': 2, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 7, 'confirmed_total': 1, 'int_choch_total': 12, 'swing_bos_total': 3, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 500, 'structure': 'BULLISH_CHOCH'}, 'int_choch_confirmed': 1, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,5001.35,XAU_USD,5025.0,0,2026-03-18T06:15:56.556042+00:00,UPTREND,2026-03-18T07:45:21.018567+00:00,EQUILIBRIUM
+4965.06,2026-03-18T10:35:45.416776+00:00,2026-03-18T09:15:58.406176+00:00,4986.34,True,2026-03-18T09:16:01.82759+00:00,4986.34,622,65,"```json
+{
+  ""executive_summary"": ""Цена успешно пробила нижнюю границу локального диапазона консолидации [4990.64 - 4996.36] вниз и закрепилась тремя последовательными свечами M15 ниже уровня 4990.64. Согласно приоритету стратегии Range Breakout, это сигнализирует о продолжении медвежьего импульса. Несмотря на нейтральный тренд HTF и нахождение в зоне Discount, локальный моментум стал медвежьим после снятия ликвидности с недавних максимумов (5016.29). Основной целью выступает значимый уровень Swing Low (4967.77). Стоп-лосс установлен за границей диапазона с буфером 1.0 ATR, что соответствует правилам защиты позиции при пробоях."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 65,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""RANGE_SWEEP"",
+    ""model_completeness"": {
+      ""range_identified"": true,
+      ""extreme_broken"": true,
+      ""confirmation_candles"": true,
+      ""target_defined"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4986.34,
+    ""buffered_stop_loss"": 4998.52,
+    ""target_price"": 4967.77,
+    ""risk_amount"": 12.18,
+    ""reward_amount"": 18.57,
+    ""calculated_rr"": 1.52
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4986.34,
+    ""final_sl"": 4998.52,
+    ""final_tp"": 4967.77,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 выше пробитой границы диапазона 4990.64 или достижение стоп-лосса на 4998.52.""
+  }
+}
+```","Цена успешно пробила нижнюю границу локального диапазона консолидации [4990.64 - 4996.36] вниз и закрепилась тремя последовательными свечами M15 ниже уровня 4990.64. Согласно приоритету стратегии Range Breakout, это сигнализирует о продолжении медвежьего импульса. Несмотря на нейтральный тренд HTF и нахождение в зоне Discount, локальный моментум стал медвежьим после снятия ликвидности с недавних максимумов (5016.29). Основной целью выступает значимый уровень Swing Low (4967.77). Стоп-лосс установлен за границей диапазона с буфером 1.0 ATR, что соответствует правилам защиты позиции при пробоях.",,"['INT_CHOCH (BULLISH_CHOCH, 15 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",18.57,SELL,"{'ob': 2, 'fvg': 2, 'int_bos': 0, 'int_choch': 1, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 6, 'confirmed_total': 0, 'int_choch_total': 12, 'swing_bos_total': 3, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 488, 'structure': 'BULLISH_CHOCH'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_tp,4974.16,XAU_USD,4967.77,0,2026-03-18T09:15:58.151823+00:00,UPTREND,2026-03-18T10:35:45.662247+00:00,DISCOUNT
+4819.64,2026-03-19T06:24:03.100924+00:00,2026-03-19T06:15:57.805435+00:00,4833.27,True,2026-03-19T06:16:03.666305+00:00,4833.27,661,68,"```json
+{
+  ""executive_summary"": ""Цена успешно пробила локальный диапазон консолидации [4836.85 - 4845.44] вниз, закрепившись двумя свечами ниже уровня 4836.85. Пробой подтвержден медвежьим BOS на уровне 4841.49 и полностью соответствует нисходящему тренду таймфрейма H1. Несмотря на нахождение в зоне Discount относительно широкого диапазона H4, локальный импульс Токийской сессии указывает на высокую вероятность продолжения движения к основной ликвидности на уровне Weak Low (4804.23). Стоп-лосс установлен за противоположной границей диапазона и уровнем инвалидации 4846.9, что обеспечивает отличный R:R выше 2.0."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 68,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""BOS_CONTINUATION"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""range_broken_by_2_candles"": true,
+      ""sl_behind_boundary"": true,
+      ""trend_alignment"": true,
+      ""rr_above_1_5"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4833.27,
+    ""buffered_stop_loss"": 4846.9,
+    ""target_price"": 4805.0,
+    ""risk_amount"": 13.63,
+    ""reward_amount"": 28.27,
+    ""calculated_rr"": 2.07
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4833.27,
+    ""final_sl"": 4846.9,
+    ""final_tp"": 4805.0,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 выше уровня 4846.9 (верхняя граница диапазона + буфер) отменяет медвежий сценарий.""
+  }
+}
+```","Цена успешно пробила локальный диапазон консолидации [4836.85 - 4845.44] вниз, закрепившись двумя свечами ниже уровня 4836.85. Пробой подтвержден медвежьим BOS на уровне 4841.49 и полностью соответствует нисходящему тренду таймфрейма H1. Несмотря на нахождение в зоне Discount относительно широкого диапазона H4, локальный импульс Токийской сессии указывает на высокую вероятность продолжения движения к основной ликвидности на уровне Weak Low (4804.23). Стоп-лосс установлен за противоположной границей диапазона и уровнем инвалидации 4846.9, что обеспечивает отличный R:R выше 2.0.",,"['INT_BOS (BEARISH_BOS, 3 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BEAR_OB)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP']",13.63,SELL,"{'ob': 4, 'fvg': 2, 'int_bos': 1, 'int_choch': 0, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 5, 'confirmed_total': 1, 'int_choch_total': 11, 'swing_bos_total': 4, 'int_bos_confirmed': 1, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 525, 'structure': 'BEARISH_CHOCH'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,4819.64,XAU_USD,4805.0,0,2026-03-19T06:15:57.497747+00:00,DOWNTREND,2026-03-19T06:24:03.246936+00:00,DISCOUNT
+4648.0,2026-03-19T19:04:02.802683+00:00,2026-03-19T16:16:15.468739+00:00,4605.07,True,2026-03-19T16:16:25.587874+00:00,4605.07,689,65,"```json
+{
+  ""executive_summary"": ""На графике XAUUSD наблюдается устойчивый нисходящий тренд на таймфреймах H1 и M15. После теста значимого минимума 4502.36 цена совершила коррекционный отскок, который был остановлен медвежьим ордерблоком (Bearish OB) в диапазоне 4601.83–4639.06. На текущий момент цена находится в зоне дисконта относительно макро-диапазона H4, однако сильный медвежий импульс (100% по данным системы) и подтвержденная структура на M15 указывают на высокую вероятность продолжения падения. Вход осуществляется на подтверждении отскока от зоны сопротивления с целью снятия ликвидности перед основным минимумом. Согласно правилам, тейк-профит ограничен 80 пунктами от точки входа."",
+  ""signal"": {
+    ""action"": ""SELL"",
+    ""confidence"": 65,
+    ""setup_grade"": ""B+"",
+    ""setup_type"": ""OB_RETEST"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""swing_bos_confirmed"": false,
+      ""pullback_to_ob_fvg"": true,
+      ""internal_structure_aligned"": true,
+      ""htf_trend_aligned"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4605.07,
+    ""buffered_stop_loss"": 4648.0,
+    ""target_price"": 4525.07,
+    ""risk_amount"": 42.93,
+    ""reward_amount"": 80.0,
+    ""calculated_rr"": 1.86
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4605.07,
+    ""final_sl"": 4648.0,
+    ""final_tp"": 4525.07,
+    ""tp_logic"": ""LIQUIDITY_TARGET"",
+    ""entry_quality"": ""GOOD"",
+    ""entry_warning"": ""NONE"",
+    ""invalidation_condition"": ""Закрытие свечи M15 выше уровня 4639.56 (верхняя граница Bearish OB) аннулирует медвежий сценарий.""
+  }
+}
+```","На графике XAUUSD наблюдается устойчивый нисходящий тренд на таймфреймах H1 и M15. После теста значимого минимума 4502.36 цена совершила коррекционный отскок, который был остановлен медвежьим ордерблоком (Bearish OB) в диапазоне 4601.83–4639.06. На текущий момент цена находится в зоне дисконта относительно макро-диапазона H4, однако сильный медвежий импульс (100% по данным системы) и подтвержденная структура на M15 указывают на высокую вероятность продолжения падения. Вход осуществляется на подтверждении отскока от зоны сопротивления с целью снятия ликвидности перед основным минимумом. Согласно правилам, тейк-профит ограничен 80 пунктами от точки входа.",,"['INT_OB (BEAR_OB)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BEAR_OB)', 'FVG (BEAR_FVG)', 'FVG (BEAR_FVG)', 'EQH_SWEEP', 'EQL_SWEEP']",-42.93,SELL,"{'ob': 4, 'fvg': 2, 'int_bos': 0, 'int_choch': 0, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 4, 'confirmed_total': 0, 'int_choch_total': 10, 'swing_bos_total': 3, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 485, 'structure': 'BEARISH_CHOCH'}, 'int_choch_confirmed': 0, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,4648.0,XAU_USD,4525.07,0,2026-03-19T16:16:15.292021+00:00,DOWNTREND,2026-03-19T19:04:03.063942+00:00,DISCOUNT
+4688.23,2026-03-20T01:46:03.535057+00:00,2026-03-19T19:31:13.852517+00:00,4644.42,True,2026-03-19T19:31:16.397182+00:00,4644.42,690,72,"```json
+{
+  ""executive_summary"": ""Цена успешно пробила верхнюю границу локального диапазона консолидации [4579.35 - 4623.10] и закрепилась выше двумя свечами на таймфрейме M15. Пробой подтверждается формированием бычьего CHoCH на уровне 4626.86, что сигнализирует о смене локального характера движения. Мы находимся в зоне глубокого дисконта (27.87%) относительно более старшего диапазона H4, что усиливает потенциал восходящей коррекции или разворота. Вход осуществляется по текущей рыночной цене, так как цена уже значительно удалилась от точки пробоя, при этом сохраняется приемлемый риск-менеджмент. Целью выступает ближайший медвежий Order Block в районе 4722.33, что соответствует ограничению в 80 пунктов от точки входа."",
+  ""signal"": {
+    ""action"": ""BUY"",
+    ""confidence"": 72,
+    ""setup_grade"": ""A"",
+    ""setup_type"": ""CHOCH_REVERSAL"",
+    ""model"": ""BOS_CONTINUATION"",
+    ""model_completeness"": {
+      ""range_breakout_confirmed"": true,
+      ""internal_choch_confirmed"": true,
+      ""fvg_at_breakout_zone"": true,
+      ""htf_discount_alignment"": true
+    }
+  },
+  ""confluence"": {
+    ""htf_aligned"": true,
+    ""ltf_trigger_confirmed"": true,
+    ""no_news_soon"": true,
+    ""rr_acceptable"": true,
+    ""invalidation_respected"": true
+  },
+  ""math_debug_log"": {
+    ""entry_price"": 4644.42,
+    ""buffered_stop_loss"": 4600.61,
+    ""target_price"": 4722.33,
+    ""risk_amount"": 43.81,
+    ""reward_amount"": 77.91,
+    ""calculated_rr"": 1.77
+  },
+  ""trade_plan"": {
+    ""final_entry"": 4644.42,
+    ""final_sl"": 4600.61,
+    ""final_tp"": 4722.33,
+    ""tp_logic"": ""OB_TARGET"",
+    ""entry_quality"": ""OK"",
+    ""entry_warning"": ""LATE_ENTRY"",
+    ""invalidation_condition"": ""Закрытие свечи M15 ниже уровня 4623.10 (верхняя граница пробитого диапазона) или достижение стоп-лосса на 4600.61.""
+  }
+}
+```","Цена успешно пробила верхнюю границу локального диапазона консолидации [4579.35 - 4623.10] и закрепилась выше двумя свечами на таймфрейме M15. Пробой подтверждается формированием бычьего CHoCH на уровне 4626.86, что сигнализирует о смене локального характера движения. Мы находимся в зоне глубокого дисконта (27.87%) относительно более старшего диапазона H4, что усиливает потенциал восходящей коррекции или разворота. Вход осуществляется по текущей рыночной цене, так как цена уже значительно удалилась от точки пробоя, при этом сохраняется приемлемый риск-менеджмент. Целью выступает ближайший медвежий Order Block в районе 4722.33, что соответствует ограничению в 80 пунктов от точки входа.",,"['INT_CHOCH (BULLISH_CHOCH, 2 bars ago)', 'INT_OB (BEAR_OB)', 'INT_OB (BEAR_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BULL_OB)', 'INT_OB (BULL_OB)', 'FVG (BEAR_FVG)', 'FVG (BULL_FVG)', 'FVG (BULL_FVG)']",43.81,BUY,"{'ob': 5, 'fvg': 3, 'int_bos': 0, 'int_choch': 1, 'swing_bos': 0, 'swing_choch': 0, 'int_bos_total': 3, 'confirmed_total': 1, 'int_choch_total': 11, 'swing_bos_total': 3, 'int_bos_confirmed': 0, 'swing_choch_total': 1, '_trigger_structure': {'bar_index': 472, 'structure': 'BEARISH_CHOCH'}, 'int_choch_confirmed': 1, 'swing_bos_confirmed': 0, 'swing_choch_confirmed': 0}",closed_sl,4688.23,XAU_USD,4722.33,0,2026-03-19T19:31:13.666239+00:00,DOWNTREND,2026-03-20T01:46:03.64258+00:00,DISCOUNT
