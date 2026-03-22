@@ -388,14 +388,15 @@ class TelegramService:
         """Обработка нажатий на inline кнопки"""
         try:
             logger.info(f"🔘 Callback query received: data={call.data}, from_user={call.from_user.id}")
-            
-            # Отвечаем на callback чтобы убрать "крутилку"
-            self.bot.answer_callback_query(call.id)
 
-            # Callback'ы, которые приходят из Signal Bot, игнорируем в основном боте,
-            # чтобы не было "Unknown callback_data".
+            # Кнопки Astra Signal Bot (close_manual_trade) обрабатывает только второй бот.
+            # Если сюда попал такой callback — не вызывать answer_callback_query основного бота
+            # (Telegram вернёт ошибку по чужому call.id).
             if call.data and str(call.data).startswith("close_manual_trade:"):
                 return
+
+            # Отвечаем на callback чтобы убрать "крутилку"
+            self.bot.answer_callback_query(call.id)
             
             # Проверяем что call.message существует
             if not call.message:
@@ -962,6 +963,12 @@ class TelegramService:
         
         Args:
             update_dict: Словарь с данными update от Telegram
+        
+        Важно: один и тот же URL webhook может быть зарегистрирован у обоих ботов.
+        Каждый update относится только к одному боту. Нельзя вызывать
+        process_new_updates() у обоих — иначе answer_callback_query() падает
+        (чужой callback_id), и основной бот шлёт пользователю «Произошла ошибка…».
+        Callback «Закрыть сделку вручную» (close_manual_trade:) — только Signal Bot.
         """
         if not self.bot:
             logger.error("❌ Бот не инициализирован")
@@ -969,10 +976,21 @@ class TelegramService:
         
         try:
             update = telebot.types.Update.de_json(update_dict)
-            self.bot.process_new_updates([update])
-            # Для inline-кнопок, которые отправляются Signal Bot'ом, обрабатываем update также вторым bot'ом.
-            if self.bot_signals:
-                self.bot_signals.process_new_updates([update])
+            cq = getattr(update, "callback_query", None)
+            data = getattr(cq, "data", None) if cq else None
+
+            is_signal_manual_close = (
+                data is not None and str(data).startswith("close_manual_trade:")
+            )
+
+            if is_signal_manual_close:
+                if self.bot_signals:
+                    self.bot_signals.process_new_updates([update])
+                else:
+                    logger.warning("⚠️ close_manual_trade callback, но TELEGRAM_BOT_TOKEN_SIGNALS не задан")
+            else:
+                self.bot.process_new_updates([update])
+
             logger.debug(f"✅ Webhook update обработан: {update.update_id}")
         except Exception as e:
             logger.error(f"❌ Ошибка обработки webhook update: {e}")
