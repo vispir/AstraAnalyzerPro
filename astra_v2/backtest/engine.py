@@ -31,7 +31,7 @@ import pandas as pd
 
 from astra_v2 import config
 from astra_v2.core.technical_engine import extract_levels, KeyLevel
-from astra_v2.core.signal_gate import check_signal, is_active_session
+from astra_v2.core.signal_gate import check_signal, is_active_session, Signal
 from astra_v2.core.macro_engine import MacroBias
 from astra_v2.data.macro_features import compute_macro_features
 
@@ -51,6 +51,7 @@ class Trade:
     closed_at: Optional[datetime] = None
     exit_price: Optional[float] = None
     pnl: float = 0.0           # in USD per unit (1 oz gold = 1 unit)
+    dollar_pnl: float = 0.0   # scaled by position size — used by Monte Carlo
     status: str = "open"       # open, tp, sl, partial_tp, be_sl, trail_sl, forced
     partial_closed: bool = False
     be_moved: bool = False
@@ -144,14 +145,13 @@ def _simulate_trade(
     sl_hit = bar_low <= trade.stop_loss if is_long else bar_high >= trade.stop_loss
     if sl_hit:
         exit_price = trade.stop_loss
+        # Slippage is adverse on SL exit — applied once to exit_price
         trade.exit_price = exit_price - config.SLIPPAGE_USD if is_long else exit_price + config.SLIPPAGE_USD
-        sl_dist = abs(trade.entry - trade.stop_loss)
         if trade.partial_closed:
-            # Half position already closed at partial_tp
-            trade.pnl += (trade.exit_price - trade.entry) * (0.5 if is_long else -0.5) * 1  # remaining 50%
+            # Half position already closed at partial_tp — only remaining 50% hits SL
+            trade.pnl += (trade.exit_price - trade.entry) * (0.5 if is_long else -0.5)
         else:
             trade.pnl = (trade.exit_price - trade.entry) * (1 if is_long else -1)
-        trade.pnl -= config.SLIPPAGE_USD  # exit slippage
         trade.status = "be_sl" if trade.be_moved else "sl"
         return
 
@@ -226,6 +226,7 @@ def run_backtest(
     equity_curve = [balance]
     all_trades: list[Trade] = []
     open_trade: Optional[Trade] = None
+    pending_signal: Optional[Signal] = None  # enter at next bar open
 
     # Walk-forward windows
     test_start = bars.index[0] + pd.DateOffset(months=wf_train_months)
@@ -242,6 +243,24 @@ def run_backtest(
         now: datetime = ts.to_pydatetime()
         date_str = now.strftime("%Y-%m-%d")
 
+        # ── Open pending signal at this bar's open (next bar after signal) ──
+        if pending_signal is not None and open_trade is None:
+            sig = pending_signal
+            pending_signal = None
+            entry_price = float(bar["open"])
+            entry_with_slippage = (entry_price + config.SLIPPAGE_USD
+                                   if sig.direction == "BULLISH"
+                                   else entry_price - config.SLIPPAGE_USD)
+            open_trade = Trade(
+                direction=sig.direction,
+                entry=entry_with_slippage,
+                stop_loss=sig.stop_loss,
+                take_profit=sig.take_profit,
+                partial_tp=sig.partial_tp,
+                opened_at=now,
+            )
+            logger.debug(f"{now} | ENTER {sig.direction} @ {entry_with_slippage:.2f} (next-bar open) SL={sig.stop_loss:.2f} TP={sig.take_profit:.2f}")
+
         # ── Manage open trade ───────────────────────────────────────────────
         if open_trade and open_trade.status == "open":
             _simulate_trade(open_trade, bar)
@@ -252,6 +271,7 @@ def run_backtest(
                 position_units = risk_usd / sl_dist if sl_dist > 0 else 0
 
                 trade_pnl = open_trade.pnl * position_units
+                open_trade.dollar_pnl = trade_pnl
                 balance += trade_pnl
                 equity_curve.append(balance)
                 open_trade.closed_at = now
@@ -266,8 +286,8 @@ def run_backtest(
         if not is_active_session(now):
             continue
 
-        # ── Skip if already in a trade ─────────────────────────────────────
-        if open_trade:
+        # ── Skip if already in a trade or pending entry ─────────────────────
+        if open_trade or pending_signal is not None:
             continue
 
         # ── Daily trade limit (per-day counter) ────────────────────────────
@@ -285,7 +305,7 @@ def run_backtest(
                     macro = proxy_macro_bias(features)
                 else:
                     from astra_v2.core.macro_engine import get_bias
-                    macro = get_bias(fred_df=fred_df, yfinance_df=yfinance_df, cot_df=cot_df)
+                    macro = get_bias(fred_df=fred_df, yfinance_df=yfinance_df, cot_df=cot_df, dt=now)
             except Exception as e:
                 logger.debug(f"Macro failed for {date_str}: {e}")
                 continue
@@ -316,20 +336,13 @@ def run_backtest(
         if signal is None:
             continue
 
-        # ── Open trade with slippage ───────────────────────────────────────
-        entry_with_slippage = current_price + config.SLIPPAGE_USD if signal.direction == "BULLISH" else current_price - config.SLIPPAGE_USD
-        open_trade = Trade(
-            direction=signal.direction,
-            entry=entry_with_slippage,
-            stop_loss=signal.stop_loss,
-            take_profit=signal.take_profit,
-            partial_tp=signal.partial_tp,
-            opened_at=now,
-        )
+        # ── Queue entry at next bar open (avoids bar-close entry bias) ─────
+        pending_signal = signal
         daily_trade_count[date_str] = today_count + 1
-        logger.debug(f"{now} | {signal.direction} @ {entry_with_slippage:.2f} SL={signal.stop_loss:.2f} TP={signal.take_profit:.2f}")
+        logger.debug(f"{now} | SIGNAL {signal.direction} detected @ close {current_price:.2f} → entering next bar open")
 
     # Force-close any open trade at end of backtest
+    pending_signal = None  # discard any pending entry at end of data
     if open_trade and open_trade.status == "open":
         last_bar = test_bars.iloc[-1]
         open_trade.exit_price = float(last_bar["close"])

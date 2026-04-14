@@ -85,7 +85,7 @@ def proxy_macro_bias(features: MacroFeatures) -> MacroBias:
 
     # COT net positioning (regime indicator, stale but directional)
     if features.cot_net is not None:
-        if features.cot_net > 100_000:
+        if features.cot_net > 50_000:
             scores.append(1)
             reasons.append(f"COT net={features.cot_net:+,} (speculators net long)")
         elif features.cot_net < -50_000:
@@ -95,11 +95,8 @@ def proxy_macro_bias(features: MacroFeatures) -> MacroBias:
             scores.append(0)
 
     # VIX level (risk sentiment)
-    if features.vix < 15:
-        # Low fear: risk-on, slightly bearish for gold (safe haven less needed)
-        scores.append(-1)
-        reasons.append(f"VIX={features.vix:.1f} (low fear, risk-on)")
-    elif features.vix > 25:
+    # Low VIX = normal market conditions, not bearish for gold (removed -1 for VIX<15)
+    if features.vix > 25:
         scores.append(1)
         reasons.append(f"VIX={features.vix:.1f} (elevated fear, gold bid)")
     else:

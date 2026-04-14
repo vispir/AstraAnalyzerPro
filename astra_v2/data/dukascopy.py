@@ -11,13 +11,13 @@ Notes:
   - Gaps > 4 hours on weekdays are flagged as suspect
 """
 
-import os
 import io
 import struct
 import logging
 import requests
 import pandas as pd
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -61,7 +61,7 @@ def _parse_bi5_candles(raw: bytes, hour_dt: datetime) -> list[dict]:
             break
         ts_ms, ask, bid, vol_ask, vol_bid = struct.unpack(">IIIff", chunk)
         ts = hour_dt + timedelta(milliseconds=ts_ms)
-        mid = (ask + bid) / 2 / 100000.0
+        mid = (ask + bid) / 2 / 1000.0  # XAU/USD: stored in 0.001 USD units
         candles.append({
             "timestamp": ts,
             "price": mid,
@@ -113,35 +113,45 @@ def download(
         logger.info(f"Loading Dukascopy cache: {cache_file}")
         return pd.read_parquet(cache_file)
 
-    logger.info(f"Downloading Dukascopy M15 XAU/USD {start} → {end}")
+    logger.info(f"Downloading Dukascopy M15 XAU/USD {start} → {end} (parallel, 16 workers)")
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
 
-    frames = []
-    session = requests.Session()
-    session.headers["User-Agent"] = "Mozilla/5.0"
-
+    # Build list of hours to fetch (skip weekends)
+    hours: list[datetime] = []
     current = start_dt
-    total_hours = int((end_dt - start_dt).total_seconds() / 3600)
-    fetched = 0
-
     while current < end_dt:
-        # Skip weekends (Sat 21:00 UTC → Sun 21:00 UTC is roughly closed)
         weekday = current.weekday()  # 0=Mon, 5=Sat, 6=Sun
-        if weekday == 5 or (weekday == 6 and current.hour < 21):
-            current += timedelta(hours=1)
-            continue
-
-        df = _fetch_hour_candles(current, session)
-        if df is not None and len(df) > 0:
-            frames.append(df)
-
-        fetched += 1
-        if fetched % 100 == 0:
-            pct = fetched / total_hours * 100
-            logger.info(f"  {pct:.0f}% ({current.date()})")
-
+        if not (weekday == 5 or (weekday == 6 and current.hour < 21)):
+            hours.append(current)
         current += timedelta(hours=1)
+
+    total = len(hours)
+    logger.info(f"  {total:,} trading hours to fetch")
+
+    frames: list[pd.DataFrame] = []
+    completed = 0
+
+    def _fetch_with_session(dt: datetime) -> Optional[pd.DataFrame]:
+        # Each thread gets its own session (requests.Session is not thread-safe)
+        s = requests.Session()
+        s.headers["User-Agent"] = "Mozilla/5.0"
+        return _fetch_hour_candles(dt, s)
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        future_to_dt = {pool.submit(_fetch_with_session, dt): dt for dt in hours}
+        for future in as_completed(future_to_dt):
+            completed += 1
+            if completed % 500 == 0:
+                pct = completed / total * 100
+                dt = future_to_dt[future]
+                logger.info(f"  {pct:.0f}% ({dt.date()})")
+            try:
+                df = future.result()
+                if df is not None and len(df) > 0:
+                    frames.append(df)
+            except Exception as e:
+                logger.debug(f"Worker error: {e}")
 
     if not frames:
         raise RuntimeError("No data downloaded from Dukascopy")

@@ -19,7 +19,8 @@ from astra_v2 import config
 logger = logging.getLogger(__name__)
 
 # CFTC COT report — gold futures (COMEX), commodity code 088691
-CFTC_COT_URL = "https://www.cftc.gov/dea/newcot/deaHistTff.txt"
+# Disaggregated format, yearly ZIP files (CFTC migrated from .txt to .zip per year)
+CFTC_COT_BASE_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 CFTC_COT_GOLD_CODE = "088691"
 
 
@@ -76,49 +77,75 @@ def get_yfinance_for_date(dt: datetime, df: pd.DataFrame = None) -> dict:
     return result
 
 
-def fetch_cot_gold() -> pd.DataFrame:
+def fetch_cot_gold(start_year: int = 2019) -> pd.DataFrame:
     """
     Download CFTC COT report for gold futures (COMEX 088691).
-    Returns DataFrame with weekly index and columns:
-      net_noncommercial — non-commercial net long (large speculators)
+    Downloads yearly ZIP files (Disaggregated format) and concatenates.
+    Returns DataFrame with weekly index and column: net_noncommercial
 
     Note: COT is released every Friday for the prior Tuesday.
     Data is 3-10 days stale by definition. Use as directional regime indicator only.
     """
+    import zipfile
+    import io
+    from datetime import date as date_type
+
     logger.info("Fetching CFTC COT data for gold futures")
-    try:
-        resp = requests.get(CFTC_COT_URL, timeout=30)
-        resp.raise_for_status()
+    current_year = date_type.today().year
+    frames = []
 
-        df = pd.read_csv(
-            StringIO(resp.text),
-            low_memory=False,
-        )
+    for year in range(start_year, current_year + 1):
+        url = CFTC_COT_BASE_URL.format(year=year)
+        try:
+            resp = requests.get(url, timeout=60)
+            resp.raise_for_status()
 
-        # Filter to gold futures
-        gold = df[df["CFTC_Commodity_Code"].astype(str).str.strip() == CFTC_COT_GOLD_CODE].copy()
-        if gold.empty:
-            # Try alternate column name
-            gold = df[df.get("Commodity_Code", pd.Series()).astype(str).str.strip() == CFTC_COT_GOLD_CODE].copy()
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+                # ZIP contains a single .txt file
+                txt_name = [n for n in z.namelist() if n.endswith(".txt")][0]
+                with z.open(txt_name) as f:
+                    df = pd.read_csv(f, low_memory=False)
 
-        if gold.empty:
-            logger.warning("Could not find gold in COT report (code 088691)")
-            return pd.DataFrame()
+            # Filter to COMEX gold futures by market name (most reliable across format versions)
+            name_col = "Market_and_Exchange_Names"
+            if name_col not in df.columns:
+                continue
+            gold = df[
+                df[name_col].str.contains("GOLD", case=False, na=False) &
+                df[name_col].str.contains("COMMODITY EXCHANGE", case=False, na=False)
+            ].copy()
+            if gold.empty:
+                continue
 
-        gold["date"] = pd.to_datetime(gold["Report_Date_as_MM_DD_YYYY"], format="%m/%d/%Y", errors="coerce")
-        gold = gold.dropna(subset=["date"]).set_index("date").sort_index()
+            # Parse date — prefer ISO format column
+            if "Report_Date_as_YYYY-MM-DD" in gold.columns:
+                gold["date"] = pd.to_datetime(gold["Report_Date_as_YYYY-MM-DD"], errors="coerce")
+            else:
+                date_col = next((c for c in gold.columns if "Report_Date" in c), None)
+                if date_col is None:
+                    continue
+                gold["date"] = pd.to_datetime(gold[date_col], errors="coerce")
+            gold = gold.dropna(subset=["date"]).set_index("date")
 
-        # Net non-commercial = long - short (speculator positioning)
-        long_col = "NonComm_Positions_Long_All"
-        short_col = "NonComm_Positions_Short_All"
-        if long_col in gold.columns and short_col in gold.columns:
-            gold["net_noncommercial"] = gold[long_col] - gold[short_col]
+            # Managed Money net = long - short (Disaggregated format)
+            long_col = next((c for c in gold.columns if "M_Money" in c and "Long" in c and "All" in c), None)
+            short_col = next((c for c in gold.columns if "M_Money" in c and "Short" in c and "All" in c), None)
+            if long_col and short_col:
+                gold["net_noncommercial"] = pd.to_numeric(gold[long_col], errors="coerce") - pd.to_numeric(gold[short_col], errors="coerce")
+                frames.append(gold[["net_noncommercial"]])
+                logger.debug(f"COT {year}: {len(gold)} rows")
 
-        return gold[["net_noncommercial"]].dropna()
+        except Exception as e:
+            logger.warning(f"COT fetch failed for {year}: {e}")
 
-    except Exception as e:
-        logger.warning(f"COT fetch failed: {e}")
+    if not frames:
+        logger.warning("No COT data fetched — running without COT signal")
         return pd.DataFrame()
+
+    result = pd.concat(frames).sort_index()
+    result = result[~result.index.duplicated(keep="last")]
+    logger.info(f"COT data loaded: {len(result)} weekly reports ({result.index[0].date()} → {result.index[-1].date()})")
+    return result.dropna()
 
 
 def get_cot_for_date(dt: datetime, cot_df: pd.DataFrame = None) -> dict:
@@ -126,7 +153,9 @@ def get_cot_for_date(dt: datetime, cot_df: pd.DataFrame = None) -> dict:
     Get COT net positioning for the nearest prior Tuesday report.
     COT is always stale by 3-10 days — that's expected.
     """
-    if cot_df is None or cot_df.empty:
+    if cot_df is None:
+        # Only fetch if not provided at all (live mode).
+        # If caller passed an empty DataFrame, COT is unavailable — don't retry.
         cot_df = fetch_cot_gold()
 
     if cot_df.empty:

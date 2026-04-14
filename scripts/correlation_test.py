@@ -24,9 +24,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import time
 import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -42,7 +46,7 @@ def run_correlation_test(
     from astra_v2.data.macro_features import compute_macro_features
     from astra_v2.backtest.llm_proxy import proxy_macro_bias
     from astra_v2.core.macro_engine import get_bias
-    from astra_v2.data.fred_client import fetch_fred_bulk
+    from astra_v2.data.fred_client import fetch_all as fetch_fred_bulk
     from astra_v2.data.external import fetch_yfinance_bulk, fetch_cot_gold
 
     logger.info("Loading bulk data...")
@@ -87,9 +91,9 @@ def run_correlation_test(
             logger.warning(f"  Proxy failed: {e}")
             continue
 
-        # LLM (real Gemini call)
+        # LLM (real Gemini call) — pass dt so it uses historical data, not today's
         try:
-            llm = get_bias(fred_df=fred_df, yfinance_df=yfinance_df, cot_df=cot_df)
+            llm = get_bias(fred_df=fred_df, yfinance_df=yfinance_df, cot_df=cot_df, dt=dt)
             llm_dir = llm.direction
         except Exception as e:
             logger.warning(f"  LLM failed: {e}")
@@ -101,6 +105,8 @@ def run_correlation_test(
         llm_dirs.append(llm_dir)
 
         logger.info(f"  Proxy={proxy_dir} LLM={llm_dir} {'AGREE' if agree else 'DISAGREE'}")
+        if i < len(sample_dates) - 1:
+            time.sleep(20)  # mistral-7b free tier: ~3 req/min
 
     if not agreements:
         logger.error("No successful comparisons.")

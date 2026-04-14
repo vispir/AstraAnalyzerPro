@@ -108,14 +108,120 @@ Rules:
 Return ONLY the JSON object, no other text."""
 
 
-def _call_llm(prompt: str) -> Optional[dict]:
-    """Call Gemini Flash and parse JSON response."""
-    if not config.GEMINI_API_KEY:
-        raise EnvironmentError("GEMINI_API_KEY not set")
+def _parse_text_to_json(text: str) -> Optional[dict]:
+    """Parse JSON from LLM response. Handles reasoning models that output
+    thinking steps before the JSON (e.g. Nemotron), truncated JSON,
+    and markdown fences.
+    """
+    import re
 
+    # Strip markdown fences
+    clean = text.strip()
+    if clean.startswith("```"):
+        parts = clean.split("```")
+        clean = parts[1] if len(parts) > 1 else clean
+        if clean.startswith("json"):
+            clean = clean[4:]
+    clean = clean.strip()
+
+    # 1. Try direct parse of the whole text
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Find the LAST JSON object in the text (reasoning models put JSON at the end)
+    for match in re.finditer(r'\{[^{}]*\}', text, re.DOTALL):
+        try:
+            candidate = json.loads(match.group())
+            if "direction" in candidate:
+                return candidate
+        except json.JSONDecodeError:
+            continue
+
+    # 3. Try appending missing closing brace (truncated JSON)
+    try:
+        return json.loads(clean + "}")
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Regex extraction of individual fields
+    direction = re.search(r'"direction"\s*:\s*"(BULLISH|BEARISH|NEUTRAL)"', text)
+    confidence = re.search(r'"confidence"\s*:\s*([0-9.]+)', text)
+    reasoning_m = re.search(r'"reasoning"\s*:\s*"([^"]*)"', text)
+    if direction and confidence:
+        return {
+            "direction": direction.group(1),
+            "confidence": float(confidence.group(1)),
+            "reasoning": reasoning_m.group(1) if reasoning_m else "",
+        }
+
+    return None
+
+
+def _call_openrouter(prompt: str) -> Optional[dict]:
+    """Call OpenRouter API trying models in order. Returns parsed JSON dict or None."""
+    if not config.OPENROUTER_API_KEY:
+        return None
+    import requests as _requests
+    import time as _time
+
+    models = config.OPENROUTER_MODELS
+    if not models:
+        return None
+
+    for model in models:
+        _RETRY_WAITS = [20, 40, 60]
+        success = False
+        for attempt, wait in enumerate(_RETRY_WAITS, start=1):
+            try:
+                resp = _requests.post(
+                    config.OPENROUTER_BASE_URL,
+                    headers={
+                        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/astra-analyzer-pro",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                    },
+                    timeout=60,
+                )
+                if resp.status_code == 404:
+                    logger.warning(f"OpenRouter model not found: {model} — trying next")
+                    break  # skip to next model immediately
+                if resp.status_code == 429:
+                    logger.info(f"OpenRouter [{model}] rate limit — waiting {wait}s (attempt {attempt}/{len(_RETRY_WAITS)})")
+                    _time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                result = _parse_text_to_json(text)
+                if result is not None:
+                    logger.info(f"OpenRouter [{model}] succeeded")
+                    return result
+                logger.warning(f"OpenRouter [{model}] returned unparseable response — trying next model")
+                break
+            except Exception as e:
+                logger.warning(f"OpenRouter [{model}] call failed: {e} — trying next model")
+                break
+        else:
+            # All retries for this model exhausted (only reached if loop didn't break)
+            logger.warning(f"OpenRouter [{model}] rate limit persists — trying next model")
+
+    logger.warning("OpenRouter: all models exhausted")
+    return None
+
+
+def _call_gemini(prompt: str) -> Optional[dict]:
+    """Call Gemini API. Returns parsed JSON dict or None."""
+    if not config.GEMINI_API_KEY:
+        return None
     try:
         if _GENAI_NEW:
-            # google-genai SDK (current)
             client = genai.Client(api_key=config.GEMINI_API_KEY)
             response = client.models.generate_content(
                 model=config.GEMINI_MODEL,
@@ -125,9 +231,8 @@ def _call_llm(prompt: str) -> Optional[dict]:
                     max_output_tokens=256,
                 ),
             )
-            text = response.text.strip()
+            text = response.text
         else:
-            # Legacy google-generativeai fallback
             genai.configure(api_key=config.GEMINI_API_KEY)
             model = genai.GenerativeModel(config.GEMINI_MODEL)
             response = model.generate_content(
@@ -137,22 +242,25 @@ def _call_llm(prompt: str) -> Optional[dict]:
                     max_output_tokens=256,
                 ),
             )
-            text = response.text.strip()
-
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-
-        return json.loads(text)
-
+            text = response.text
+        return _parse_text_to_json(text)
     except json.JSONDecodeError as e:
-        logger.warning(f"LLM returned invalid JSON: {e}")
+        logger.warning(f"Gemini returned invalid JSON: {e}")
         return None
     except Exception as e:
-        logger.warning(f"LLM call failed: {e}")
+        logger.warning(f"Gemini call failed: {e}")
         return None
+
+
+def _call_llm(prompt: str) -> Optional[dict]:
+    """Call LLM: OpenRouter first (if key set), then Gemini fallback."""
+    if config.OPENROUTER_API_KEY:
+        result = _call_openrouter(prompt)
+        if result is not None:
+            return result
+        logger.warning("OpenRouter failed, trying Gemini fallback")
+
+    return _call_gemini(prompt)
 
 
 def _parse_llm_response(data: dict, features: MacroFeatures) -> MacroBias:
@@ -245,9 +353,10 @@ def get_bias(
     yfinance_df: "pd.DataFrame" = None,
     cot_df: "pd.DataFrame" = None,
     force_refresh: bool = False,
+    dt: Optional[datetime] = None,
 ) -> MacroBias:
     """
-    Get current macro bias. Uses Supabase cache (60-min TTL).
+    Get macro bias for a given datetime (or current time if dt=None).
 
     Args:
         supabase_client: Supabase client instance (for cache). Optional.
@@ -255,13 +364,14 @@ def get_bias(
         yfinance_df: Pre-loaded yfinance DataFrame (for backtest).
         cot_df: Pre-loaded COT DataFrame (for backtest).
         force_refresh: bypass cache
+        dt: Historical datetime for backtesting. If None, uses current UTC time.
 
     Returns MacroBias. Never raises — falls back to NEUTRAL on any error.
     """
-    now = datetime.now(timezone.utc)
+    now = dt if dt is not None else datetime.now(timezone.utc)
 
-    # Try cache first
-    if supabase_client and not force_refresh:
+    # Try cache first (live mode only — backtest skips cache)
+    if supabase_client and not force_refresh and dt is None:
         cached = _load_from_cache(supabase_client)
         if cached:
             return cached

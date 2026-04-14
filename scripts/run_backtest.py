@@ -17,6 +17,11 @@ from __future__ import annotations
 import argparse
 import logging
 import json
+import os
+import sys
+
+# Ensure project root is on the path when run as `python scripts/run_backtest.py`
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -35,7 +40,7 @@ def main():
 
     from astra_v2 import config
     from astra_v2.data.dukascopy import load as load_bars
-    from astra_v2.data.fred_client import fetch_fred_bulk
+    from astra_v2.data.fred_client import fetch_all as fetch_fred_bulk
     from astra_v2.data.external import fetch_yfinance_bulk, fetch_cot_gold
     from astra_v2.backtest.engine import run_backtest
     from astra_v2.backtest.monte_carlo import run_monte_carlo
@@ -44,7 +49,7 @@ def main():
 
     # Load data
     logger.info("Loading Dukascopy M15 bars...")
-    bars = load_bars(symbol="XAUUSD", start=args.start, end=args.end)
+    bars = load_bars(start=args.start, end=args.end)
     logger.info(f"Bars loaded: {len(bars):,}")
 
     logger.info("Loading FRED bulk data...")
@@ -80,7 +85,7 @@ def main():
     print(f"Max DD <= 5%:          {'PASS' if dd_ok else 'FAIL'} ({summary['max_drawdown_pct']:.2f}%)")
 
     if args.monte_carlo:
-        pnl_list = [t.pnl for t in result.trades if t.status != "open"]
+        pnl_list = [t.dollar_pnl for t in result.trades if t.status != "open"]
         if len(pnl_list) >= 10:
             logger.info("Running Monte Carlo (10,000 runs)...")
             mc = run_monte_carlo(pnl_list, start_balance=args.balance)

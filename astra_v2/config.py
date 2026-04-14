@@ -6,6 +6,12 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ── API Keys (set in .env or environment) ─────────────────────────────────────
 OANDA_API_KEY = os.environ.get("OANDA_API_KEY", "")
@@ -16,6 +22,16 @@ FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+# Comma-separated list of models to try in order (first available wins)
+_OPENROUTER_MODELS_RAW = os.environ.get(
+    "OPENROUTER_MODELS",
+    "google/gemma-3-12b-it:free,meta-llama/llama-3.2-3b-instruct:free,meta-llama/llama-3.3-70b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free",
+)
+OPENROUTER_MODELS: list[str] = [m.strip() for m in _OPENROUTER_MODELS_RAW.split(",") if m.strip()]
+OPENROUTER_MODEL = OPENROUTER_MODELS[0] if OPENROUTER_MODELS else ""  # legacy compat
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
@@ -39,8 +55,8 @@ NY_CLOSE_UTC = 15        # 15:00 UTC
 
 # ── Signal Gate Thresholds ─────────────────────────────────────────────────────
 MACRO_CONFIDENCE_MIN = 0.60      # below this → NEUTRAL treatment
-LEVEL_PROXIMITY_USD = 0.50       # price must be within $0.50 of a key level
-LEVEL_STRENGTH_MIN = 6.0         # out of 10 (XGBoost score, v2.1)
+LEVEL_PROXIMITY_USD = 3.0        # price must be within $3 of a key level (~0.15% at $2000)
+LEVEL_STRENGTH_MIN = 4.5         # out of 10 — includes PDH/PDL (5.0), round_10 (4.5)
 MAX_TRADES_PER_DAY = 2
 
 # ── Trade Parameters (all in USD, not pips) ────────────────────────────────────
