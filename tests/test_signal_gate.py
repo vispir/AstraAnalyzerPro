@@ -20,7 +20,9 @@ from astra_v2.core.technical_engine import KeyLevel
 
 LONDON_OPEN_TIME = datetime(2024, 3, 5, 9, 0, 0, tzinfo=timezone.utc)  # 09:00 UTC = London session
 NY_OPEN_TIME = datetime(2024, 3, 5, 13, 30, 0, tzinfo=timezone.utc)    # 13:30 UTC = NY session
-OUTSIDE_SESSION = datetime(2024, 3, 5, 7, 0, 0, tzinfo=timezone.utc)   # 07:00 UTC = no session
+EARLY_LONDON_TIME = datetime(2024, 3, 5, 7, 15, 0, tzinfo=timezone.utc)  # 07:15 UTC = London session
+LATE_NY_TIME = datetime(2024, 3, 5, 16, 15, 0, tzinfo=timezone.utc)      # 16:15 UTC = NY session
+OUTSIDE_SESSION = datetime(2024, 3, 5, 6, 0, 0, tzinfo=timezone.utc)     # 06:00 UTC = no session
 
 
 def bullish_macro(confidence=0.75) -> MacroBias:
@@ -70,6 +72,10 @@ def resistance_level(price: float) -> list[KeyLevel]:
     return [KeyLevel(price=price, level_type="pdh", direction="resistance", strength=7.0)]
 
 
+def round_support_level(price: float) -> list[KeyLevel]:
+    return [KeyLevel(price=price, level_type="round_10", direction="support", strength=7.0)]
+
+
 # ── Gate 1: Macro ──────────────────────────────────────────────────────────────
 
 def test_gate1_neutral_macro_blocks():
@@ -86,7 +92,7 @@ def test_gate1_neutral_macro_blocks():
 
 def test_gate1_low_confidence_blocks():
     signal, reason = check_signal(
-        macro=bullish_macro(confidence=0.55),
+        macro=bullish_macro(confidence=0.50),
         levels=support_level(3200.0),
         current_price=3200.30,
         now=LONDON_OPEN_TIME,
@@ -134,6 +140,17 @@ def test_gate2_price_at_level_passes():
     assert "gate_2" not in reason or reason == "ok"
 
 
+def test_gate2_round_level_is_context_only():
+    signal, reason = check_signal(
+        macro=bullish_macro(),
+        levels=round_support_level(3200.0),
+        current_price=3200.30,
+        now=LONDON_OPEN_TIME,
+    )
+    assert signal is None
+    assert "context-only" in reason
+
+
 # ── Gate 3: Direction alignment ────────────────────────────────────────────────
 
 def test_gate3_bullish_at_resistance_blocks():
@@ -179,6 +196,23 @@ def test_gate3_bearish_at_resistance_passes():
     assert "gate_3" not in reason or reason == "ok"
 
 
+def test_gate3_uses_nearest_aligned_level_when_available():
+    levels = [
+        KeyLevel(price=3200.10, level_type="pdh", direction="resistance", strength=7.0),
+        KeyLevel(price=3199.40, level_type="pdl", direction="support", strength=7.0),
+    ]
+    signal, reason = check_signal(
+        macro=bullish_macro(),
+        levels=levels,
+        current_price=3200.0,
+        now=LONDON_OPEN_TIME,
+    )
+    assert reason == "ok"
+    assert signal is not None
+    assert signal.level.direction == "support"
+    assert signal.level.price == pytest.approx(3199.40, abs=0.01)
+
+
 # ── Gate 4: Session window ─────────────────────────────────────────────────────
 
 def test_gate4_outside_session_blocks():
@@ -196,8 +230,16 @@ def test_gate4_london_session_passes():
     assert is_active_session(LONDON_OPEN_TIME)
 
 
+def test_gate4_early_london_session_passes():
+    assert is_active_session(EARLY_LONDON_TIME)
+
+
 def test_gate4_ny_session_passes():
     assert is_active_session(NY_OPEN_TIME)
+
+
+def test_gate4_late_ny_session_passes():
+    assert is_active_session(LATE_NY_TIME)
 
 
 def test_gate4_outside_session_fails():

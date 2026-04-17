@@ -93,6 +93,19 @@ def test_two_bullish_zero_bearish_moderate_confidence():
     assert bias.confidence == pytest.approx(0.65, abs=0.01)
 
 
+def test_primary_gold_driver_can_create_actionable_lean_bias():
+    """A strong real-yields signal alone should still create a tradable lean."""
+    features = make_features(
+        tips_spread=-0.6,
+        dxy_1m_change=0.0,
+        cot_net=0,
+        vix=18.0,
+    )
+    bias = proxy_macro_bias(features)
+    assert bias.direction == "BULLISH"
+    assert bias.confidence == pytest.approx(0.55, abs=0.01)
+
+
 # ── Bearish scenarios ────────────────────────────────────────────────────────────
 
 def test_three_bearish_factors_high_confidence():

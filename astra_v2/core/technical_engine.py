@@ -94,27 +94,23 @@ def compute_pdh_pdl(bars: pd.DataFrame, as_of: datetime) -> list[KeyLevel]:
     Previous Day High/Low — bars before 00:00 UTC today.
     Resets at midnight UTC (not local time).
     """
-    bars = bars.copy()
-    bars.index = pd.to_datetime(bars.index, utc=True)
-
     today_utc = pd.Timestamp(as_of.date(), tz="UTC")
-    yesterday = bars[bars.index < today_utc]
-
-    if yesterday.empty:
+    prior_bars = bars[bars.index < today_utc]
+    if prior_bars.empty:
         return []
 
-    # Group by date, take the previous trading day
-    daily = yesterday.groupby(yesterday.index.date).agg(
-        high=("high", "max"),
-        low=("low", "min"),
-    )
-    if daily.empty:
+    prior_dates = prior_bars.index.normalize()
+    prev_day = prior_dates.max()
+    if pd.isna(prev_day):
         return []
 
-    prev_day = daily.iloc[-1]
+    prev_day_bars = prior_bars[prior_dates == prev_day]
+    if prev_day_bars.empty:
+        return []
+
     return [
-        KeyLevel(price=float(prev_day["high"]), level_type="pdh", direction="resistance"),
-        KeyLevel(price=float(prev_day["low"]),  level_type="pdl", direction="support"),
+        KeyLevel(price=float(prev_day_bars["high"].max()), level_type="pdh", direction="resistance"),
+        KeyLevel(price=float(prev_day_bars["low"].min()), level_type="pdl", direction="support"),
     ]
 
 
@@ -123,9 +119,6 @@ def compute_weekly_levels(bars: pd.DataFrame, as_of: datetime) -> list[KeyLevel]
     Weekly high/low from Monday open to current bar.
     Resets at 00:00 UTC every Monday.
     """
-    bars = bars.copy()
-    bars.index = pd.to_datetime(bars.index, utc=True)
-
     as_of_ts = _to_utc_ts(as_of)
     # Find start of current week (Monday 00:00 UTC)
     days_since_monday = as_of_ts.dayofweek  # 0=Mon
@@ -146,9 +139,6 @@ def compute_session_levels(bars: pd.DataFrame, as_of: datetime) -> list[KeyLevel
     Today's completed session extremes (London or NY high/low).
     Only returns levels for sessions that have already closed.
     """
-    bars = bars.copy()
-    bars.index = pd.to_datetime(bars.index, utc=True)
-
     today = pd.Timestamp(as_of.date(), tz="UTC")
     current_hour = as_of.hour
     levels = []
@@ -217,7 +207,6 @@ def compute_fibonacci_levels(bars: pd.DataFrame, current_price: float, min_swing
     if len(bars) < 20:
         return []
 
-    bars = bars.copy()
     recent = bars.tail(200)
 
     swing_high = float(recent["high"].max())
@@ -242,6 +231,7 @@ def extract_levels(
     bars: pd.DataFrame,
     current_price: float,
     as_of: datetime,
+    allowed_level_types: Optional[set[LevelType]] = None,
 ) -> list[KeyLevel]:
     """
     Compute all key levels given OHLCV bars and current price.
@@ -255,11 +245,42 @@ def extract_levels(
     Returns sorted list of KeyLevel by proximity to current_price.
     """
     levels: list[KeyLevel] = []
-    levels.extend(compute_pdh_pdl(bars, as_of))
-    levels.extend(compute_weekly_levels(bars, as_of))
-    levels.extend(compute_session_levels(bars, as_of))
-    levels.extend(compute_round_levels(current_price))
-    levels.extend(compute_fibonacci_levels(bars, current_price))
+    wanted = allowed_level_types
+
+    if wanted is None or wanted.intersection({"pdh", "pdl"}):
+        levels.extend([
+            level
+            for level in compute_pdh_pdl(bars, as_of)
+            if wanted is None or level.level_type in wanted
+        ])
+
+    if wanted is None or wanted.intersection({"weekly_high", "weekly_low"}):
+        levels.extend([
+            level
+            for level in compute_weekly_levels(bars, as_of)
+            if wanted is None or level.level_type in wanted
+        ])
+
+    if wanted is None or wanted.intersection({"session_high", "session_low"}):
+        levels.extend([
+            level
+            for level in compute_session_levels(bars, as_of)
+            if wanted is None or level.level_type in wanted
+        ])
+
+    if wanted is None or wanted.intersection({"round_50", "round_10"}):
+        levels.extend([
+            level
+            for level in compute_round_levels(current_price)
+            if wanted is None or level.level_type in wanted
+        ])
+
+    if wanted is None or wanted.intersection({"fib_50", "fib_618"}):
+        levels.extend([
+            level
+            for level in compute_fibonacci_levels(bars, current_price)
+            if wanted is None or level.level_type in wanted
+        ])
 
     # Sort by proximity
     levels.sort(key=lambda lvl: abs(lvl.price - current_price))

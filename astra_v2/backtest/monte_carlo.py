@@ -139,9 +139,11 @@ def run_monte_carlo(
     logger.info(f"Monte Carlo: {n_runs} runs, {len(pnl)} trades, balance={start_balance:,.0f}")
 
     for i in range(n_runs):
-        shuffled = rng.permutation(pnl)
-        final_bal, max_dd = _compute_equity_stats(shuffled, start_balance)
-        pf = _compute_profit_factor(shuffled)
+        # Bootstrap resample (with replacement) so final balance and PF vary across runs.
+        # Pure permutation keeps sum(pnl) constant — all percentiles collapse to one value.
+        sampled = rng.choice(pnl, size=len(pnl), replace=True)
+        final_bal, max_dd = _compute_equity_stats(sampled, start_balance)
+        pf = _compute_profit_factor(sampled)
 
         final_balances[i] = final_bal
         max_dds[i] = max_dd

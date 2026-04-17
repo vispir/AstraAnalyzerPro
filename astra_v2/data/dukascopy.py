@@ -11,7 +11,6 @@ Notes:
   - Gaps > 4 hours on weekdays are flagged as suspect
 """
 
-import io
 import struct
 import logging
 import requests
@@ -220,6 +219,31 @@ def load(
         end=end or config.BACKTEST_END,
         cache_dir=cache_dir,
     )
+    if start:
+        df = df[df.index >= pd.Timestamp(start, tz="UTC")]
+    if end:
+        df = df[df.index <= pd.Timestamp(end, tz="UTC")]
+    return df
+
+
+def load_timeframe(
+    timeframe: str,
+    start: str = None,
+    end: str = None,
+    cache_dir: str = None,
+) -> pd.DataFrame:
+    """
+    Load a cached Dukascopy timeframe parquet.
+    Supported cache files are expected to already exist in DUKASCOPY_CACHE_DIR.
+    """
+    tf = timeframe.lower()
+    cache_dir = Path(cache_dir or config.DUKASCOPY_CACHE_DIR)
+    file_path = cache_dir / f"xauusd_{tf}_{start or config.BACKTEST_START}_{end or config.BACKTEST_END}.parquet"
+    if not file_path.exists():
+        raise FileNotFoundError(f"Dukascopy cache not found for timeframe '{timeframe}': {file_path}")
+    df = pd.read_parquet(file_path)
+    df.index = pd.to_datetime(df.index, utc=True)
+    df = df.sort_index()
     if start:
         df = df[df.index >= pd.Timestamp(start, tz="UTC")]
     if end:

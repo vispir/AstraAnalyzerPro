@@ -10,6 +10,7 @@ Modes:
     llm    — real Gemini calls (slow, ~$13 for 5yr, use for validation)
 
 Output: prints BacktestResult.summary() + Monte Carlo confidence intervals.
+         saves results to backtest_results/<timestamp>_<mode>.json
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import logging
 import json
 import os
 import sys
+from datetime import datetime
 
 # Ensure project root is on the path when run as `python scripts/run_backtest.py`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,34 +34,59 @@ def main():
     parser.add_argument("--start", default="2020-01-01", help="Start date")
     parser.add_argument("--end", default="2024-12-31", help="End date")
     parser.add_argument("--mode", choices=["proxy", "llm"], default="proxy")
+    parser.add_argument("--strategy", default="legacy_v1", help="Strategy ID")
     parser.add_argument("--balance", type=float, default=10_000.0, help="Starting balance USD")
     parser.add_argument("--train-months", type=int, default=6)
     parser.add_argument("--test-months", type=int, default=1)
     parser.add_argument("--monte-carlo", action="store_true", help="Run Monte Carlo simulation")
+    parser.add_argument("--cache-only-macro", action="store_true", help="Use only local yfinance/COT cache")
+    parser.add_argument("--refresh-yfinance", action="store_true", help="Refresh yfinance cache from network")
+    parser.add_argument("--refresh-cot", action="store_true", help="Refresh COT cache from network")
+    parser.add_argument("--output-dir", default="backtest_results", help="Directory to save results")
     args = parser.parse_args()
 
     from astra_v2 import config
-    from astra_v2.data.dukascopy import load as load_bars
+    from astra_v2.data.dukascopy import load as load_bars, load_timeframe
     from astra_v2.data.fred_client import fetch_all as fetch_fred_bulk
     from astra_v2.data.external import fetch_yfinance_bulk, fetch_cot_gold
     from astra_v2.backtest.engine import run_backtest
     from astra_v2.backtest.monte_carlo import run_monte_carlo
+    from astra_v2.strategies import get_strategy
 
-    logger.info(f"Backtest: {args.start} to {args.end}, mode={args.mode}")
+    logger.info(f"Backtest: {args.start} to {args.end}, mode={args.mode}, strategy={args.strategy}")
+    strategy = get_strategy(args.strategy)
 
     # Load data
     logger.info("Loading Dukascopy M15 bars...")
     bars = load_bars(start=args.start, end=args.end)
     logger.info(f"Bars loaded: {len(bars):,}")
+    m1_bars = None
+    h4_bars = None
+    if "M1" in getattr(strategy, "required_timeframes", ()):
+        logger.info("Loading Dukascopy M1 bars...")
+        m1_bars = load_timeframe("M1", start=args.start, end=args.end)
+        logger.info(f"M1 bars loaded: {len(m1_bars):,}")
+    if "H4" in getattr(strategy, "required_timeframes", ()):
+        logger.info("Loading Dukascopy H4 bars...")
+        h4_bars = load_timeframe("H4", start=args.start, end=args.end)
+        logger.info(f"H4 bars loaded: {len(h4_bars):,}")
 
     logger.info("Loading FRED bulk data...")
     fred_df = fetch_fred_bulk(args.start, args.end)
 
     logger.info("Loading yfinance bulk data...")
-    yfinance_df = fetch_yfinance_bulk(args.start, args.end)
+    yfinance_df = fetch_yfinance_bulk(
+        args.start,
+        args.end,
+        force_refresh=args.refresh_yfinance,
+        cache_only=args.cache_only_macro,
+    )
 
     logger.info("Loading COT data...")
-    cot_df = fetch_cot_gold()
+    cot_df = fetch_cot_gold(
+        force_refresh=args.refresh_cot,
+        cache_only=args.cache_only_macro,
+    )
 
     # Run backtest
     result = run_backtest(
@@ -67,7 +94,10 @@ def main():
         fred_df=fred_df,
         yfinance_df=yfinance_df,
         cot_df=cot_df,
+        m1_bars=m1_bars,
+        h4_bars=h4_bars,
         mode=args.mode,
+        strategy_id=args.strategy,
         start_balance=args.balance,
         wf_train_months=args.train_months,
         wf_test_months=args.test_months,
@@ -84,15 +114,106 @@ def main():
     print(f"Profit Factor >= 1.5:  {'PASS' if pf_ok else 'FAIL'} ({summary['profit_factor']:.3f})")
     print(f"Max DD <= 5%:          {'PASS' if dd_ok else 'FAIL'} ({summary['max_drawdown_pct']:.2f}%)")
 
+    mc_summary = None
     if args.monte_carlo:
         pnl_list = [t.dollar_pnl for t in result.trades if t.status != "open"]
         if len(pnl_list) >= 10:
             logger.info("Running Monte Carlo (10,000 runs)...")
             mc = run_monte_carlo(pnl_list, start_balance=args.balance)
+            mc_summary = mc.summary()
             print("\n=== MONTE CARLO (10,000 runs) ===")
-            print(json.dumps(mc.summary(), indent=2))
+            print(json.dumps(mc_summary, indent=2))
         else:
             logger.warning("Not enough trades for Monte Carlo")
+
+    # Save results to file
+    os.makedirs(args.output_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(
+        args.output_dir,
+        f"{ts}_{args.strategy}_{args.mode}_{args.start}_{args.end}.json",
+    )
+
+    trades_data = [
+        {
+            "direction": t.direction,
+            "entry": t.entry,
+            "stop_loss": t.stop_loss,
+            "take_profit": t.take_profit,
+            "partial_tp": t.partial_tp,
+            "opened_at": t.opened_at.isoformat() if t.opened_at else None,
+            "closed_at": t.closed_at.isoformat() if t.closed_at else None,
+            "signal_at": t.signal_at.isoformat() if t.signal_at else None,
+            "signal_price": t.signal_price,
+            "exit_price": t.exit_price,
+            "pnl": t.pnl,
+            "dollar_pnl": t.dollar_pnl,
+            "status": t.status,
+            "strategy_id": t.strategy_id,
+            "setup_family": t.setup_family,
+            "session_label": t.session_label,
+            "sweep_side": t.sweep_side,
+            "sweep_size": t.sweep_size,
+            "confirmation_at": t.confirmation_at.isoformat() if t.confirmation_at else None,
+            "confirmation_type": t.confirmation_type,
+            "bars_since_sweep": t.bars_since_sweep,
+            "execution_timeframe": t.execution_timeframe,
+            "entry_trigger_price": t.entry_trigger_price,
+            "intraday_forced_exit": t.intraday_forced_exit,
+            "opening_bar_behavior": t.opening_bar_behavior,
+            "first_excursion_side": t.first_excursion_side,
+            "bars_to_first_profit": t.bars_to_first_profit,
+            "bars_to_first_drawdown": t.bars_to_first_drawdown,
+            "max_favorable_excursion_usd": t.max_favorable_excursion_usd,
+            "max_adverse_excursion_usd": t.max_adverse_excursion_usd,
+            "level_type": t.level_type,
+            "level_direction": t.level_direction,
+            "level_price": t.level_price,
+            "level_strength": t.level_strength,
+            "macro_direction": t.macro_direction,
+            "macro_confidence": t.macro_confidence,
+            "macro_reasoning": t.macro_reasoning,
+        }
+        for t in result.trades
+        if t.status != "open"
+    ]
+
+    output = {
+        "run_at": datetime.now().isoformat(),
+        "params": {
+            "start": args.start,
+            "end": args.end,
+            "mode": args.mode,
+            "strategy": args.strategy,
+            "balance": args.balance,
+            "train_months": args.train_months,
+            "test_months": args.test_months,
+            "cache_only_macro": args.cache_only_macro,
+            "refresh_yfinance": args.refresh_yfinance,
+            "refresh_cot": args.refresh_cot,
+        },
+        "summary": summary,
+        "data_status": {
+            "fred_rows": len(fred_df),
+            "yfinance_rows": len(yfinance_df),
+            "cot_rows": len(cot_df),
+            "m1_rows": len(m1_bars) if m1_bars is not None else 0,
+            "h4_rows": len(h4_bars) if h4_bars is not None else 0,
+            "yfinance_available": bool(not yfinance_df.empty),
+            "cot_available": bool(not cot_df.empty),
+            "m1_available": bool(m1_bars is not None and not m1_bars.empty),
+            "h4_available": bool(h4_bars is not None and not h4_bars.empty),
+        },
+        "prop_firm": {"profit_factor_pass": bool(pf_ok), "max_drawdown_pass": bool(dd_ok)},
+        "monte_carlo": mc_summary,
+        "trades": trades_data,
+        "equity_curve": result.equity_curve,
+    }
+
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    logger.info(f"Results saved to {out_path}")
 
 
 if __name__ == "__main__":

@@ -1,34 +1,13 @@
 """
 Astra v2 Main Scheduler
 
-Runs the 3-layer signal detection loop every M15 bar.
-
-Signal loop (runs during active sessions only):
-  1. Kill switch check
-  2. Compute/cache macro bias (once per day)
-  3. Compute/cache key levels (once per day)
-  4. check_signal() — all 6 gates
-  5. attempt_open() if signal found
-
-Management loop (runs every M15 regardless of session):
-  - manage_positions() — BE / trail / partial TP
-
-Daily summary at 22:00 UTC.
-Heartbeat every 30 min.
-
-News blackout: ±PROP_NEWS_BLACKOUT_MINUTES around configured news events.
-Weekend hold: governed by PROP_WEEKEND_HOLD_ALLOWED.
-
-Usage:
-    python -m astra_v2.scheduler            # live mode (default)
-    python -m astra_v2.scheduler --dry-run  # print signals, no trades
+Runs the strategy loop every M15 bar and uses a pluggable strategy registry.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime, timezone
 
@@ -36,13 +15,14 @@ from apscheduler.schedulers.blocking import BlockingScheduler  # type: ignore
 from apscheduler.triggers.cron import CronTrigger  # type: ignore
 
 from astra_v2 import config
-from astra_v2.core.signal_gate import check_signal, is_active_session
+from astra_v2.core.signal_gate import is_active_session
 from astra_v2.core.macro_engine import get_bias
 from astra_v2.core.technical_engine import extract_levels
 from astra_v2.core.trade_manager import TradeManager, build_provider
 from astra_v2.data.market_data import get_client as get_oanda
 from astra_v2.integrations import supabase_client as supa
 from astra_v2.integrations import telegram
+from astra_v2.strategies import StrategyContext, get_strategy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,52 +32,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── State ──────────────────────────────────────────────────────────────────────
-
-_daily_macro_cache: dict = {}   # {date_str: MacroBias}
-_daily_level_cache: dict = {}   # {date_str: list[KeyLevel]}
-_daily_trade_count: dict = {}   # {date_str: int} — local fallback only
+_daily_macro_cache: dict = {}
+_daily_trade_count: dict = {}
 _trade_manager: TradeManager = None  # type: ignore
 _dry_run: bool = False
+_strategy_id: str = config.DEFAULT_STRATEGY_ID
 
-
-# ── Core tick ──────────────────────────────────────────────────────────────────
 
 def _signal_tick() -> None:
-    """Called every M15. Runs gates, opens trades, manages positions."""
-    global _daily_macro_cache, _daily_level_cache, _daily_trade_count
-
+    global _daily_macro_cache, _daily_trade_count, _strategy_id
+    strategy = get_strategy(_strategy_id)
+    if not getattr(strategy, "supports_live_execution", True):
+        logger.warning(f"Strategy {_strategy_id} is currently backtest-only and will not run in live scheduler.")
+        return
+    required_level_types = (
+        set(strategy.required_level_types)
+        if getattr(strategy, "required_level_types", None) is not None
+        else None
+    )
     now = datetime.now(timezone.utc)
-    date_str = now.strftime("%Y-%m-%d")
 
-    # ── Manage existing positions (always, regardless of session) ────────────
     try:
-        _trade_manager.manage_positions()
+        _trade_manager.manage_positions(now=now)
     except Exception as e:
         logger.error(f"manage_positions error: {e}")
 
-    # ── Only look for new signals in active sessions ─────────────────────────
-    if not is_active_session(now):
-        return
-
-    # ── Skip if already in a trade ───────────────────────────────────────────
     if _trade_manager.has_open_trade:
         return
 
-    # ── Weekend hold check ───────────────────────────────────────────────────
-    if not config.PROP_WEEKEND_HOLD_ALLOWED and now.weekday() >= 4:  # Fri after NY close
+    if not config.PROP_WEEKEND_HOLD_ALLOWED and now.weekday() >= 4:
         if now.weekday() == 4 and now.hour >= 20:
-            logger.debug("Weekend hold: Friday post-NY — skipping")
+            logger.debug("Weekend hold: Friday post-NY - skipping")
             return
         if now.weekday() in (5, 6):
             return
 
-    # ── Macro bias (once per day) ────────────────────────────────────────────
+    date_str = now.strftime("%Y-%m-%d")
     if date_str not in _daily_macro_cache:
-        # Try Supabase cache first (survives restarts)
         cached = supa.load_macro_cache(date_str)
         if cached:
             from astra_v2.core.macro_engine import MacroBias
+
             macro = MacroBias(
                 direction=cached["direction"],
                 confidence=cached["confidence"],
@@ -115,66 +90,80 @@ def _signal_tick() -> None:
                 logger.error(f"get_bias failed: {e}")
                 return
 
-            supa.save_macro_cache(date_str, {
-                "direction": macro.direction,
-                "confidence": macro.confidence,
-                "reasoning": macro.reasoning,
-                "tips_spread": macro.tips_spread,
-                "dxy": macro.dxy,
-                "vix": macro.vix,
-                "cot_net": macro.cot_net,
-            })
+            supa.save_macro_cache(
+                date_str,
+                {
+                    "direction": macro.direction,
+                    "confidence": macro.confidence,
+                    "reasoning": macro.reasoning,
+                    "tips_spread": macro.tips_spread,
+                    "dxy": macro.dxy,
+                    "vix": macro.vix,
+                    "cot_net": macro.cot_net,
+                },
+            )
 
         _daily_macro_cache[date_str] = macro
-        logger.info(f"Macro: {macro.direction} {macro.confidence:.0%} — {macro.reasoning[:60]}")
+        logger.info(f"Macro: {macro.direction} {macro.confidence:.0%} - {macro.reasoning[:60]}")
 
     macro = _daily_macro_cache[date_str]
 
-    # ── Key levels (once per day, using recent bars) ──────────────────────────
-    if date_str not in _daily_level_cache:
-        try:
-            oanda = get_oanda()
-            bars = oanda.get_candles("XAU_USD", granularity="M15", count=500)
-            current_price = oanda.get_current_price()
-            levels = extract_levels(bars, current_price, now)
-            _daily_level_cache[date_str] = levels
-            logger.info(f"Levels computed: {len(levels)} key levels for {date_str}")
-        except Exception as e:
-            logger.error(f"extract_levels failed: {e}")
-            return
-
-    levels = _daily_level_cache[date_str]
-
-    # ── Current price ─────────────────────────────────────────────────────────
     try:
-        current_price = get_oanda().get_current_price()
+        oanda = get_oanda()
+        bars = oanda.get_candles("XAU_USD", granularity="M15", count=500)
     except Exception as e:
-        logger.error(f"get_current_price failed: {e}")
+        logger.error(f"get_candles failed: {e}")
         return
 
-    # ── Local trade count (Supabase is authoritative via signal_gate) ─────────
+    if bars.empty:
+        logger.error("No candles returned from market data provider")
+        return
+
+    signal_bar = bars.iloc[-1]
+    signal_time = bars.index[-1].to_pydatetime()
+    if not is_active_session(signal_time):
+        return
+
+    date_str = signal_time.strftime("%Y-%m-%d")
+    bars_so_far = bars.iloc[:-1]
+    current_price = float(signal_bar["close"])
+    levels = extract_levels(
+        bars_so_far,
+        current_price,
+        signal_time,
+        allowed_level_types=required_level_types,
+    )
+    logger.info(f"Levels computed: {len(levels)} key levels for {signal_time.isoformat()}")
+
     local_count = _daily_trade_count.get(date_str, 0)
 
-    # ── Signal gate ───────────────────────────────────────────────────────────
     try:
         sb = supa.get_client()
     except Exception:
         sb = None
 
-    signal, reason = check_signal(
-        macro=macro,
-        levels=levels,
-        current_price=current_price,
-        now=now,
+    signal, reason = strategy.generate_signal(
+        StrategyContext(
+            strategy_id=_strategy_id,  # type: ignore[arg-type]
+            now=signal_time,
+            current_price=current_price,
+            current_bar=signal_bar,
+            bars_so_far=bars_so_far,
+            levels=levels,
+            macro=macro,
+            local_trade_count=local_count,
+        ),
         supabase_client=sb,
-        local_trade_count=local_count,
     )
 
     if signal is None:
         logger.debug(f"No signal: {reason}")
         return
 
-    logger.info(f"Signal: {signal.direction} @ {signal.entry_price:.2f} SL={signal.stop_loss:.2f} TP={signal.take_profit:.2f}")
+    logger.info(
+        f"Signal[{signal.strategy_id}]: {signal.direction} @ {signal.entry_price:.2f} "
+        f"SL={signal.stop_loss:.2f} TP={signal.take_profit:.2f}"
+    )
 
     if _dry_run:
         logger.info("[DRY RUN] Signal not executed.")
@@ -192,21 +181,19 @@ def _signal_tick() -> None:
         )
         return
 
-    # ── Open trade ────────────────────────────────────────────────────────────
     opened = _trade_manager.attempt_open(signal)
     if opened:
         _daily_trade_count[date_str] = local_count + 1
 
 
 def _daily_summary() -> None:
-    """Called at 22:00 UTC. Sends daily summary to Telegram."""
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         count = supa.count_trades_today(date_str) or 0
         telegram.send_daily_summary(
             date_str=date_str,
             trades_count=count,
-            wins=0,   # TODO: query from trades table
+            wins=0,
             losses=0,
             pnl_usd=0.0,
             current_dd_pct=0.0,
@@ -214,9 +201,7 @@ def _daily_summary() -> None:
     except Exception as e:
         logger.error(f"daily_summary failed: {e}")
 
-    # Clear daily caches for the new day
     _daily_macro_cache.clear()
-    _daily_level_cache.clear()
 
 
 def _heartbeat() -> None:
@@ -228,35 +213,35 @@ def _heartbeat() -> None:
     telegram.send_heartbeat(status, trade_info)
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
-
 def main() -> None:
-    global _trade_manager, _dry_run
+    global _trade_manager, _dry_run, _strategy_id
 
     parser = argparse.ArgumentParser(description="Astra v2 Scheduler")
     parser.add_argument("--dry-run", action="store_true", help="Print signals without executing trades")
+    parser.add_argument("--strategy", default=config.DEFAULT_STRATEGY_ID, help="Strategy ID")
     args = parser.parse_args()
     _dry_run = args.dry_run
+    _strategy_id = args.strategy
 
-    # Validate config
+    try:
+        get_strategy(_strategy_id)
+    except ValueError as e:
+        logger.critical(str(e))
+        sys.exit(1)
+
     try:
         config.validate()
     except ValueError as e:
         logger.critical(f"Config validation failed: {e}")
         sys.exit(1)
 
-    # Build execution provider
     provider = build_provider()
     _trade_manager = TradeManager(provider)
 
-    logger.info(f"Astra v2 starting. Mode: {'DRY RUN' if _dry_run else 'LIVE'}")
-    telegram.send_heartbeat("STARTING", f"Mode: {'dry-run' if _dry_run else 'live'}")
+    logger.info(f"Astra v2 starting. Mode: {'DRY RUN' if _dry_run else 'LIVE'} strategy={_strategy_id}")
+    telegram.send_heartbeat("STARTING", f"Mode: {'dry-run' if _dry_run else 'live'} strategy={_strategy_id}")
 
-    # APScheduler
     scheduler = BlockingScheduler(timezone="UTC")
-
-    # M15 signal tick at :00, :15, :30, :45 of every hour
-    # Offset by 30s to allow bar to close
     scheduler.add_job(
         _signal_tick,
         CronTrigger(minute="0,15,30,45", second=30),
@@ -264,15 +249,11 @@ def main() -> None:
         max_instances=1,
         coalesce=True,
     )
-
-    # Daily summary + cache clear
     scheduler.add_job(
         _daily_summary,
         CronTrigger(hour=22, minute=0),
         id="daily_summary",
     )
-
-    # Heartbeat every 30 min
     scheduler.add_job(
         _heartbeat,
         CronTrigger(minute="0,30"),

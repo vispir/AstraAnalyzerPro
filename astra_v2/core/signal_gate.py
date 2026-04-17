@@ -27,7 +27,7 @@ from typing import Literal, Optional
 
 from astra_v2 import config
 from astra_v2.core.macro_engine import MacroBias
-from astra_v2.core.technical_engine import KeyLevel, ActiveLevel, find_nearest
+from astra_v2.core.technical_engine import KeyLevel, ActiveLevel
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,17 @@ class Signal:
     macro_bias: MacroBias
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     combined_confidence: float = 0.0
+    strategy_id: str = "legacy_v1"
+    setup_family: Optional[str] = None
+    session_label: Optional[str] = None
+    sweep_side: Optional[str] = None
+    sweep_size: Optional[float] = None
+    confirmation_at: Optional[datetime] = None
+    confirmation_type: Optional[str] = None
+    bars_since_sweep: Optional[int] = None
+    execution_timeframe: Optional[str] = None
+    entry_trigger_price: Optional[float] = None
+    size_multiplier: float = 1.0  # position sizing multiplier (e.g. RVOL-based)
 
     @property
     def sl_distance_usd(self) -> float:
@@ -67,6 +78,16 @@ class Signal:
             "macro_confidence": self.macro_bias.confidence,
             "macro_reasoning": self.macro_bias.reasoning,
             "combined_confidence": self.combined_confidence,
+            "strategy_id": self.strategy_id,
+            "setup_family": self.setup_family,
+            "session_label": self.session_label,
+            "sweep_side": self.sweep_side,
+            "sweep_size": self.sweep_size,
+            "confirmation_at": self.confirmation_at.isoformat() if self.confirmation_at else None,
+            "confirmation_type": self.confirmation_type,
+            "bars_since_sweep": self.bars_since_sweep,
+            "execution_timeframe": self.execution_timeframe,
+            "entry_trigger_price": self.entry_trigger_price,
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -75,7 +96,7 @@ class Signal:
 
 def is_active_session(dt: datetime) -> bool:
     """
-    Returns True if dt falls within London (08-11 UTC) or NY (13-15 UTC).
+    Returns True if dt falls within London (07-12 UTC) or NY (13-17 UTC).
     No trades outside these windows.
     """
     hour = dt.hour
@@ -132,6 +153,18 @@ def current_drawdown_pct(peak_balance: float, current_balance: float) -> float:
     return (peak_balance - current_balance) / peak_balance * 100
 
 
+def _nearby_levels(levels: list[KeyLevel], current_price: float) -> list[ActiveLevel]:
+    return [
+        ActiveLevel(level=level, distance_usd=abs(level.price - current_price))
+        for level in levels
+        if abs(level.price - current_price) <= config.LEVEL_PROXIMITY_USD
+    ]
+
+
+def _trigger_candidates(levels: list[ActiveLevel]) -> list[ActiveLevel]:
+    return [level for level in levels if level.level_type in config.TRIGGER_LEVEL_TYPES]
+
+
 # ── Signal construction ────────────────────────────────────────────────────────
 
 def _build_signal(
@@ -164,6 +197,7 @@ def _build_signal(
         level=level,
         macro_bias=macro,
         combined_confidence=combined,
+        strategy_id="legacy_v1",
     )
 
 
@@ -207,26 +241,41 @@ def check_signal(
         if macro.confidence < config.MACRO_CONFIDENCE_MIN:
             return None, f"gate_1: low confidence {macro.confidence:.2f} < {config.MACRO_CONFIDENCE_MIN}"
 
+    direction: Direction = macro.direction  # type: ignore
+
     # Gate 2: Price at key level
     if 2 not in skip:
-        active = find_nearest(levels, current_price, config.LEVEL_PROXIMITY_USD)
-        if active is None:
+        nearby = _nearby_levels(levels, current_price)
+        if not nearby:
             return None, f"gate_2: no level within ${config.LEVEL_PROXIMITY_USD} of {current_price:.2f}"
-        if active.strength < config.LEVEL_STRENGTH_MIN:
-            return None, f"gate_2: level too weak ({active.strength:.1f} < {config.LEVEL_STRENGTH_MIN})"
+        triggerable = _trigger_candidates(nearby)
+        if not triggerable:
+            nearest = min(nearby, key=lambda a: a.distance_usd)
+            return None, f"gate_2: nearest level {nearest.level_type} is context-only, not a trigger"
+        strong_nearby = [level for level in triggerable if level.strength >= config.LEVEL_STRENGTH_MIN]
+        if not strong_nearby:
+            nearest = min(triggerable, key=lambda a: a.distance_usd)
+            return None, f"gate_2: level too weak ({nearest.strength:.1f} < {config.LEVEL_STRENGTH_MIN})"
     else:
         # If gate 2 skipped, still find nearest for signal construction
-        active = find_nearest(levels, current_price, proximity_usd=999)
-        if active is None:
+        nearby = [
+            ActiveLevel(level=level, distance_usd=abs(level.price - current_price))
+            for level in levels
+        ]
+        if not nearby:
             return None, "gate_2_skip: no levels at all"
+        strong_nearby = nearby
 
     # Gate 3: Direction alignment
     if 3 not in skip:
-        direction = macro.direction  # BULLISH or BEARISH
-        if direction == "BULLISH" and active.direction != "support":
-            return None, f"gate_3: BULLISH signal but level is {active.direction}"
-        if direction == "BEARISH" and active.direction != "resistance":
-            return None, f"gate_3: BEARISH signal but level is {active.direction}"
+        expected = "support" if direction == "BULLISH" else "resistance"
+        aligned_levels = [level for level in strong_nearby if level.direction == expected]
+        if not aligned_levels:
+            nearest = min(strong_nearby, key=lambda a: a.distance_usd)
+            return None, f"gate_3: {direction} signal but nearest strong level is {nearest.direction}"
+        active = min(aligned_levels, key=lambda a: a.distance_usd)
+    else:
+        active = min(strong_nearby, key=lambda a: a.distance_usd)
 
     # Gate 4: Session window
     if 4 not in skip:
@@ -246,6 +295,5 @@ def check_signal(
             return None, f"gate_6: drawdown {dd_pct:.1f}% >= stop threshold {config.PROP_DAILY_STOP_DD_PCT}%"
 
     # All gates passed — build signal
-    direction: Direction = macro.direction  # type: ignore
     signal = _build_signal(direction, current_price, active, macro)
     return signal, "ok"

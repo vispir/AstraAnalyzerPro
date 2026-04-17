@@ -35,12 +35,10 @@ def proxy_macro_bias(features: MacroFeatures) -> MacroBias:
 
     Rule logic:
       1. VIX > 30 → NEUTRAL (too much uncertainty)
-      2. Count how many factors agree on direction
-         BULLISH factors: falling TIPS spread, falling DXY, COT net long
-         BEARISH factors: rising TIPS spread, rising DXY, COT net short
-      3. >= 3 factors agree → high confidence
-         2 factors agree → moderate confidence
-         < 2 → NEUTRAL
+      2. Score the macro stack with gold-specific weights
+         TIPS spread > DXY > COT > VIX
+      3. Strong consensus → high confidence
+         single strong primary driver → actionable lean bias
 
     Thresholds are calibrated against the LLM prompt's stated rules.
     """
@@ -59,65 +57,61 @@ def proxy_macro_bias(features: MacroFeatures) -> MacroBias:
             timestamp=ts,
         )
 
-    # Score each factor: +1 = BULLISH, -1 = BEARISH, 0 = neutral
-    scores: list[int] = []
+    # Weighted score: real yields matter most for gold, dollar second, COT third.
+    weighted_score = 0.0
+    bullish_votes = 0
+    bearish_votes = 0
     reasons: list[str] = []
 
     # TIPS spread signal (primary gold driver)
-    if features.tips_spread < -0.5:
-        scores.append(1)
+    if features.tips_spread < -0.35:
+        weighted_score += 2.0
+        bullish_votes += 1
         reasons.append(f"TIPS={features.tips_spread:+.2f}% (falling real yields)")
-    elif features.tips_spread > 0.3:
-        scores.append(-1)
+    elif features.tips_spread > 0.20:
+        weighted_score -= 2.0
+        bearish_votes += 1
         reasons.append(f"TIPS={features.tips_spread:+.2f}% (rising real yields)")
-    else:
-        scores.append(0)
 
     # DXY 1-month change (secondary driver)
-    if features.dxy_1m_change < -1.5:
-        scores.append(1)
+    if features.dxy_1m_change < -1.0:
+        weighted_score += 1.5
+        bullish_votes += 1
         reasons.append(f"DXY 1m change={features.dxy_1m_change:+.1f}% (dollar weakening)")
-    elif features.dxy_1m_change > 1.5:
-        scores.append(-1)
+    elif features.dxy_1m_change > 1.0:
+        weighted_score -= 1.5
+        bearish_votes += 1
         reasons.append(f"DXY 1m change={features.dxy_1m_change:+.1f}% (dollar strengthening)")
-    else:
-        scores.append(0)
 
     # COT net positioning (regime indicator, stale but directional)
     if features.cot_net is not None:
         if features.cot_net > 50_000:
-            scores.append(1)
+            weighted_score += 1.0
+            bullish_votes += 1
             reasons.append(f"COT net={features.cot_net:+,} (speculators net long)")
         elif features.cot_net < -50_000:
-            scores.append(-1)
+            weighted_score -= 1.0
+            bearish_votes += 1
             reasons.append(f"COT net={features.cot_net:+,} (speculators net short)")
-        else:
-            scores.append(0)
 
     # VIX level (risk sentiment)
-    # Low VIX = normal market conditions, not bearish for gold (removed -1 for VIX<15)
     if features.vix > 25:
-        scores.append(1)
+        weighted_score += 0.5
+        bullish_votes += 1
         reasons.append(f"VIX={features.vix:.1f} (elevated fear, gold bid)")
-    else:
-        scores.append(0)
 
-    total = sum(scores)
-    bullish_count = sum(1 for s in scores if s > 0)
-    bearish_count = sum(1 for s in scores if s < 0)
-
-    if bullish_count >= 3:
+    if weighted_score >= 4.0 and bullish_votes >= 3:
         direction: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "BULLISH"
         confidence = 0.80
-    elif bullish_count == 2 and bearish_count == 0:
+    elif weighted_score >= 1.0 and bullish_votes >= 1:
         direction = "BULLISH"
-        confidence = 0.65
-    elif bearish_count >= 3:
+        confidence = 0.65 if bullish_votes >= 2 else 0.55
+    elif weighted_score <= -4.0 and bearish_votes >= 3:
         direction = "BEARISH"
         confidence = 0.80
-    elif bearish_count == 2 and bullish_count == 0:
+    elif weighted_score <= -1.0 and bearish_votes >= 1:
         direction = "BEARISH"
-        confidence = 0.65
+        confidence = 0.65 if bearish_votes >= 2 else 0.55
     else:
         direction = "NEUTRAL"
         confidence = 0.40

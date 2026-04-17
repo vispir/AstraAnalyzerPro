@@ -47,6 +47,18 @@ from astra_v2.core.signal_gate import Signal
 logger = logging.getLogger(__name__)
 
 
+def _force_close_hour_for_strategy(strategy_id: str) -> Optional[int]:
+    if strategy_id == "sweep_reversal_v1":
+        return config.SWEEP_REVERSAL_V1_FORCE_CLOSE_HOUR_UTC
+    if strategy_id == "sweep_reversal_v2":
+        return config.SWEEP_REVERSAL_V2_FORCE_CLOSE_HOUR_UTC
+    if strategy_id == "sweep_reversal_v3":
+        return config.SWEEP_REVERSAL_V3_FORCE_CLOSE_HOUR_UTC
+    if strategy_id == "sweep_reversal_v4":
+        return config.SWEEP_REVERSAL_V4_FORCE_CLOSE_HOUR_UTC
+    return None
+
+
 # ── Data models ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -63,6 +75,8 @@ class LiveTrade:
     partial_closed: bool = False
     be_moved: bool = False
     status: str = "open"   # open | tp | sl | be_sl | partial_tp | forced
+    strategy_id: str = "legacy_v1"
+    force_close_hour_utc: Optional[int] = None
 
 
 @dataclass
@@ -193,6 +207,8 @@ class MT5Provider(ExecutionProvider):
             lot_size=lot_size,
             opened_at=datetime.now(timezone.utc),
             ticket=result.order,
+            strategy_id=signal.strategy_id,
+            force_close_hour_utc=_force_close_hour_for_strategy(signal.strategy_id),
         )
 
     def close_trade(self, trade: LiveTrade, reason: str) -> None:
@@ -346,6 +362,8 @@ class TelegramProvider(ExecutionProvider):
             lot_size=lot_size,
             opened_at=datetime.now(timezone.utc),
             ticket=None,
+            strategy_id=signal.strategy_id,
+            force_close_hour_utc=_force_close_hour_for_strategy(signal.strategy_id),
         )
 
     def close_trade(self, trade: LiveTrade, reason: str) -> None:
@@ -504,13 +522,14 @@ class TradeManager:
 
     # ── Manage ─────────────────────────────────────────────────────────────────
 
-    def manage_positions(self) -> None:
+    def manage_positions(self, now: Optional[datetime] = None) -> None:
         """
         Called once per M15 bar close. Checks BE/trail/partial TP.
         MT5 handles SL/TP hit natively; this manages the dynamic adjustments.
         """
         if not self._open_trade or self._open_trade.status != "open":
             return
+        now = now or datetime.now(timezone.utc)
 
         # First, kill switch check on existing position too
         blocked, reason = self._check_kill_switch()
@@ -518,6 +537,14 @@ class TradeManager:
             return  # _check_kill_switch already closed if needed
 
         trade = self._open_trade
+        if trade.force_close_hour_utc is not None:
+            if trade.opened_at.date() != now.date() or now.hour >= trade.force_close_hour_utc:
+                try:
+                    self._provider.close_trade(trade, "intraday_cutoff")
+                except Exception as e:
+                    logger.error(f"intraday cutoff close failed: {e}")
+                self._open_trade = None
+                return
         is_long = trade.direction == "BULLISH"
 
         try:

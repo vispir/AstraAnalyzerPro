@@ -20,8 +20,12 @@ from astra_v2.backtest.engine import (
     Trade,
     BacktestResult,
     _simulate_trade,
+    run_backtest,
 )
 from astra_v2 import config
+from astra_v2.core.signal_gate import Signal
+from astra_v2.core.technical_engine import ActiveLevel, KeyLevel
+from astra_v2.core.macro_engine import MacroBias
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -73,6 +77,14 @@ class TestSimulateTradeSL:
         _simulate_trade(trade, bar(high=3205.0, low=3195.0))  # low above SL
         assert trade.status == "open"
 
+    def test_trade_logs_immediate_adverse_opening_bar(self):
+        trade = open_long(entry=3200.0, sl=3193.0)
+        _simulate_trade(trade, bar(high=3200.0, low=3198.0))
+        assert trade.opening_bar_behavior == "adverse_only"
+        assert trade.first_excursion_side == "adverse"
+        assert trade.bars_to_first_drawdown == 0
+        assert trade.bars_to_first_profit is None
+
 
 # ── _simulate_trade: TP hit ────────────────────────────────────────────────────
 
@@ -94,6 +106,14 @@ class TestSimulateTradeTP:
         trade = open_long(entry=3200.0, sl=3193.0, tp=3214.0)
         _simulate_trade(trade, bar(high=3210.0, low=3195.0))
         assert trade.status == "open"
+
+    def test_trade_tracks_favorable_and_adverse_excursions(self):
+        trade = open_long(entry=3200.0, sl=3193.0, tp=3214.0)
+        _simulate_trade(trade, bar(high=3206.0, low=3198.5))
+        assert trade.max_favorable_excursion_usd == pytest.approx(6.0, abs=0.01)
+        assert trade.max_adverse_excursion_usd == pytest.approx(1.5, abs=0.01)
+        assert trade.bars_to_first_profit == 0
+        assert trade.bars_to_first_drawdown == 0
 
 
 # ── _simulate_trade: Partial TP ────────────────────────────────────────────────
@@ -221,3 +241,102 @@ class TestNoLookAhead:
         # Both the condition and the extract_levels call should use bars_so_far
         assert "bars_so_far" in source, "Expected bars_so_far variable for anti-look-ahead slice"
         assert "bars[bars.index < ts]" in source, "Level computation must use strict past slice"
+
+
+def test_run_backtest_executes_v4_signal_on_m1_trigger():
+    idx = pd.date_range("2024-01-01", periods=30, freq="15min", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "open": np.linspace(3200.0, 3203.0, len(idx)),
+            "high": np.linspace(3200.5, 3203.5, len(idx)),
+            "low": np.linspace(3199.5, 3202.5, len(idx)),
+            "close": np.linspace(3200.2, 3203.2, len(idx)),
+            "volume": 1000.0,
+        },
+        index=idx,
+    )
+    m1_idx = pd.date_range("2024-01-01 07:15:00", periods=15, freq="1min", tz="UTC")
+    m1_bars = pd.DataFrame(
+        {
+            "open": [3201.0] * 15,
+            "high": [3201.1, 3201.2, 3202.6] + [3202.7] * 12,
+            "low": [3200.9] * 15,
+            "close": [3201.0, 3201.1, 3202.4] + [3202.5] * 12,
+            "volume": 100.0,
+        },
+        index=m1_idx,
+    )
+    h4_idx = pd.date_range("2023-12-20", periods=30, freq="4h", tz="UTC")
+    h4_bars = pd.DataFrame(
+        {
+            "open": np.linspace(3180.0, 3200.0, len(h4_idx)),
+            "high": np.linspace(3182.0, 3202.0, len(h4_idx)),
+            "low": np.linspace(3178.0, 3198.0, len(h4_idx)),
+            "close": np.linspace(3181.0, 3201.0, len(h4_idx)),
+            "volume": 5000.0,
+        },
+        index=h4_idx,
+    )
+    macro = MacroBias(
+        direction="BULLISH",
+        confidence=0.7,
+        reasoning="test",
+        tips_spread=0.0,
+        dxy=100.0,
+        vix=18.0,
+        cot_net=0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    level = ActiveLevel(level=KeyLevel(price=3200.0, level_type="pdl", direction="support", strength=7.0), distance_usd=0.5)
+    signal = Signal(
+        direction="BULLISH",
+        entry_price=3202.5,
+        stop_loss=3199.0,
+        take_profit=3208.0,
+        partial_tp=3205.0,
+        level=level,
+        macro_bias=macro,
+        timestamp=idx[28].to_pydatetime(),
+        strategy_id="sweep_reversal_v4",
+        execution_timeframe="M1",
+        entry_trigger_price=3202.5,
+    )
+
+    class FakeStrategy:
+        strategy_id = "sweep_reversal_v4"
+        required_level_types = ()
+        required_timeframes = ("M1", "H4")
+
+        def __init__(self):
+            self.called = False
+
+        def generate_signal(self, context, *, supabase_client=None):
+            if not self.called:
+                self.called = True
+                return signal, "ok"
+            return None, "nope"
+
+    with patch("astra_v2.backtest.engine.get_strategy", return_value=FakeStrategy()):
+        with patch("astra_v2.backtest.engine.compute_macro_features", return_value={}):
+            with patch("astra_v2.backtest.llm_proxy.proxy_macro_bias", return_value=macro):
+                with patch("astra_v2.backtest.engine.extract_levels", return_value=[]):
+                    result = run_backtest(
+                        bars=bars,
+                        fred_df=pd.DataFrame(),
+                        yfinance_df=pd.DataFrame(),
+                        cot_df=pd.DataFrame(),
+                        m1_bars=m1_bars,
+                        h4_bars=h4_bars,
+                        mode="proxy",
+                        strategy_id="sweep_reversal_v4",
+                        start_balance=10_000.0,
+                        wf_train_months=0,
+                        wf_test_months=1,
+                    )
+
+    assert result.trades
+    trade = result.trades[0]
+    assert trade.strategy_id == "sweep_reversal_v4"
+    assert trade.execution_timeframe == "M1"
+    assert trade.opened_at == datetime(2024, 1, 1, 7, 17, tzinfo=timezone.utc)
+    assert trade.entry_trigger_price == pytest.approx(3202.5, abs=0.01)
