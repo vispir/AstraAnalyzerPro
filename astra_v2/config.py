@@ -231,7 +231,7 @@ BREAKOUT_RETEST_V1_ALLOWED_SESSIONS = ("london", "new_york")
 # BULLISH-only: only resistance levels → buy breakout retests (aligns with bull gold trend)
 # Removed: "pdl", "session_low", "weekly_low" — weak WR in 2020-2024 bull trend
 BREAKOUT_RETEST_V1_TRIGGER_LEVEL_TYPES = (
-    "pdh", "weekly_high", "session_high",
+    "pdh", "session_high", "weekly_high",
 )
 BREAKOUT_RETEST_V1_ATR_PERIOD = 20
 BREAKOUT_RETEST_V1_BREAKOUT_LOOKBACK_BARS = 40    # scan last 40 bars (10 hours) for a breakout
@@ -282,6 +282,18 @@ SWEEP_REVERSAL_V4B_M1_TRIGGER_LOOKBACK = 3  # same as current relaxed v4
 SWEEP_REVERSAL_V4B_M1_RECLAIM_ATR = 0.03
 SWEEP_REVERSAL_V4B_M1_TRIGGER_BUFFER_ATR = 0.005
 
+# -- Strategy: range_breakout_v1 (Range Consolidation Breakout) --------------------
+# Concept: Detect consolidation range, wait for breakout with 2-3 candle confirmation,
+# enter on confirmation. Trade continuation after range breakout.
+RANGE_BREAKOUT_V1_ALLOWED_SESSIONS = ("london", "new_york")
+RANGE_BREAKOUT_V1_ATR_PERIOD = 20
+RANGE_BREAKOUT_V1_CONSOLIDATION_LOOKBACK = 20  # bars to scan for range formation
+RANGE_BREAKOUT_V1_STOP_BUFFER_ATR = 0.5  # SL buffer beyond opposite range boundary
+RANGE_BREAKOUT_V1_TP_RR = 2.0
+RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR = 1.0
+RANGE_BREAKOUT_V1_MAX_TRADES_PER_DAY = 3
+RANGE_BREAKOUT_V1_FORCE_CLOSE_HOUR_UTC = 22
+
 # ── Position Sizing ────────────────────────────────────────────────────────────
 RISK_PCT = 0.005                 # 0.5% of account per trade (SMC portfolio — higher frequency)
 
@@ -306,6 +318,24 @@ DUKASCOPY_CACHE_DIR = os.environ.get("DUKASCOPY_CACHE_DIR", "data_cache/dukascop
 FRED_CACHE_PATH = os.environ.get("FRED_CACHE_PATH", "data_cache/fred_daily.parquet")
 YFINANCE_CACHE_PATH = os.environ.get("YFINANCE_CACHE_PATH", "data_cache/yfinance_daily.parquet")
 COT_CACHE_PATH = os.environ.get("COT_CACHE_PATH", "data_cache/cot_gold.parquet")
+
+# Primary M15 stream for levels / execution; cross pairs are extra M15 context in backtests.
+BACKTEST_PRIMARY_SYMBOL = os.environ.get("BACKTEST_PRIMARY_SYMBOL", "XAUUSD").strip().upper()
+_BACKTEST_CROSS_RAW = os.environ.get("BACKTEST_CROSS_SYMBOLS", "BTCUSD,XAGUSD,EURUSD")
+BACKTEST_CROSS_SYMBOLS: tuple[str, ...] = tuple(
+    x.strip().upper() for x in _BACKTEST_CROSS_RAW.split(",") if x.strip()
+)
+# Full set for `--all-symbols` backtests (one run per pair; others feed cross M15).
+_MULTI_UNIVERSE_RAW = os.environ.get(
+    "BACKTEST_MULTI_SYMBOL_UNIVERSE", "XAUUSD,BTCUSD,XAGUSD,EURUSD"
+)
+BACKTEST_MULTI_SYMBOL_UNIVERSE: tuple[str, ...] = tuple(
+    x.strip().upper() for x in _MULTI_UNIVERSE_RAW.split(",") if x.strip()
+)
+# none = only StrategyContext.cross_symbol_m15; size = scale size by M15 agreement; gate = veto weak agreement
+CROSS_ASSET_MODE = os.environ.get("CROSS_ASSET_MODE", "size").strip().lower()
+CROSS_ASSET_GATE_MIN_AGREE_RATIO = float(os.environ.get("CROSS_ASSET_GATE_MIN_AGREE_RATIO", "0.45"))
+
 BACKTEST_START = "2020-01-01"
 BACKTEST_END = "2023-12-31"
 BACKTEST_HOLDOUT_START = "2024-01-01"   # out-of-sample, never touched during dev

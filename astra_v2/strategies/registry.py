@@ -9,6 +9,7 @@ from .sweep_reversal_v4 import SweepReversalStrategyV4
 from .sweep_reversal_v4a import SweepReversalStrategyV4A
 from .sweep_reversal_v4b import SweepReversalStrategyV4B
 from .breakout_retest_v1 import BreakoutRetestStrategyV1
+from .range_breakout_v1 import RangeBreakoutStrategyV1
 from .smc_fvg_v1 import SmcFvgV1
 from .smc_ob_v1 import SmcObV1
 
@@ -22,6 +23,7 @@ _STRATEGIES = {
     "sweep_reversal_v4a": SweepReversalStrategyV4A(),
     "sweep_reversal_v4b": SweepReversalStrategyV4B(),
     "breakout_retest_v1": BreakoutRetestStrategyV1(),
+    "range_breakout_v1": RangeBreakoutStrategyV1(),
     "smc_fvg_v1": SmcFvgV1(),
     "smc_ob_v1": SmcObV1(),
 }

@@ -25,6 +25,64 @@ from astra_v2 import config
 
 logger = logging.getLogger(__name__)
 
+
+def dukascopy_pair_dir(symbol: str) -> str:
+    """Folder label for a pair, e.g. XAUUSD."""
+    return symbol.strip().upper()
+
+
+def dukascopy_ohlcv_path(
+    cache_dir: Path,
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+) -> Path:
+    """
+    Path to merged OHLCV parquet:
+      <cache_dir>/m1|m15|h4/<PAIR>/ <pair>_<tf>_<start>_<end>.parquet
+    """
+    sym = dukascopy_pair_dir(symbol)
+    sym_l = sym.lower()
+    tf = timeframe.strip().upper()
+    if tf not in ("M1", "M15", "H4"):
+        raise ValueError(f"Unsupported timeframe for cache layout: {timeframe}")
+    key = tf.lower()
+    return Path(cache_dir) / key / sym / f"{sym_l}_{key}_{start}_{end}.parquet"
+
+
+def dukascopy_m1_chunks_dir(cache_dir: Path, symbol: str) -> Path:
+    """Per-pair M1 chunk downloads: <cache_dir>/m1/<PAIR>/chunks/"""
+    return Path(cache_dir) / "m1" / dukascopy_pair_dir(symbol) / "chunks"
+
+
+def _dukascopy_legacy_flat_path(
+    cache_dir: Path, symbol: str, timeframe: str, start: str, end: str
+) -> Path:
+    """Pre-relayout flat file at cache root (backward compatibility)."""
+    sym_l = dukascopy_pair_dir(symbol).lower()
+    tf = timeframe.strip().upper().lower()
+    return Path(cache_dir) / f"{sym_l}_{tf}_{start}_{end}.parquet"
+
+
+def dukascopy_resolve_read_path(
+    cache_dir: Path | str,
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+) -> Optional[Path]:
+    """Return existing parquet path (new layout preferred) or None."""
+    base = Path(cache_dir)
+    new = dukascopy_ohlcv_path(base, symbol, timeframe, start, end)
+    if new.exists():
+        return new
+    legacy = _dukascopy_legacy_flat_path(base, symbol, timeframe, start, end)
+    if legacy.exists():
+        return legacy
+    return None
+
+
 DUKASCOPY_BASE_URL = "https://datafeed.dukascopy.com/datafeed/XAUUSD"
 # Dukascopy stores M15 OHLCV in BI5 format: one file per hour
 # Each BI5 file contains 4 candles (4 × 15min = 1 hour)
@@ -106,11 +164,11 @@ def download(
     """
     cache_dir = Path(cache_dir or config.DUKASCOPY_CACHE_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"xauusd_m15_{start}_{end}.parquet"
-
-    if cache_file.exists() and not force_refresh:
-        logger.info(f"Loading Dukascopy cache: {cache_file}")
-        return pd.read_parquet(cache_file)
+    resolved = dukascopy_resolve_read_path(cache_dir, "XAUUSD", "M15", start, end)
+    if resolved and not force_refresh:
+        logger.info(f"Loading Dukascopy cache: {resolved}")
+        return pd.read_parquet(resolved)
+    cache_file = dukascopy_ohlcv_path(cache_dir, "XAUUSD", "M15", start, end)
 
     logger.info(f"Downloading Dukascopy M15 XAU/USD {start} → {end} (parallel, 16 workers)")
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
@@ -159,6 +217,7 @@ def download(
     result = result[~result.index.duplicated(keep="first")]
     result = validate_data(result)
 
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
     result.to_parquet(cache_file)
     logger.info(f"Saved {len(result)} M15 bars to {cache_file}")
     return result
@@ -231,16 +290,22 @@ def load_timeframe(
     start: str = None,
     end: str = None,
     cache_dir: str = None,
+    symbol: str = "XAUUSD",
 ) -> pd.DataFrame:
     """
     Load a cached Dukascopy timeframe parquet.
-    Supported cache files are expected to already exist in DUKASCOPY_CACHE_DIR.
+    Layout: <DUKASCOPY_CACHE_DIR>/m1|m15|h4/<PAIR>/ <pair>_<tf>_<start>_<end>.parquet
+    Falls back to legacy flat filename at cache root if present.
     """
-    tf = timeframe.lower()
     cache_dir = Path(cache_dir or config.DUKASCOPY_CACHE_DIR)
-    file_path = cache_dir / f"xauusd_{tf}_{start or config.BACKTEST_START}_{end or config.BACKTEST_END}.parquet"
-    if not file_path.exists():
-        raise FileNotFoundError(f"Dukascopy cache not found for timeframe '{timeframe}': {file_path}")
+    s = start or config.BACKTEST_START
+    e = end or config.BACKTEST_END
+    file_path = dukascopy_resolve_read_path(cache_dir, symbol, timeframe, s, e)
+    if file_path is None:
+        expected = dukascopy_ohlcv_path(cache_dir, symbol, timeframe, s, e)
+        raise FileNotFoundError(
+            f"Dukascopy cache not found for {symbol} timeframe '{timeframe}': {expected}"
+        )
     df = pd.read_parquet(file_path)
     df.index = pd.to_datetime(df.index, utc=True)
     df = df.sort_index()

@@ -37,6 +37,9 @@ class StrategyContext:
     bar_end: Optional[datetime] = None
     h4_bars: Optional[pd.DataFrame] = None
     m1_bars: Optional[pd.DataFrame] = None
+    # Multi-pair: primary chart symbol + other pairs' M15 history strictly before current bar (UTC index)
+    primary_symbol: str = "XAUUSD"
+    cross_symbol_m15: Optional[dict[str, pd.DataFrame]] = None
     # SMC fields — populated by engine for SMC strategies
     market_structure: Optional[object] = None   # MarketStructure from core/market_structure.py
     fvgs: Optional[list] = None                 # list[FairValueGap]

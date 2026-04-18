@@ -35,6 +35,7 @@ from astra_v2.core.signal_gate import is_active_session, Signal
 from astra_v2.core.macro_engine import MacroBias
 from astra_v2.data.macro_features import compute_macro_features
 from astra_v2.strategies import StrategyContext, get_strategy
+from astra_v2.core.cross_asset import apply_cross_asset_to_signal, slice_m15_asof
 from astra_v2.backtest.portfolio_manager import (
     check_portfolio_dd, can_open_trade, get_size_multiplier,
 )
@@ -385,6 +386,8 @@ def run_backtest(
     start_balance: float = 10_000.0,
     wf_train_months: int = 6,
     wf_test_months: int = 1,
+    primary_symbol: Optional[str] = None,
+    cross_symbol_m15: Optional[dict[str, pd.DataFrame]] = None,
 ) -> BacktestResult:
     """
     Walk-forward backtest.
@@ -402,6 +405,10 @@ def run_backtest(
 
     Returns BacktestResult with all trades and equity curve.
     """
+    from astra_v2.backtest.llm_proxy import proxy_macro_bias
+    strategy = get_strategy(strategy_id)
+    sym_primary = (primary_symbol or config.BACKTEST_PRIMARY_SYMBOL).strip().upper()
+
     # SMC strategies (smc_fvg_v1, smc_ob_v1, etc.) require the portfolio engine
     # which builds market structure, FVG, OB, and regime context per bar.
     # Delegate automatically so callers don't need to know which engine to use.
@@ -412,10 +419,9 @@ def run_backtest(
             m1_bars=m1_bars, h4_bars=h4_bars, mode=mode,
             strategy_ids=[strategy_id], start_balance=start_balance,
             wf_train_months=wf_train_months, wf_test_months=wf_test_months,
+            primary_symbol=sym_primary,
+            cross_symbol_m15=cross_symbol_m15,
         )
-
-    from astra_v2.backtest.llm_proxy import proxy_macro_bias
-    strategy = get_strategy(strategy_id)
     required_level_types = (
         set(strategy.required_level_types)
         if getattr(strategy, "required_level_types", None) is not None
@@ -466,6 +472,8 @@ def run_backtest(
         date_str = now.strftime("%Y-%m-%d")
         # Equivalent to `bars[bars.index < ts]` but much faster on sorted indexes.
         bars_so_far = bars.iloc[:pos]
+        cross_views = {}  # TODO: enable slice_m15_asof only for strategies that need cross-asset
+        ctx_cross = None
         h4_so_far = None
         if h4_bars is not None:
             h4_cutoff = int(h4_bars.index.searchsorted(pd.Timestamp(interval_end)))
@@ -669,10 +677,16 @@ def run_backtest(
                 bar_end=interval_end,
                 h4_bars=h4_so_far,
                 m1_bars=m1_recent,
+                primary_symbol=sym_primary,
+                cross_symbol_m15=ctx_cross,
             ),
             supabase_client=None,
         )
 
+        if signal is None:
+            continue
+        if cross_views:
+            signal = apply_cross_asset_to_signal(signal, cross_views)
         if signal is None:
             continue
 
@@ -719,6 +733,8 @@ def run_backtest_portfolio(
     wf_train_months: int = 6,
     wf_test_months: int = 1,
     holdout_year: Optional[int] = None,
+    primary_symbol: Optional[str] = None,
+    cross_symbol_m15: Optional[dict[str, pd.DataFrame]] = None,
 ) -> BacktestResult:
     """
     Multi-strategy portfolio backtest.
@@ -761,6 +777,7 @@ def run_backtest_portfolio(
         strategy_ids = [config.DEFAULT_STRATEGY_ID]
 
     strategies = [get_strategy(sid) for sid in strategy_ids]
+    sym_primary = (primary_symbol or config.BACKTEST_PRIMARY_SYMBOL).strip().upper()
 
     # SMC strategies need H4 for regime — just warn if missing
     smc_ids = {"smc_fvg_v1", "smc_ob_v1"}
@@ -849,6 +866,8 @@ def run_backtest_portfolio(
         # bars_so_far = all M15 bars before current bar (anti-look-ahead)
         global_pos = int(bars.index.searchsorted(ts))
         bars_so_far = bars.iloc[:global_pos]
+        cross_views = slice_m15_asof(cross_symbol_m15 or {}, ts)
+        ctx_cross = cross_views if cross_views else None
 
         h4_so_far = None
         if h4_bars is not None:
@@ -1141,9 +1160,15 @@ def run_backtest_portfolio(
                 regime=regime,
                 calendar_blackout=calendar_blackout,
                 dxy_trend=dxy_trend,
+                primary_symbol=sym_primary,
+                cross_symbol_m15=ctx_cross,
             )
 
             signal, reason = strategy.generate_signal(ctx, supabase_client=None)
+            if signal is None:
+                continue
+            if cross_views:
+                signal = apply_cross_asset_to_signal(signal, cross_views)
             if signal is None:
                 continue
 
