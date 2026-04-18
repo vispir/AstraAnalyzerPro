@@ -4,13 +4,14 @@ Multi-symbol backtest runner with aggregated summary.
 Runs backtest for multiple symbols sequentially and aggregates results.
 
 Usage:
-    python scripts/run_multi_symbol_backtest.py
+    python scripts/run_multi_symbol_backtest.py --strategy range_breakout_v1
 """
 
 import subprocess
 import json
 import os
 import sys
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -165,6 +166,18 @@ def print_table(data: dict):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Multi-symbol backtest runner")
+    parser.add_argument("--strategy", type=str, default="breakout_retest_v1", help="Strategy ID")
+    parser.add_argument("--start", type=str, default="2020-01-01", help="Start date")
+    parser.add_argument("--end", type=str, default="2024-12-31", help="End date")
+    parser.add_argument("--mode", type=str, default="proxy", help="Backtest mode")
+    args = parser.parse_args()
+
+    PARAMS["strategy"] = args.strategy
+    PARAMS["start"] = args.start
+    PARAMS["end"] = args.end
+    PARAMS["mode"] = args.mode
+
     results = {}
 
     for symbol in SYMBOLS:

@@ -209,6 +209,7 @@ class BacktestResult:
 def _simulate_trade(
     trade: Trade,
     bar: pd.Series,
+    bars_so_far: pd.DataFrame = None,
 ) -> None:
     """
     Update an open trade against the current bar.
@@ -267,11 +268,29 @@ def _simulate_trade(
             trade.stop_loss = trade.entry
             trade.be_moved = True
 
-    # 5. Trail SL at +1.5R
+    # 5. Trail SL at +1.5R (ATR-based distance)
     if trade.be_moved:
         profit_dist = (bar_high - trade.entry) if is_long else (trade.entry - bar_low)
         if profit_dist >= sl_dist * config.TRAIL_TRIGGER_RR:
-            new_sl = bar_high - config.TRAIL_DISTANCE_USD if is_long else bar_low + config.TRAIL_DISTANCE_USD
+            # Calculate ATR for trailing distance
+            atr = None
+            if bars_so_far is not None and len(bars_so_far) >= config.TRAIL_ATR_PERIOD + 1:
+                recent = bars_so_far.tail(config.TRAIL_ATR_PERIOD + 1)
+                highs = recent["high"].astype(float)
+                lows = recent["low"].astype(float)
+                closes = recent["close"].astype(float)
+                prev_close = closes.shift(1)
+                tr = pd.concat([
+                    highs - lows,
+                    (highs - prev_close).abs(),
+                    (lows - prev_close).abs()
+                ], axis=1).max(axis=1)
+                atr = tr.iloc[1:].mean()
+
+            # Fallback to fixed distance if ATR unavailable
+            trail_distance = atr * config.TRAIL_DISTANCE_ATR if atr and atr > 0 else 5.0
+
+            new_sl = bar_high - trail_distance if is_long else bar_low + trail_distance
             if is_long:
                 trade.stop_loss = max(trade.stop_loss, new_sl)
             else:
@@ -523,7 +542,7 @@ def run_backtest(
                             f"(M1 trigger) SL={sig.stop_loss:.2f} TP={sig.take_profit:.2f}"
                         )
                         for minute_ts, minute_bar in m1_interval[m1_interval.index >= pd.Timestamp(trigger_ts)].iterrows():
-                            _simulate_trade(open_trade, minute_bar)
+                            _simulate_trade(open_trade, minute_bar, bars_so_far)
                             if open_trade.status != "open":
                                 balance, open_trade = _finalize_closed_trade(
                                     open_trade,
@@ -568,7 +587,7 @@ def run_backtest(
             elif open_trade.execution_timeframe == "M1" and m1_interval is not None and not m1_interval.empty:
                 minute_slice = m1_interval[m1_interval.index > pd.Timestamp(open_trade.opened_at)]
                 for minute_ts, minute_bar in minute_slice.iterrows():
-                    _simulate_trade(open_trade, minute_bar)
+                    _simulate_trade(open_trade, minute_bar, bars_so_far)
                     if open_trade.status != "open":
                         balance, open_trade = _finalize_closed_trade(
                             open_trade,
@@ -581,7 +600,7 @@ def run_backtest(
                         logger.debug(f"Trade closed: {all_trades[-1].dollar_pnl:+.2f} | Balance: {balance:.2f}")
                         break
             else:
-                _simulate_trade(open_trade, bar)
+                _simulate_trade(open_trade, bar, bars_so_far)
             if open_trade is None:
                 continue
             if open_trade.status != "open":
@@ -920,7 +939,7 @@ def run_backtest_portfolio(
                         open_trades.append(trade)
                         # Manage on M1 within this interval
                         for minute_ts, minute_bar in m1_interval[m1_interval.index >= pd.Timestamp(trigger_ts)].iterrows():
-                            _simulate_trade(trade, minute_bar)
+                            _simulate_trade(trade, minute_bar, bars_so_far)
                             if trade.status != "open":
                                 balance, trade = _finalize_closed_trade(trade, balance=balance, closed_at=minute_ts.to_pydatetime())
                                 equity_curve.append(balance)
@@ -960,7 +979,7 @@ def run_backtest_portfolio(
             if trade.execution_timeframe == "M1" and m1_interval is not None and not m1_interval.empty:
                 minute_slice = m1_interval[m1_interval.index > pd.Timestamp(trade.opened_at)]
                 for minute_ts, minute_bar in minute_slice.iterrows():
-                    _simulate_trade(trade, minute_bar)
+                    _simulate_trade(trade, minute_bar, bars_so_far)
                     if trade.status != "open":
                         balance, trade = _finalize_closed_trade(trade, balance=balance, closed_at=minute_ts.to_pydatetime())
                         equity_curve.append(balance)
@@ -969,7 +988,7 @@ def run_backtest_portfolio(
                 if trade.status != "open":
                     continue
             else:
-                _simulate_trade(trade, bar)
+                _simulate_trade(trade, bar, bars_so_far)
 
             if trade.status != "open":
                 balance, trade = _finalize_closed_trade(trade, balance=balance, closed_at=now)

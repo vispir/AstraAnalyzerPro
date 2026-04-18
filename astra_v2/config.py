@@ -76,7 +76,8 @@ TP_RR = 2.0                      # reward:risk ratio
 PARTIAL_CLOSE_RR = 1.0           # close 50% of position at 1:1
 BE_TRIGGER_RR = 1.0              # move SL to entry at +1R
 TRAIL_TRIGGER_RR = 1.5           # start trailing at +1.5R
-TRAIL_DISTANCE_USD = 5.0         # trail by $5
+TRAIL_DISTANCE_ATR = 0.3         # trail by 0.3 ATR (adaptive to volatility)
+TRAIL_ATR_PERIOD = 20            # ATR period for trailing stop calculation
 SLIPPAGE_USD = 0.75              # assumed slippage per side (for backtest)
 ENTRY_LIMIT_OFFSET_USD = 0.50    # limit order offset behind level
 
