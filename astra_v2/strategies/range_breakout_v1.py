@@ -146,19 +146,22 @@ class RangeBreakoutStrategyV1:
             if breakout_down and c3 >= range_low:
                 return None, "doji_third_failed"
 
-        # Confirmed! Calculate stop and target
+        # Confirmed! Calculate entry, stop and target
+        # FIX: Use last closed bar price (bars[-1]) instead of current_price to avoid look-ahead bias
+        entry_price = float(bars.iloc[-1]["close"])
+
         if direction == "BUY":
             stop_loss = range_low - config.RANGE_BREAKOUT_V1_STOP_BUFFER_ATR * atr
-            risk = current_price - stop_loss
+            risk = entry_price - stop_loss
         else:
             stop_loss = range_high + config.RANGE_BREAKOUT_V1_STOP_BUFFER_ATR * atr
-            risk = stop_loss - current_price
+            risk = stop_loss - entry_price
 
         if risk <= 0:
             return None, "invalid_risk"
 
-        take_profit = current_price + (risk * config.RANGE_BREAKOUT_V1_TP_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_TP_RR)
-        partial_tp = current_price + (risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR)
+        take_profit = entry_price + (risk * config.RANGE_BREAKOUT_V1_TP_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_TP_RR)
+        partial_tp = entry_price + (risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR)
 
         # Create dummy level for Signal
         from astra_v2.core.technical_engine import ActiveLevel, KeyLevel
@@ -169,12 +172,12 @@ class RangeBreakoutStrategyV1:
                 direction="support" if direction == "BUY" else "resistance",
                 strength=7.0,
             ),
-            distance_usd=abs(current_price - (range_high if direction == "BUY" else range_low)),
+            distance_usd=abs(entry_price - (range_high if direction == "BUY" else range_low)),
         )
 
         signal = Signal(
             direction=direction,
-            entry_price=current_price,
+            entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
             partial_tp=partial_tp,
