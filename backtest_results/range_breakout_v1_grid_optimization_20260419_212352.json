@@ -1,0 +1,48 @@
+[
+  {
+    "run": 1,
+    "params": {
+      "max_range_atr": 2.0,
+      "stop_buffer_atr": 0.3,
+      "tp_rr": 1.5,
+      "lookback": 15
+    },
+    "summary": {
+      "total_trades": 110,
+      "win_rate": 0.445,
+      "profit_factor": 1.377,
+      "max_drawdown_pct": 27.02,
+      "max_daily_dd_pct": 2.2,
+      "avg_daily_dd_pct": 0.07,
+      "daily_dd_violations": 0,
+      "avg_rr": -0.15,
+      "end_balance": 8253.81,
+      "net_pnl": -1746.19
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 99.489435
+  },
+  {
+    "run": 2,
+    "params": {
+      "max_range_atr": 2.0,
+      "stop_buffer_atr": 0.3,
+      "tp_rr": 1.5,
+      "lookback": 25
+    },
+    "summary": {
+      "total_trades": 14,
+      "win_rate": 0.643,
+      "profit_factor": 3.162,
+      "max_drawdown_pct": 4.54,
+      "max_daily_dd_pct": 1.49,
+      "avg_daily_dd_pct": 0.01,
+      "daily_dd_violations": 0,
+      "avg_rr": 0.11,
+      "end_balance": 10382.67,
+      "net_pnl": 382.67
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 107.792402
+  }
+]

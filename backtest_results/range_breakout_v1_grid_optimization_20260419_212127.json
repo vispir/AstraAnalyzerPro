@@ -1,0 +1,22 @@
+[
+  {
+    "run": 1,
+    "params": {
+      "max_range_atr": 2.0,
+      "stop_buffer_atr": 0.3,
+      "tp_rr": 1.5,
+      "lookback": 15
+    },
+    "summary": {
+      "total_trades": 110,
+      "win_rate": 0.445,
+      "profit_factor": 1.377,
+      "max_drawdown_pct": 27.02,
+      "max_daily_dd_pct": 2.2,
+      "avg_daily_dd_pct": 0.07,
+      "daily_dd_violations": 0,
+      "avg_rr": -0.15,
+      "end_balance": 8253.81,
+      "net_pnl": -1746.19
+    },
+    "passes_filter": 
