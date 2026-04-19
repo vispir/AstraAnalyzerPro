@@ -111,9 +111,12 @@ class RangeBreakoutStrategyV1:
 
     def _get_session_label(self, now: datetime) -> str:
         hour = now.hour
-        # Block 00:00-07:00, 12:00-13:00, and 17:00-22:00 UTC
-        if (0 <= hour < 7) or (12 <= hour < 13) or (17 <= hour < 22):
+        # Dead zones: midnight (thin liquidity) and session gaps
+        if (0 <= hour < 1) or (12 <= hour < 13) or (17 <= hour < 22):
             return "blocked"
+        # Asia (Tokyo/Singapore): 01:00-07:00 UTC
+        elif 1 <= hour < 7:
+            return "asia"
         # London: 07:00-12:00 UTC
         elif 7 <= hour < 12:
             return "london"
@@ -171,7 +174,7 @@ class RangeBreakoutStrategyV1:
         if not (breakout_up or breakout_down):
             return None, "no_breakout"
 
-        direction = "BUY" if breakout_up else "SELL"
+        direction = "BULLISH" if breakout_up else "BEARISH"
 
         # Check if b2 is doji — need third candle confirmation
         if self._is_doji(b2, atr):
@@ -185,7 +188,7 @@ class RangeBreakoutStrategyV1:
         # FIX: Use last closed bar price (bars[-1]) instead of current_price to avoid look-ahead bias
         entry_price = float(bars.iloc[-1]["close"])
 
-        if direction == "BUY":
+        if direction == "BULLISH":
             stop_loss = range_low - config.RANGE_BREAKOUT_V1_STOP_BUFFER_ATR * atr
             risk = entry_price - stop_loss
         else:
@@ -195,23 +198,23 @@ class RangeBreakoutStrategyV1:
         if risk <= 0:
             return None, "invalid_risk"
 
-        take_profit = entry_price + (risk * config.RANGE_BREAKOUT_V1_TP_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_TP_RR)
-        partial_tp = entry_price + (risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR if direction == "BUY" else -risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR)
+        take_profit = entry_price + (risk * config.RANGE_BREAKOUT_V1_TP_RR if direction == "BULLISH" else -risk * config.RANGE_BREAKOUT_V1_TP_RR)
+        partial_tp = entry_price + (risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR if direction == "BULLISH" else -risk * config.RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR)
 
         # Create dummy level for Signal
         from astra_v2.core.technical_engine import ActiveLevel, KeyLevel
         level = ActiveLevel(
             level=KeyLevel(
-                price=range_high if direction == "BUY" else range_low,
+                price=range_high if direction == "BULLISH" else range_low,
                 level_type="range_boundary",
-                direction="support" if direction == "BUY" else "resistance",
+                direction="support" if direction == "BULLISH" else "resistance",
                 strength=7.0,
             ),
-            distance_usd=abs(entry_price - (range_high if direction == "BUY" else range_low)),
+            distance_usd=abs(entry_price - (range_high if direction == "BULLISH" else range_low)),
         )
 
         # Apply Tokyo session risk multiplier
-        risk_multiplier = config.RANGE_BREAKOUT_V1_TOKYO_RISK_MULTIPLIER if session_label == "tokyo" else 1.0
+        risk_multiplier = config.RANGE_BREAKOUT_V1_TOKYO_RISK_MULTIPLIER if session_label == "asia" else 1.0
 
         signal = Signal(
             direction=direction,
