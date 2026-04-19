@@ -304,7 +304,7 @@ RANGE_BREAKOUT_V1_MIN_BARS_INSIDE_PCT = 0.70  # min 70% bars closed inside range
 RANGE_BREAKOUT_V1_MAX_CANDLE_BODY_ATR = 1.5  # reject ranges with large candles
 
 # ── Position Sizing ────────────────────────────────────────────────────────────
-RISK_PCT = 0.004                 # 0.4% of account per trade (validated for Funding Pips)
+RISK_PCT = 0.01                  # 1% of account per trade
 
 # ── Macro Cache ────────────────────────────────────────────────────────────────
 MACRO_CACHE_TTL_MINUTES = 60     # refresh macro bias every 60 minutes
