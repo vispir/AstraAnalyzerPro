@@ -20,10 +20,12 @@ from astra_v2.data.dukascopy import load_timeframe
 GLOBAL_DF = None
 
 # Parameter grid
-TP_RR_VALUES = [2.0, 2.5, 3.0, 3.5]
-STOP_BUFFER_ATR_VALUES = [0.3, 0.5, 0.7, 1.0]
+TP_RR_VALUES = [2.5, 3.0, 3.5]
+STOP_BUFFER_ATR_VALUES = [0.3, 0.5]
 MIN_RANGE_ATR_VALUES = [0.3, 0.5, 0.7]
-MAX_RANGE_ATR_VALUES = [1.5, 2.0, 3.0]
+MAX_RANGE_ATR_VALUES = [2.0, 3.0]
+TRAILING_START_VALUES = [None, 1.5, 2.0]  # None = breakeven only, 1.5/2.0 = trailing start level
+TRAILING_DISTANCE = 0.5  # Fixed trailing distance in R
 
 ATR_PERIOD = 20
 RISK_PER_TRADE = 100
@@ -61,7 +63,7 @@ def get_session_range(df, start_hour, end_hour):
 
     return range_high, range_low
 
-def run_backtest_with_params(df, tp_rr, stop_buffer_atr, min_range_atr, max_range_atr):
+def run_backtest_with_params(df, tp_rr, stop_buffer_atr, min_range_atr, max_range_atr, trailing_start):
     # Calculate ATR once
     df_with_atr = df.copy()
     df_with_atr['atr'] = calculate_atr(df, ATR_PERIOD)
@@ -101,15 +103,36 @@ def run_backtest_with_params(df, tp_rr, stop_buffer_atr, min_range_atr, max_rang
         for i in range(len(day_data)):
             # Check exit conditions for active trade
             if active_trade is not None:
-                # Breakeven logic: move SL to entry after 1R profit
+                # Breakeven and trailing logic
                 if active_trade['direction'] == 'LONG':
                     risk = active_trade['entry'] - active_trade['initial_sl']
+
+                    # Breakeven at 1R
                     if highs[i] >= active_trade['entry'] + risk:
-                        active_trade['sl'] = active_trade['entry']
+                        active_trade['sl'] = max(active_trade['sl'], active_trade['entry'])
+
+                    # Trailing SL if enabled
+                    if trailing_start is not None:
+                        # Start trailing after reaching trailing_start level
+                        if highs[i] >= active_trade['entry'] + trailing_start * risk:
+                            # Trail at trailing_start - TRAILING_DISTANCE
+                            trailing_sl = highs[i] - TRAILING_DISTANCE * risk
+                            active_trade['sl'] = max(active_trade['sl'], trailing_sl)
+
                 else:  # SHORT
                     risk = active_trade['initial_sl'] - active_trade['entry']
+
+                    # Breakeven at 1R
                     if lows[i] <= active_trade['entry'] - risk:
-                        active_trade['sl'] = active_trade['entry']
+                        active_trade['sl'] = min(active_trade['sl'], active_trade['entry'])
+
+                    # Trailing SL if enabled
+                    if trailing_start is not None:
+                        # Start trailing after reaching trailing_start level
+                        if lows[i] <= active_trade['entry'] - trailing_start * risk:
+                            # Trail at trailing_start - TRAILING_DISTANCE
+                            trailing_sl = lows[i] + TRAILING_DISTANCE * risk
+                            active_trade['sl'] = min(active_trade['sl'], trailing_sl)
 
                 # Check SL/TP
                 if active_trade['direction'] == 'LONG':
@@ -298,11 +321,11 @@ def run_backtest_with_params(df, tp_rr, stop_buffer_atr, min_range_atr, max_rang
 
 def run_single_combination(args):
     """Wrapper for multiprocessing - uses global df"""
-    tp_rr, stop_buffer, min_range, max_range, run_count, total_runs = args
+    tp_rr, stop_buffer, min_range, max_range, trailing_start, run_count, total_runs = args
     start_time = datetime.now()
 
     try:
-        result = run_backtest_with_params(GLOBAL_DF, tp_rr, stop_buffer, min_range, max_range)
+        result = run_backtest_with_params(GLOBAL_DF, tp_rr, stop_buffer, min_range, max_range, trailing_start)
 
         if result is None:
             return None
@@ -323,14 +346,16 @@ def run_single_combination(args):
                 'stop_buffer_atr': float(stop_buffer),
                 'min_range_atr': float(min_range),
                 'max_range_atr': float(max_range),
+                'trailing_start': float(trailing_start) if trailing_start is not None else None,
             },
             'summary': result,
             'passes_filter': bool(passes_filter),
             'elapsed_seconds': float(elapsed),
         }
 
+        trailing_str = f"Trail={trailing_start}R" if trailing_start is not None else "Trail=None"
         status = "PASS" if passes_filter else "FAIL"
-        print(f"[{run_count}/{total_runs}] {status}: TP_RR={tp_rr}, STOP={stop_buffer}, MIN_R={min_range}, MAX_R={max_range} | "
+        print(f"[{run_count}/{total_runs}] {status}: TP_RR={tp_rr}, STOP={stop_buffer}, MIN_R={min_range}, MAX_R={max_range}, {trailing_str} | "
               f"PF={result['profit_factor']:.3f}, DD={result['max_drawdown_pct']:.2f}%, DailyDD={result['max_daily_dd']:.2f}%, "
               f"PnL=${result['total_pnl']:,.0f}, Trades={result['total_trades']}, WR={result['win_rate']:.1%}", flush=True)
 
@@ -353,7 +378,7 @@ def run_optimization():
     df = df.sort_index()
 
     # Prepare all combinations
-    combinations = list(product(TP_RR_VALUES, STOP_BUFFER_ATR_VALUES, MIN_RANGE_ATR_VALUES, MAX_RANGE_ATR_VALUES))
+    combinations = list(product(TP_RR_VALUES, STOP_BUFFER_ATR_VALUES, MIN_RANGE_ATR_VALUES, MAX_RANGE_ATR_VALUES, TRAILING_START_VALUES))
     total_runs = len(combinations)
 
     print(f"\nStarting optimization: {total_runs} combinations")
@@ -362,8 +387,8 @@ def run_optimization():
 
     # Prepare arguments (without df - will use global)
     args_list = [
-        (tp_rr, stop_buffer, min_range, max_range, i+1, total_runs)
-        for i, (tp_rr, stop_buffer, min_range, max_range) in enumerate(combinations)
+        (tp_rr, stop_buffer, min_range, max_range, trailing_start, i+1, total_runs)
+        for i, (tp_rr, stop_buffer, min_range, max_range, trailing_start) in enumerate(combinations)
     ]
 
     # Run in parallel with global df
@@ -392,15 +417,16 @@ def run_optimization():
 
     # Print top 20
     print("\n=== TOP 20 BY PROFIT FACTOR ===")
-    print(f"{'Rank':<5} {'TP_RR':<7} {'STOP':<7} {'MIN_R':<7} {'MAX_R':<7} {'Trades':<8} {'WR%':<7} {'PF':<7} {'DD%':<7} {'DailyDD%':<9} {'PnL':<12} {'Status':<6}")
-    print("-" * 110)
+    print(f"{'Rank':<5} {'TP_RR':<7} {'STOP':<7} {'MIN_R':<7} {'MAX_R':<7} {'Trail':<7} {'Trades':<8} {'WR%':<7} {'PF':<7} {'DD%':<7} {'DailyDD%':<9} {'PnL':<12} {'Status':<6}")
+    print("-" * 120)
 
     for i, r in enumerate(results[:20], 1):
         p = r['params']
         s = r['summary']
         status = "PASS" if r['passes_filter'] else "FAIL"
+        trail_str = f"{p['trailing_start']:.1f}R" if p['trailing_start'] is not None else "None"
         print(f"{i:<5} {p['tp_rr']:<7.1f} {p['stop_buffer_atr']:<7.1f} {p['min_range_atr']:<7.1f} {p['max_range_atr']:<7.1f} "
-              f"{s['total_trades']:<8} {s['win_rate']*100:<7.1f} {s['profit_factor']:<7.3f} "
+              f"{trail_str:<7} {s['total_trades']:<8} {s['win_rate']*100:<7.1f} {s['profit_factor']:<7.3f} "
               f"{s['max_drawdown_pct']:<7.2f} {s['max_daily_dd']:<9.2f} ${s['total_pnl']:<11,.0f} {status:<6}")
 
 if __name__ == "__main__":
