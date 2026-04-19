@@ -1,0 +1,44 @@
+================================================================================
+BREAKOUT_RETEST_V1 GRID SEARCH - PHASE 1 (XAUUSD)
+================================================================================
+
+Loading data...
+  [1/5] Loading FRED...
+        OK - FRED: 1260 rows
+  [2/5] Loading yfinance...
+        OK - yfinance: 1257 rows
+  [3/5] Loading COT...
+        OK - COT: 379 rows
+  [4/5] Loading M15 bars...
+        OK - M15: 102,003 bars
+  [5/5] Loading H4 bars...
+        OK - H4: 7,558 bars
+
+  All data loaded successfully!
+
+Total combinations: 18
+Estimated time: ~1.4 minutes
+
+[1/18] SKIP | PROX=0.3 TP=1.5 BODY=0.05 | T=84 WR=43% PF=0.60 DD=12.0% RR=-0.63 PnL=$-1079
+  Progress saved (1/18)
+[2/18] SKIP | PROX=0.3 TP=1.5 BODY=0.10 | T=84 WR=43% PF=0.60 DD=12.0% RR=-0.63 PnL=$-1079
+  Progress saved (2/18)
+[3/18] SKIP | PROX=0.3 TP=2.0 BODY=0.05 | T=84 WR=43% PF=0.64 DD=12.0% RR=-0.28 PnL=$-1033
+  Progress saved (3/18)
+[4/18] SKIP | PROX=0.3 TP=2.0 BODY=0.10 | T=84 WR=43% PF=0.64 DD=12.0% RR=-0.28 PnL=$-1033
+  Progress saved (4/18)
+[5/18] SKIP | PROX=0.3 TP=2.5 BODY=0.05 | T=84 WR=43% PF=0.70 DD=10.9% RR=-0.13 PnL=$-867
+  Progress saved (5/18)
+[6/18] SKIP | PROX=0.3 TP=2.5 BODY=0.10 | T=84 WR=43% PF=0.70 DD=10.9% RR=-0.13 PnL=$-867
+  Progress saved (6/18)
+[7/18] SKIP | PROX=0.5 TP=1.5 BODY=0.05 | T=88 WR=44% PF=0.72 DD=11.2% RR=-0.59 PnL=$-1005
+  Progress saved (7/18)
+[8/18] SKIP | PROX=0.5 TP=1.5 BODY=0.10 | T=88 WR=44% PF=0.72 DD=11.2% RR=-0.59 PnL=$-1005
+  Progress saved (8/18)
+[9/18] SKIP | PROX=0.5 TP=2.0 BODY=0.05 | T=88 WR=44% PF=0.76 DD=11.0% RR=-0.23 PnL=$-956
+  Progress saved (9/18)
+[10/18] SKIP | PROX=0.5 TP=2.0 BODY=0.10 | T=88 WR=44% PF=0.76 DD=11.0% RR=-0.23 PnL=$-956
+  Progress saved (10/18)
+[11/18] SKIP | PROX=0.5 TP=2.5 BODY=0.05 | T=88 WR=44% PF=0.82 DD=9.9% RR=-0.10 PnL=$-787
+  Progress saved (11/18)
+^C

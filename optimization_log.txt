@@ -1,0 +1,39 @@
+================================================================================
+BREAKOUT_RETEST_V1 GRID SEARCH - PHASE 1 (XAUUSD)
+================================================================================
+
+Loading data...
+  [1/5] Loading FRED...
+        OK - FRED: 1260 rows
+  [2/5] Loading yfinance...
+        OK - yfinance: 1257 rows
+  [3/5] Loading COT...
+        OK - COT: 379 rows
+  [4/5] Loading M15 bars...
+        OK - M15: 102,003 bars
+  [5/5] Loading H4 bars...
+        OK - H4: 7,558 bars
+
+  All data loaded successfully!
+
+Total combinations: 18
+Estimated time: ~1.4 minutes
+
+Traceback (most recent call last):
+  File "D:\Works\ASTRA ANALYZER CHART\scripts\optimize_breakout_retest.py", line 203, in <module>
+    main()
+    ~~~~^^
+  File "D:\Works\ASTRA ANALYZER CHART\scripts\optimize_breakout_retest.py", line 145, in main
+    print(f"[{i}/{len(param_sets)}] {status} | "
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          f"PROX={params['RETEST_PROXIMITY_ATR']:.1f} TP={params['TP_RR']:.1f} BODY={params['REJECTION_MIN_BODY_ATR']:.2f} | "
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+          f"DD={summary['max_drawdown_pct']:.1f}% RR={summary['avg_rr']:.2f} "
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          f"PnL=${summary['net_pnl']:.0f}")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Администратор\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1251.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2717' in position 7: character maps to <undefined>

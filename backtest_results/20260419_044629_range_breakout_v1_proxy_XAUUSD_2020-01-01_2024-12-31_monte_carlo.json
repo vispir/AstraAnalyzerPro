@@ -1,0 +1,20 @@
+{
+  "iterations": 1000,
+  "total_trades": 868,
+  "start_balance": 10000.0,
+  "median_pnl": 51803.805226236334,
+  "mean_pnl": 51642.97029636473,
+  "pnl_5th_percentile": 44056.8509376201,
+  "pnl_95th_percentile": 59326.6044441606,
+  "pnl_std": 4548.142122178462,
+  "median_max_dd": 5.420331410829791,
+  "mean_max_dd": 5.783230007542404,
+  "max_dd_5th_percentile": 3.3468877315812535,
+  "max_dd_95th_percentile": 9.564073300206411,
+  "prob_profitable": 1.0,
+  "prob_dd_over_5pct": 0.585,
+  "prob_dd_over_10pct": 0.04,
+  "median_end_balance": 61803.805226236334,
+  "end_balance_5th_percentile": 54056.8509376201,
+  "end_balance_95th_percentile": 69326.6044441606
+}

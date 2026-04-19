@@ -1,0 +1,218 @@
+================================================================================
+XAUUSD OPTIMIZATION: range_breakout_v1
+Total runs: 60
+Baseline: 475 trades, WR 70.9%, PF 2.31, DD 2.18%, PnL $13,233
+================================================================================
+
+[1/60] Testing: MAX_RANGE=2.0, STOP=0.3, TRAIL=0.2
+  Trades: 34, WR: 73.5%, PF: 4.36, DD: 10.88%, PnL: $-244
+
+[2/60] Testing: MAX_RANGE=2.0, STOP=0.3, TRAIL=0.3
+  Trades: 34, WR: 73.5%, PF: 4.35, DD: 10.88%, PnL: $-247
+
+[3/60] Testing: MAX_RANGE=2.0, STOP=0.3, TRAIL=0.5
+  Trades: 34, WR: 73.5%, PF: 4.33, DD: 10.88%, PnL: $-253
+
+[4/60] Testing: MAX_RANGE=2.0, STOP=0.5, TRAIL=0.2
+  Trades: 34, WR: 73.5%, PF: 4.37, DD: 2.18%, PnL: $721
+
+[5/60] Testing: MAX_RANGE=2.0, STOP=0.5, TRAIL=0.3
+  Trades: 34, WR: 73.5%, PF: 4.36, DD: 2.18%, PnL: $717
+
+[6/60] Testing: MAX_RANGE=2.0, STOP=0.5, TRAIL=0.5
+  Trades: 34, WR: 73.5%, PF: 4.33, DD: 2.18%, PnL: $710
+
+[7/60] Testing: MAX_RANGE=2.0, STOP=0.8, TRAIL=0.2
+  Trades: 34, WR: 73.5%, PF: 3.68, DD: 2.17%, PnL: $688
+
+[8/60] Testing: MAX_RANGE=2.0, STOP=0.8, TRAIL=0.3
+  Trades: 34, WR: 73.5%, PF: 3.67, DD: 2.17%, PnL: $685
+
+[9/60] Testing: MAX_RANGE=2.0, STOP=0.8, TRAIL=0.5
+  Trades: 34, WR: 73.5%, PF: 3.65, DD: 2.17%, PnL: $679
+
+[10/60] Testing: MAX_RANGE=2.0, STOP=1.0, TRAIL=0.2
+  Trades: 34, WR: 73.5%, PF: 3.63, DD: 2.03%, PnL: $690
+
+[11/60] Testing: MAX_RANGE=2.0, STOP=1.0, TRAIL=0.3
+  Trades: 34, WR: 73.5%, PF: 3.62, DD: 2.03%, PnL: $687
+
+[12/60] Testing: MAX_RANGE=2.0, STOP=1.0, TRAIL=0.5
+  Trades: 34, WR: 73.5%, PF: 3.60, DD: 2.04%, PnL: $681
+
+[13/60] Testing: MAX_RANGE=2.5, STOP=0.3, TRAIL=0.2
+  Trades: 192, WR: 70.3%, PF: 2.88, DD: 10.89%, PnL: $2,421
+
+[14/60] Testing: MAX_RANGE=2.5, STOP=0.3, TRAIL=0.3
+  Trades: 192, WR: 70.3%, PF: 2.87, DD: 10.90%, PnL: $2,393
+
+[15/60] Testing: MAX_RANGE=2.5, STOP=0.3, TRAIL=0.5
+  Trades: 192, WR: 70.3%, PF: 2.86, DD: 10.92%, PnL: $2,387
+
+[16/60] Testing: MAX_RANGE=2.5, STOP=0.5, TRAIL=0.2
+  Trades: 192, WR: 71.4%, PF: 2.97, DD: 2.18%, PnL: $4,291
+
+[17/60] Testing: MAX_RANGE=2.5, STOP=0.5, TRAIL=0.3
+  Trades: 192, WR: 71.4%, PF: 2.96, DD: 2.19%, PnL: $4,259
+
+[18/60] Testing: MAX_RANGE=2.5, STOP=0.5, TRAIL=0.5
+  Trades: 192, WR: 71.4%, PF: 2.95, DD: 2.21%, PnL: $4,230
+
+[19/60] Testing: MAX_RANGE=2.5, STOP=0.8, TRAIL=0.2
+  Trades: 193, WR: 73.6%, PF: 2.96, DD: 2.15%, PnL: $4,782
+
+[20/60] Testing: MAX_RANGE=2.5, STOP=0.8, TRAIL=0.3
+  Trades: 193, WR: 73.6%, PF: 2.95, DD: 2.15%, PnL: $4,744
+
+[21/60] Testing: MAX_RANGE=2.5, STOP=0.8, TRAIL=0.5
+  Trades: 193, WR: 73.6%, PF: 2.94, DD: 2.15%, PnL: $4,689
+
+[22/60] Testing: MAX_RANGE=2.5, STOP=1.0, TRAIL=0.2
+  Trades: 190, WR: 72.6%, PF: 2.63, DD: 2.14%, PnL: $4,374
+
+[23/60] Testing: MAX_RANGE=2.5, STOP=1.0, TRAIL=0.3
+  Trades: 190, WR: 72.6%, PF: 2.63, DD: 2.14%, PnL: $4,378
+
+[24/60] Testing: MAX_RANGE=2.5, STOP=1.0, TRAIL=0.5
+  Trades: 190, WR: 72.6%, PF: 2.62, DD: 2.14%, PnL: $4,357
+
+[25/60] Testing: MAX_RANGE=3.0, STOP=0.3, TRAIL=0.2
+  Trades: 478, WR: 70.1%, PF: 2.27, DD: 10.90%, PnL: $9,729
+
+[26/60] Testing: MAX_RANGE=3.0, STOP=0.3, TRAIL=0.3
+  Trades: 478, WR: 70.1%, PF: 2.26, DD: 10.90%, PnL: $9,634
+
+[27/60] Testing: MAX_RANGE=3.0, STOP=0.3, TRAIL=0.5
+  Trades: 478, WR: 70.1%, PF: 2.25, DD: 10.90%, PnL: $9,511
+
+[28/60] Testing: MAX_RANGE=3.0, STOP=0.5, TRAIL=0.2
+  Trades: 477, WR: 70.9%, PF: 2.32, DD: 2.18%, PnL: $13,353
+
+[29/60] Testing: MAX_RANGE=3.0, STOP=0.5, TRAIL=0.3
+  Trades: 477, WR: 70.9%, PF: 2.31, DD: 2.18%, PnL: $13,233
+
+[30/60] Testing: MAX_RANGE=3.0, STOP=0.5, TRAIL=0.5
+  Trades: 477, WR: 70.9%, PF: 2.30, DD: 2.18%, PnL: $13,021
+
+[31/60] Testing: MAX_RANGE=3.0, STOP=0.8, TRAIL=0.2
+  Trades: 467, WR: 71.5%, PF: 2.32, DD: 10.44%, PnL: $11,351
+
+[32/60] Testing: MAX_RANGE=3.0, STOP=0.8, TRAIL=0.3
+  Trades: 467, WR: 71.5%, PF: 2.31, DD: 10.44%, PnL: $11,226
+
+[33/60] Testing: MAX_RANGE=3.0, STOP=0.8, TRAIL=0.5
+  Trades: 467, WR: 71.5%, PF: 2.30, DD: 10.44%, PnL: $11,002
+
+[34/60] Testing: MAX_RANGE=3.0, STOP=1.0, TRAIL=0.2
+  Trades: 464, WR: 71.3%, PF: 2.22, DD: 2.48%, PnL: $13,472
+
+[35/60] Testing: MAX_RANGE=3.0, STOP=1.0, TRAIL=0.3
+  Trades: 464, WR: 71.3%, PF: 2.22, DD: 2.48%, PnL: $13,437
+
+[36/60] Testing: MAX_RANGE=3.0, STOP=1.0, TRAIL=0.5
+  Trades: 464, WR: 71.3%, PF: 2.21, DD: 2.50%, PnL: $13,261
+
+[37/60] Testing: MAX_RANGE=3.5, STOP=0.3, TRAIL=0.2
+  Trades: 738, WR: 70.9%, PF: 2.13, DD: 10.55%, PnL: $22,286
+
+[38/60] Testing: MAX_RANGE=3.5, STOP=0.3, TRAIL=0.3
+  Trades: 738, WR: 70.9%, PF: 2.13, DD: 10.55%, PnL: $22,072
+
+[39/60] Testing: MAX_RANGE=3.5, STOP=0.3, TRAIL=0.5
+  Trades: 738, WR: 70.9%, PF: 2.12, DD: 10.55%, PnL: $21,908
+
+[40/60] Testing: MAX_RANGE=3.5, STOP=0.5, TRAIL=0.2
+  Trades: 722, WR: 71.2%, PF: 2.20, DD: 2.84%, PnL: $27,502
+
+[41/60] Testing: MAX_RANGE=3.5, STOP=0.5, TRAIL=0.3
+  Trades: 721, WR: 71.3%, PF: 2.20, DD: 2.84%, PnL: $27,456
+
+[42/60] Testing: MAX_RANGE=3.5, STOP=0.5, TRAIL=0.5
+  Trades: 721, WR: 71.3%, PF: 2.19, DD: 2.84%, PnL: $27,193
+
+[43/60] Testing: MAX_RANGE=3.5, STOP=0.8, TRAIL=0.2
+  Trades: 705, WR: 71.6%, PF: 2.19, DD: 10.98%, PnL: $23,886
+
+[44/60] Testing: MAX_RANGE=3.5, STOP=0.8, TRAIL=0.3
+  Trades: 704, WR: 71.7%, PF: 2.19, DD: 10.99%, PnL: $23,793
+
+[45/60] Testing: MAX_RANGE=3.5, STOP=0.8, TRAIL=0.5
+  Trades: 704, WR: 71.7%, PF: 2.18, DD: 11.00%, PnL: $23,485
+
+[46/60] Testing: MAX_RANGE=3.5, STOP=1.0, TRAIL=0.2
+  Trades: 694, WR: 72.0%, PF: 2.18, DD: 2.38%, PnL: $27,925
+
+[47/60] Testing: MAX_RANGE=3.5, STOP=1.0, TRAIL=0.3
+  Trades: 694, WR: 72.0%, PF: 2.17, DD: 2.38%, PnL: $27,788
+
+[48/60] Testing: MAX_RANGE=3.5, STOP=1.0, TRAIL=0.5
+  Trades: 694, WR: 72.0%, PF: 2.17, DD: 2.38%, PnL: $27,540
+
+[49/60] Testing: MAX_RANGE=4.0, STOP=0.3, TRAIL=0.2
+  Trades: 895, WR: 73.1%, PF: 2.31, DD: 10.49%, PnL: $43,855
+
+[50/60] Testing: MAX_RANGE=4.0, STOP=0.3, TRAIL=0.3
+  Trades: 894, WR: 73.0%, PF: 2.31, DD: 10.49%, PnL: $43,142
+
+[51/60] Testing: MAX_RANGE=4.0, STOP=0.3, TRAIL=0.5
+  Trades: 903, WR: 73.3%, PF: 2.33, DD: 10.49%, PnL: $44,906
+
+[52/60] Testing: MAX_RANGE=4.0, STOP=0.5, TRAIL=0.2
+  Trades: 861, WR: 73.5%, PF: 2.38, DD: 2.77%, PnL: $50,008
+
+[53/60] Testing: MAX_RANGE=4.0, STOP=0.5, TRAIL=0.3
+  Trades: 859, WR: 73.6%, PF: 2.38, DD: 2.77%, PnL: $49,492
+
+[54/60] Testing: MAX_RANGE=4.0, STOP=0.5, TRAIL=0.5
+  Trades: 868, WR: 73.8%, PF: 2.41, DD: 2.77%, PnL: $51,726
+
+[55/60] Testing: MAX_RANGE=4.0, STOP=0.8, TRAIL=0.2
+  Trades: 844, WR: 73.6%, PF: 2.35, DD: 10.63%, PnL: $43,374
+
+[56/60] Testing: MAX_RANGE=4.0, STOP=0.8, TRAIL=0.3
+  Trades: 842, WR: 73.6%, PF: 2.35, DD: 10.64%, PnL: $42,912
+
+[57/60] Testing: MAX_RANGE=4.0, STOP=0.8, TRAIL=0.5
+  Trades: 852, WR: 73.8%, PF: 2.38, DD: 10.65%, PnL: $44,254
+
+[58/60] Testing: MAX_RANGE=4.0, STOP=1.0, TRAIL=0.2
+  Trades: 825, WR: 73.3%, PF: 2.31, DD: 2.81%, PnL: $46,067
+
+[59/60] Testing: MAX_RANGE=4.0, STOP=1.0, TRAIL=0.3
+  Trades: 824, WR: 73.3%, PF: 2.31, DD: 2.81%, PnL: $45,454
+
+[60/60] Testing: MAX_RANGE=4.0, STOP=1.0, TRAIL=0.5
+  Trades: 834, WR: 73.5%, PF: 2.33, DD: 2.81%, PnL: $47,207
+
+================================================================================
+TOP 5 RESULTS (DD < 5%, Trades > 200)
+================================================================================
+
+1. MAX_RANGE=4.0, STOP=0.5, TRAIL=0.5
+   Trades: 868, WR: 73.8%, PF: 2.41
+   DD: 2.77%, Avg RR: 0.40, PnL: $51,726
+   Improvement vs baseline: +290.9%
+
+2. MAX_RANGE=4.0, STOP=0.5, TRAIL=0.2
+   Trades: 861, WR: 73.5%, PF: 2.38
+   DD: 2.77%, Avg RR: 0.39, PnL: $50,008
+   Improvement vs baseline: +277.9%
+
+3. MAX_RANGE=4.0, STOP=0.5, TRAIL=0.3
+   Trades: 859, WR: 73.6%, PF: 2.38
+   DD: 2.77%, Avg RR: 0.39, PnL: $49,492
+   Improvement vs baseline: +274.0%
+
+4. MAX_RANGE=4.0, STOP=1.0, TRAIL=0.5
+   Trades: 834, WR: 73.5%, PF: 2.33
+   DD: 2.81%, Avg RR: 0.41, PnL: $47,207
+   Improvement vs baseline: +256.7%
+
+5. MAX_RANGE=4.0, STOP=1.0, TRAIL=0.2
+   Trades: 825, WR: 73.3%, PF: 2.31
+   DD: 2.81%, Avg RR: 0.40, PnL: $46,067
+   Improvement vs baseline: +248.1%
+
+
+Results saved to optimization_xauusd_range_breakout_20260419_045331.json
+================================================================================

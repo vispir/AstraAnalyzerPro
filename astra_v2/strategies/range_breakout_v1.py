@@ -51,7 +51,12 @@ class RangeBreakoutStrategyV1:
     def _detect_range(self, bars: pd.DataFrame, atr: float) -> Optional[dict]:
         """
         Detect consolidation range: local high/low over LOOKBACK bars
-        where range size < 1.5 × ATR (tight consolidation).
+        where range size < 4.0 × ATR (tight consolidation).
+
+        Optional quality filters (if USE_CONSOLIDATION_FILTER=True):
+        - Min 2 touches of each boundary
+        - Min 70% bars closed inside range
+        - No large candles (body > 1.5 ATR) inside range
         """
         lookback = config.RANGE_BREAKOUT_V1_CONSOLIDATION_LOOKBACK
         if len(bars) < lookback:
@@ -62,9 +67,33 @@ class RangeBreakoutStrategyV1:
         range_low = float(recent["low"].min())
         range_size = range_high - range_low
 
-        # Range must be tight (< 3.0 ATR)
+        # Range must be tight (< 4.0 ATR)
         if range_size > 4.0 * atr:
             return None
+
+        # Optional consolidation quality filters
+        if config.RANGE_BREAKOUT_V1_USE_CONSOLIDATION_FILTER:
+            # 1. Count boundary touches (high within 0.1 ATR of range_high, low within 0.1 ATR of range_low)
+            touch_threshold = 0.1 * atr
+            high_touches = ((recent["high"] >= range_high - touch_threshold)).sum()
+            low_touches = ((recent["low"] <= range_low + touch_threshold)).sum()
+
+            if high_touches < config.RANGE_BREAKOUT_V1_MIN_BOUNDARY_TOUCHES:
+                return None
+            if low_touches < config.RANGE_BREAKOUT_V1_MIN_BOUNDARY_TOUCHES:
+                return None
+
+            # 2. Check bars closed inside range
+            bars_inside = ((recent["close"] > range_low) & (recent["close"] < range_high)).sum()
+            bars_inside_pct = bars_inside / len(recent)
+            if bars_inside_pct < config.RANGE_BREAKOUT_V1_MIN_BARS_INSIDE_PCT:
+                return None
+
+            # 3. Check for large candles inside range
+            for _, bar in recent.iterrows():
+                body = abs(float(bar["close"]) - float(bar["open"]))
+                if body > config.RANGE_BREAKOUT_V1_MAX_CANDLE_BODY_ATR * atr:
+                    return None
 
         return {
             "range_high": range_high,

@@ -1,0 +1,63 @@
+{
+  "rows": [
+    {
+      "pair": "XAUUSD",
+      "total_trades": 475,
+      "win_rate": 0.709,
+      "profit_factor": 2.323,
+      "max_drawdown_pct": 2.18,
+      "avg_rr": 0.39,
+      "net_pnl": 12875.69,
+      "end_balance": 22875.69
+    },
+    {
+      "pair": "XAGUSD",
+      "total_trades": 309,
+      "win_rate": 0.074,
+      "profit_factor": 0.05,
+      "max_drawdown_pct": 108.22,
+      "avg_rr": -11.54,
+      "net_pnl": -10073.55,
+      "end_balance": -73.55
+    },
+    {
+      "pair": "EURUSD",
+      "total_trades": 279,
+      "win_rate": 0.082,
+      "profit_factor": 0.053,
+      "max_drawdown_pct": 99.97,
+      "avg_rr": -4.05,
+      "net_pnl": -9996.9,
+      "end_balance": 3.1
+    },
+    {
+      "pair": "BTCUSD",
+      "total_trades": 369,
+      "win_rate": 0.656,
+      "profit_factor": 2.074,
+      "max_drawdown_pct": 97.07,
+      "avg_rr": -0.48,
+      "net_pnl": -9585.51,
+      "end_balance": 414.49
+    },
+    {
+      "pair": "TOTAL",
+      "total_trades": 1432,
+      "win_rate": 0.436161312849162,
+      "profit_factor": 1.326094972067039,
+      "max_drawdown_pct": 76.86,
+      "avg_rr": -3.2735195530726253,
+      "net_pnl": -16780.269999999997,
+      "end_balance": -6780.269999999997
+    }
+  ],
+  "params": {
+    "start": "2020-01-01",
+    "end": "2024-12-31",
+    "mode": "proxy",
+    "strategy": "range_breakout_v1",
+    "balance": 10000.0,
+    "train_months": 6,
+    "test_months": 1
+  }
+}

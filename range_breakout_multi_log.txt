@@ -1,0 +1,138 @@
+
+============================================================
+Running backtest for XAUUSD...
+============================================================
+
+2026-04-19 02:06:00,157 INFO: Loading FRED bulk data...
+2026-04-19 02:06:00,233 INFO: Loaded FRED cache: data_cache\fred_daily.parquet (1260 days)
+2026-04-19 02:06:00,233 INFO: Loading yfinance bulk data...
+2026-04-19 02:06:00,242 INFO: Loaded cache: data_cache\yfinance_daily.parquet (1257 rows)
+2026-04-19 02:06:00,244 INFO: Loading COT data...
+2026-04-19 02:06:00,249 INFO: Loaded cache: data_cache\cot_gold.parquet (379 rows)
+2026-04-19 02:06:00,249 INFO: Backtest [XAUUSD]: 2020-01-01 to 2024-12-31, mode=proxy, strategy=range_breakout_v1, cross=—
+2026-04-19 02:06:00,249 INFO: Loading Dukascopy cache: data_cache\dukascopy\m15\XAUUSD\xauusd_m15_2020-01-01_2024-12-31.parquet
+2026-04-19 02:06:00,268 INFO: Primary M15 XAUUSD: 102,003 bars
+2026-04-19 02:06:00,284 INFO: Backtest: 97087 test bars, mode=proxy, strategy=range_breakout_v1, balance=$10,000
+2026-04-19 02:07:21,344 INFO: Results saved to backtest_results\20260419_020600_range_breakout_v1_proxy_XAUUSD_2020-01-01_2024-12-31.json
+
+=== BACKTEST RESULTS [XAUUSD] ===
+{
+  "total_trades": 475,
+  "win_rate": 0.709,
+  "profit_factor": 2.323,
+  "max_drawdown_pct": 2.18,
+  "avg_rr": 0.39,
+  "end_balance": 22875.69,
+  "net_pnl": 12875.69
+}
+
+=== PROP FIRM VALIDATION [XAUUSD] ===
+Profit Factor >= 1.5:  PASS (2.323)
+Max DD <= 5%:          PASS (2.18%)
+
+============================================================
+Running backtest for XAGUSD...
+============================================================
+
+2026-04-19 02:07:25,031 INFO: Loading FRED bulk data...
+2026-04-19 02:07:25,128 INFO: Loaded FRED cache: data_cache\fred_daily.parquet (1260 days)
+2026-04-19 02:07:25,128 INFO: Loading yfinance bulk data...
+2026-04-19 02:07:25,137 INFO: Loaded cache: data_cache\yfinance_daily.parquet (1257 rows)
+2026-04-19 02:07:25,138 INFO: Loading COT data...
+2026-04-19 02:07:25,143 INFO: Loaded cache: data_cache\cot_gold.parquet (379 rows)
+2026-04-19 02:07:25,143 INFO: Backtest [XAGUSD]: 2020-01-01 to 2024-12-31, mode=proxy, strategy=range_breakout_v1, cross=—
+2026-04-19 02:07:25,195 INFO: Primary M15 XAGUSD: 115,261 bars
+2026-04-19 02:07:25,210 INFO: Backtest: 103552 test bars, mode=proxy, strategy=range_breakout_v1, balance=$10,000
+2026-04-19 02:08:22,781 INFO: Results saved to backtest_results\20260419_020725_range_breakout_v1_proxy_XAGUSD_2020-01-01_2024-12-31.json
+
+=== BACKTEST RESULTS [XAGUSD] ===
+{
+  "total_trades": 309,
+  "win_rate": 0.074,
+  "profit_factor": 0.05,
+  "max_drawdown_pct": 108.22,
+  "avg_rr": -11.54,
+  "end_balance": -73.55,
+  "net_pnl": -10073.55
+}
+
+=== PROP FIRM VALIDATION [XAGUSD] ===
+Profit Factor >= 1.5:  FAIL (0.050)
+Max DD <= 5%:          FAIL (108.22%)
+
+============================================================
+Running backtest for EURUSD...
+============================================================
+
+2026-04-19 02:08:26,420 INFO: Loading FRED bulk data...
+2026-04-19 02:08:26,505 INFO: Loaded FRED cache: data_cache\fred_daily.parquet (1260 days)
+2026-04-19 02:08:26,505 INFO: Loading yfinance bulk data...
+2026-04-19 02:08:26,515 INFO: Loaded cache: data_cache\yfinance_daily.parquet (1257 rows)
+2026-04-19 02:08:26,516 INFO: Loading COT data...
+2026-04-19 02:08:26,519 INFO: Loaded cache: data_cache\cot_gold.parquet (379 rows)
+2026-04-19 02:08:26,519 INFO: Backtest [EURUSD]: 2020-01-01 to 2024-12-31, mode=proxy, strategy=range_breakout_v1, cross=—
+2026-04-19 02:08:26,554 INFO: Primary M15 EURUSD: 119,265 bars
+2026-04-19 02:08:26,572 INFO: Backtest: 107133 test bars, mode=proxy, strategy=range_breakout_v1, balance=$10,000
+2026-04-19 02:09:22,050 INFO: Results saved to backtest_results\20260419_020826_range_breakout_v1_proxy_EURUSD_2020-01-01_2024-12-31.json
+
+=== BACKTEST RESULTS [EURUSD] ===
+{
+  "total_trades": 279,
+  "win_rate": 0.082,
+  "profit_factor": 0.053,
+  "max_drawdown_pct": 99.97,
+  "avg_rr": -4.05,
+  "end_balance": 3.1,
+  "net_pnl": -9996.9
+}
+
+=== PROP FIRM VALIDATION [EURUSD] ===
+Profit Factor >= 1.5:  FAIL (0.053)
+Max DD <= 5%:          FAIL (99.97%)
+
+============================================================
+Running backtest for BTCUSD...
+============================================================
+
+2026-04-19 02:09:25,675 INFO: Loading FRED bulk data...
+2026-04-19 02:09:25,746 INFO: Loaded FRED cache: data_cache\fred_daily.parquet (1260 days)
+2026-04-19 02:09:25,746 INFO: Loading yfinance bulk data...
+2026-04-19 02:09:25,758 INFO: Loaded cache: data_cache\yfinance_daily.parquet (1257 rows)
+2026-04-19 02:09:25,760 INFO: Loading COT data...
+2026-04-19 02:09:25,763 INFO: Loaded cache: data_cache\cot_gold.parquet (379 rows)
+2026-04-19 02:09:25,763 INFO: Backtest [BTCUSD]: 2020-01-01 to 2024-12-31, mode=proxy, strategy=range_breakout_v1, cross=—
+2026-04-19 02:09:25,797 INFO: Primary M15 BTCUSD: 121,225 bars
+2026-04-19 02:09:25,815 INFO: Backtest: 108745 test bars, mode=proxy, strategy=range_breakout_v1, balance=$10,000
+2026-04-19 02:10:54,987 INFO: Results saved to backtest_results\20260419_020925_range_breakout_v1_proxy_BTCUSD_2020-01-01_2024-12-31.json
+
+=== BACKTEST RESULTS [BTCUSD] ===
+{
+  "total_trades": 369,
+  "win_rate": 0.656,
+  "profit_factor": 2.074,
+  "max_drawdown_pct": 97.07,
+  "avg_rr": -0.48,
+  "end_balance": 414.49,
+  "net_pnl": -9585.51
+}
+
+=== PROP FIRM VALIDATION [BTCUSD] ===
+Profit Factor >= 1.5:  PASS (2.074)
+Max DD <= 5%:          FAIL (97.07%)
+
+====================================================================================================
+MULTI-SYMBOL BACKTEST SUMMARY
+====================================================================================================
+Strategy: range_breakout_v1 | Period: 2020-01-01 to 2024-12-31 | Mode: proxy
+====================================================================================================
+Pair         Trades   Win Rate       PF   Max DD %   Avg RR      Net PnL    End Balance
+----------------------------------------------------------------------------------------------------
+XAUUSD          475      0.71%    2.323      2.18%     0.39 $  12,875.69 $    22,875.69
+XAGUSD          309      0.07%    0.050    108.22%   -11.54 $ -10,073.55 $       -73.55
+EURUSD          279      0.08%    0.053     99.97%    -4.05 $  -9,996.90 $         3.10
+BTCUSD          369      0.66%    2.074     97.07%    -0.48 $  -9,585.51 $       414.49
+----------------------------------------------------------------------------------------------------
+TOTAL          1432      0.44%    1.326     76.86%    -3.27 $ -16,780.27 $    -6,780.27
+====================================================================================================
+
+Summary saved to backtest_summary.json
