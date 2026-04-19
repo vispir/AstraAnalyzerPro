@@ -303,12 +303,13 @@ def _run_and_save_one_symbol(
     if args.monte_carlo:
 
         pnl_list = [t.dollar_pnl for t in result.trades if t.status != "open"]
+        trade_dates = [t.closed_at.date() if t.closed_at else None for t in result.trades if t.status != "open"]
 
         if len(pnl_list) >= 10:
 
             logger.info("Running Monte Carlo (10,000 runs)...")
 
-            mc = run_monte_carlo(pnl_list, start_balance=args.balance)
+            mc = run_monte_carlo(pnl_list, start_balance=args.balance, trade_dates=trade_dates)
 
             mc_summary = mc.summary()
 

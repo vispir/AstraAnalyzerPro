@@ -289,12 +289,14 @@ SWEEP_REVERSAL_V4B_M1_TRIGGER_BUFFER_ATR = 0.005
 RANGE_BREAKOUT_V1_ALLOWED_SESSIONS = ("london", "new_york")
 RANGE_BREAKOUT_V1_ATR_PERIOD = 20
 RANGE_BREAKOUT_V1_CONSOLIDATION_LOOKBACK = 20  # bars to scan for range formation
-RANGE_BREAKOUT_V1_STOP_BUFFER_ATR = 0.5  # SL buffer beyond opposite range boundary (optimized for prop firm)
+RANGE_BREAKOUT_V1_MAX_RANGE_ATR = 4.0  # max range size in ATR (validated: 861 trades)
+RANGE_BREAKOUT_V1_STOP_BUFFER_ATR = 0.5  # SL buffer (validated for prop firm)
 RANGE_BREAKOUT_V1_TP_RR = 2.0
 RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR = 1.0
 RANGE_BREAKOUT_V1_MAX_TRADES_PER_DAY = 3
 RANGE_BREAKOUT_V1_FORCE_CLOSE_HOUR_UTC = 22
 RANGE_BREAKOUT_V1_TOKYO_RISK_MULTIPLIER = 0.7  # reduce position size for Tokyo session trades
+RANGE_BREAKOUT_V1_TRAIL_DISTANCE_ATR = 0.5  # trailing stop distance (optimized)
 # Consolidation quality filters (set USE_CONSOLIDATION_FILTER=True to enable)
 RANGE_BREAKOUT_V1_USE_CONSOLIDATION_FILTER = False
 RANGE_BREAKOUT_V1_MIN_BOUNDARY_TOUCHES = 2  # min touches of each boundary
@@ -302,7 +304,7 @@ RANGE_BREAKOUT_V1_MIN_BARS_INSIDE_PCT = 0.70  # min 70% bars closed inside range
 RANGE_BREAKOUT_V1_MAX_CANDLE_BODY_ATR = 1.5  # reject ranges with large candles
 
 # ── Position Sizing ────────────────────────────────────────────────────────────
-RISK_PCT = 0.004                 # 0.4% of account per trade
+RISK_PCT = 0.004                 # 0.4% of account per trade (validated for Funding Pips)
 
 # ── Macro Cache ────────────────────────────────────────────────────────────────
 MACRO_CACHE_TTL_MINUTES = 60     # refresh macro bias every 60 minutes
@@ -398,6 +400,16 @@ SMC_OB_V1_TP_RR = 2.0
 SMC_OB_V1_PARTIAL_CLOSE_RR = 1.0
 SMC_OB_V1_STOP_BUFFER_ATR = 0.3  # SL beyond OB edge (in ATR)
 SMC_OB_V1_ALLOWED_REGIMES = ("TRENDING",)  # only take OB trades in trending markets
+
+# ── Impulse Retest Strategy V1 ─────────────────────────────────────────────────
+IMPULSE_RETEST_V1_ATR_PERIOD = 20
+IMPULSE_RETEST_V1_LOOKBACK_BARS = 20
+IMPULSE_RETEST_V1_MIN_IMPULSE_BODY_ATR = 2.0  # H4: conservative for 150 trades
+IMPULSE_RETEST_V1_RETRACEMENT_FIB_MIN = 0.5
+IMPULSE_RETEST_V1_RETRACEMENT_FIB_MAX = 0.618
+IMPULSE_RETEST_V1_STOP_BUFFER_ATR = 1.5  # H4: tighter stop
+IMPULSE_RETEST_V1_TP_RR = 2.0
+IMPULSE_RETEST_V1_PARTIAL_CLOSE_RR = 1.0
 
 # ── Validation ─────────────────────────────────────────────────────────────────
 def validate():

@@ -146,6 +146,7 @@ class BacktestResult:
     equity_curve: list[float]
     start_balance: float
     end_balance: float
+    daily_dd_data: list[dict] = field(default_factory=list)  # [{date, start_balance, min_balance, dd_pct}]
 
     @property
     def total_trades(self) -> int:
@@ -183,6 +184,27 @@ class BacktestResult:
         return float(dd.max())
 
     @property
+    def max_daily_dd_pct(self) -> float:
+        """Maximum daily drawdown across all days."""
+        if not self.daily_dd_data:
+            return 0.0
+        return max(d['dd_pct'] for d in self.daily_dd_data)
+
+    @property
+    def avg_daily_dd_pct(self) -> float:
+        """Average daily drawdown."""
+        if not self.daily_dd_data:
+            return 0.0
+        return sum(d['dd_pct'] for d in self.daily_dd_data) / len(self.daily_dd_data)
+
+    @property
+    def daily_dd_violations(self) -> int:
+        """Number of days where daily DD exceeded 5%."""
+        if not self.daily_dd_data:
+            return 0
+        return sum(1 for d in self.daily_dd_data if d['dd_pct'] > 5.0)
+
+    @property
     def avg_rr(self) -> float:
         closed = [t for t in self.trades if t.status != "open" and t.exit_price is not None]
         if not closed:
@@ -200,6 +222,9 @@ class BacktestResult:
             "win_rate": round(self.win_rate, 3),
             "profit_factor": round(self.profit_factor, 3),
             "max_drawdown_pct": round(self.max_drawdown_pct, 2),
+            "max_daily_dd_pct": round(self.max_daily_dd_pct, 2),
+            "avg_daily_dd_pct": round(self.avg_daily_dd_pct, 2),
+            "daily_dd_violations": self.daily_dd_violations,
             "avg_rr": round(self.avg_rr, 2),
             "end_balance": round(self.end_balance, 2),
             "net_pnl": round(self.end_balance - self.start_balance, 2),
@@ -464,6 +489,12 @@ def run_backtest(
     open_trade: Optional[Trade] = None
     pending_signal: Optional[PendingSignalState] = None  # enter at next execution window
 
+    # Daily DD tracking (Funding Pips rules)
+    daily_dd_data: list[dict] = []
+    current_day_start_balance = start_balance
+    current_day_min_balance = start_balance
+    current_date_str = None
+
     # Walk-forward windows
     test_start = bars.index[0] + pd.DateOffset(months=wf_train_months)
     test_bars = bars[bars.index >= test_start]
@@ -637,6 +668,40 @@ def run_backtest(
 
         equity_curve.append(balance)
 
+        # ── Daily DD tracking (Funding Pips rules) ──────────────────────────
+        # Check if new day started (00:00 UTC)
+        if current_date_str != date_str:
+            # Save previous day's DD data
+            if current_date_str is not None:
+                day_dd_pct = ((current_day_start_balance - current_day_min_balance) / current_day_start_balance * 100) if current_day_start_balance > 0 else 0.0
+                daily_dd_data.append({
+                    'date': current_date_str,
+                    'start_balance': current_day_start_balance,
+                    'min_balance': current_day_min_balance,
+                    'dd_pct': day_dd_pct,
+                })
+
+            # Reset for new day
+            current_date_str = date_str
+            current_day_start_balance = balance
+            current_day_min_balance = balance
+
+        # Calculate current balance including unrealized PnL
+        current_balance_with_unrealized = balance
+        if open_trade and open_trade.status == "open":
+            # Calculate unrealized PnL
+            current_price = float(bar["close"])
+            sl_dist = open_trade.initial_risk_usd if open_trade.initial_risk_usd > 0 else abs(open_trade.entry - open_trade.stop_loss)
+            if sl_dist > 0:
+                pnl_per_unit = (current_price - open_trade.entry) if open_trade.direction == "BULLISH" else (open_trade.entry - current_price)
+                risk_usd = current_day_start_balance * config.RISK_PCT * open_trade.size_multiplier
+                position_units = risk_usd / sl_dist
+                unrealized_pnl = pnl_per_unit * position_units * (0.5 if open_trade.partial_closed else 1.0)
+                current_balance_with_unrealized = balance + unrealized_pnl
+
+        # Track minimum balance of the day
+        current_day_min_balance = min(current_day_min_balance, current_balance_with_unrealized)
+
         # ── Only look for new trades during active sessions ─────────────────
         if not is_active_session(now):
             continue
@@ -731,11 +796,22 @@ def run_backtest(
         open_trade.closed_at = test_bars.index[-1].to_pydatetime()
         all_trades.append(open_trade)
 
+    # Save last day's DD data
+    if current_date_str is not None:
+        day_dd_pct = ((current_day_start_balance - current_day_min_balance) / current_day_start_balance * 100) if current_day_start_balance > 0 else 0.0
+        daily_dd_data.append({
+            'date': current_date_str,
+            'start_balance': current_day_start_balance,
+            'min_balance': current_day_min_balance,
+            'dd_pct': day_dd_pct,
+        })
+
     return BacktestResult(
         trades=all_trades,
         equity_curve=equity_curve,
         start_balance=start_balance,
         end_balance=balance,
+        daily_dd_data=daily_dd_data,
     )
 
 
