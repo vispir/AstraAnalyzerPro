@@ -110,8 +110,13 @@ class RangeBreakoutStrategyV1:
 
     def _get_session_label(self, now: datetime) -> str:
         hour = now.hour
-        if 7 <= hour < 12:
+        # Block 00:00-07:00, 12:00-13:00, and 17:00-22:00 UTC
+        if (0 <= hour < 7) or (12 <= hour < 13) or (17 <= hour < 22):
+            return "blocked"
+        # London: 07:00-12:00 UTC
+        elif 7 <= hour < 12:
             return "london"
+        # New York: 13:00-17:00 UTC
         elif 13 <= hour < 17:
             return "new_york"
         else:
@@ -204,6 +209,9 @@ class RangeBreakoutStrategyV1:
             distance_usd=abs(entry_price - (range_high if direction == "BUY" else range_low)),
         )
 
+        # Apply Tokyo session risk multiplier
+        risk_multiplier = config.RANGE_BREAKOUT_V1_TOKYO_RISK_MULTIPLIER if session_label == "tokyo" else 1.0
+
         signal = Signal(
             direction=direction,
             entry_price=entry_price,
@@ -216,6 +224,7 @@ class RangeBreakoutStrategyV1:
             strategy_id="range_breakout_v1",
             setup_family="range_breakout_v1",
             session_label=session_label,
+            size_multiplier=risk_multiplier,  # reduce position size for Tokyo trades
         )
 
         return signal, "range_breakout_confirmed"
