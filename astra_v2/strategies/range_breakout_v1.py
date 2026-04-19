@@ -63,7 +63,7 @@ class RangeBreakoutStrategyV1:
         range_size = range_high - range_low
 
         # Range must be tight (< 3.0 ATR)
-        if range_size > 3.0 * atr:
+        if range_size > 4.0 * atr:
             return None
 
         return {
