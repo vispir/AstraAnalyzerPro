@@ -286,7 +286,7 @@ SWEEP_REVERSAL_V4B_M1_TRIGGER_BUFFER_ATR = 0.005
 # -- Strategy: range_breakout_v1 (Range Consolidation Breakout) --------------------
 # Concept: Detect consolidation range, wait for breakout with 2-3 candle confirmation,
 # enter on confirmation. Trade continuation after range breakout.
-RANGE_BREAKOUT_V1_ALLOWED_SESSIONS = ("london", "new_york")
+RANGE_BREAKOUT_V1_ALLOWED_SESSIONS = ("asia", "london", "new_york")
 RANGE_BREAKOUT_V1_ATR_PERIOD = 20
 RANGE_BREAKOUT_V1_CONSOLIDATION_LOOKBACK = 20  # bars to scan for range formation
 RANGE_BREAKOUT_V1_MAX_RANGE_ATR = 4.0  # max range size in ATR (validated: 861 trades)
