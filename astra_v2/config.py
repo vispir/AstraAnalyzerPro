@@ -294,6 +294,7 @@ RANGE_BREAKOUT_V1_TP_RR = 2.0
 RANGE_BREAKOUT_V1_PARTIAL_CLOSE_RR = 1.0
 RANGE_BREAKOUT_V1_MAX_TRADES_PER_DAY = 3
 RANGE_BREAKOUT_V1_FORCE_CLOSE_HOUR_UTC = 22
+RANGE_BREAKOUT_V1_TOKYO_RISK_MULTIPLIER = 0.7  # reduce position size for Tokyo session trades
 # Consolidation quality filters (set USE_CONSOLIDATION_FILTER=True to enable)
 RANGE_BREAKOUT_V1_USE_CONSOLIDATION_FILTER = False
 RANGE_BREAKOUT_V1_MIN_BOUNDARY_TOUCHES = 2  # min touches of each boundary
@@ -301,7 +302,7 @@ RANGE_BREAKOUT_V1_MIN_BARS_INSIDE_PCT = 0.70  # min 70% bars closed inside range
 RANGE_BREAKOUT_V1_MAX_CANDLE_BODY_ATR = 1.5  # reject ranges with large candles
 
 # ── Position Sizing ────────────────────────────────────────────────────────────
-RISK_PCT = 0.005                 # 0.5% of account per trade (SMC portfolio — higher frequency)
+RISK_PCT = 0.004                 # 0.4% of account per trade
 
 # ── Macro Cache ────────────────────────────────────────────────────────────────
 MACRO_CACHE_TTL_MINUTES = 60     # refresh macro bias every 60 minutes
