@@ -67,8 +67,9 @@ class RangeBreakoutStrategyV1:
         range_low = float(recent["low"].min())
         range_size = range_high - range_low
 
-        # Range must be tight (< 4.0 ATR)
-        if range_size > 4.0 * atr:
+        # Range must be tight (< MAX_RANGE_ATR)
+        max_range = getattr(config, 'RANGE_BREAKOUT_V1_MAX_RANGE_ATR', 4.0)
+        if range_size > max_range * atr:
             return None
 
         # Optional consolidation quality filters

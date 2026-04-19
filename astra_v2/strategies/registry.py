@@ -12,6 +12,7 @@ from .breakout_retest_v1 import BreakoutRetestStrategyV1
 from .range_breakout_v1 import RangeBreakoutStrategyV1
 from .smc_fvg_v1 import SmcFvgV1
 from .smc_ob_v1 import SmcObV1
+from .impulse_retest_v1 import ImpulseRetestStrategyV1
 
 
 _STRATEGIES = {
@@ -26,6 +27,7 @@ _STRATEGIES = {
     "range_breakout_v1": RangeBreakoutStrategyV1(),
     "smc_fvg_v1": SmcFvgV1(),
     "smc_ob_v1": SmcObV1(),
+    "impulse_retest_v1": ImpulseRetestStrategyV1(),
 }
 
 
