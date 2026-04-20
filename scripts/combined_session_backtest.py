@@ -63,6 +63,10 @@ VOLATILITY_THRESHOLD = 0.5  # current_atr must be > 0.5 * atr_ma (lowered from 0
 USE_WEEKDAY_FILTER = False  # Disabled - filter worsens results (DD 13.34% vs 7.38%)
 SKIP_WEEKDAYS = [0, 4]  # Skip Monday (0) and Friday (4)
 
+# H4 EMA20 Trend Filter
+USE_H4_EMA_FILTER = True
+H4_EMA_PERIOD = 20
+
 def calculate_atr(df, period=20):
     high = df['high']
     low = df['low']
@@ -97,14 +101,29 @@ def run_combined_backtest():
     print("=== Combined Session Backtest ===")
     print(f"Testing all 3 sessions with optimal parameters\n")
 
-    # Load data
-    print("Loading data...")
+    # Load M15 data
+    print("Loading M15 data...")
     df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol="XAUUSD")
-    print(f"Loaded {len(df):,} bars\n")
+    print(f"Loaded {len(df):,} M15 bars\n")
 
     if 'datetime' in df.columns:
         df.set_index('datetime', inplace=True)
     df = df.sort_index()
+
+    # Load H4 data for EMA filter
+    if USE_H4_EMA_FILTER:
+        print("Loading H4 data for EMA20 filter...")
+        # H4 cache only available until 2024-12-31
+        h4_end_date = "2024-12-31" if END_DATE > "2024-12-31" else END_DATE
+        df_h4 = load_timeframe("H4", start=START_DATE, end=h4_end_date, symbol="XAUUSD")
+        if 'datetime' in df_h4.columns:
+            df_h4.set_index('datetime', inplace=True)
+        df_h4 = df_h4.sort_index()
+        df_h4['ema20'] = calculate_ema(df_h4, H4_EMA_PERIOD)
+        print(f"Loaded {len(df_h4):,} H4 bars, calculated EMA{H4_EMA_PERIOD}\n")
+        print(f"Note: H4 data available until {h4_end_date}, M15 data until {END_DATE}\n")
+    else:
+        df_h4 = None
 
     # Calculate ATR
     df['atr'] = calculate_atr(df, ATR_PERIOD)
@@ -252,6 +271,14 @@ def run_combined_backtest():
                             if weekday in SKIP_WEEKDAYS:
                                 continue  # Skip Monday and Friday
 
+                        # Check H4 EMA20 filter
+                        if USE_H4_EMA_FILTER and df_h4 is not None:
+                            # Find corresponding H4 bar
+                            current_time = times[i]
+                            h4_bar = df_h4[df_h4.index <= current_time].iloc[-1] if len(df_h4[df_h4.index <= current_time]) > 0 else None
+                            if h4_bar is None or pd.isna(h4_bar['ema20']):
+                                continue  # Skip if no H4 data available
+
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -263,6 +290,11 @@ def run_combined_backtest():
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
 
                         if closes[i] > asian_high:
+                            # Check H4 EMA20 filter for LONG
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] <= h4_bar['ema20']:
+                                    continue  # Skip LONG if H4 close not above EMA20
+
                             # Check trend filter for LONG
                             if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
                                 continue  # Skip LONG if not in uptrend
@@ -279,6 +311,11 @@ def run_combined_backtest():
                                 'range_type': 'asian'
                             }
                         elif closes[i] < asian_low:
+                            # Check H4 EMA20 filter for SHORT
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] >= h4_bar['ema20']:
+                                    continue  # Skip SHORT if H4 close not below EMA20
+
                             # Check trend filter for SHORT
                             if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
                                 continue  # Skip SHORT if not in downtrend
@@ -306,6 +343,14 @@ def run_combined_backtest():
                             if weekday in SKIP_WEEKDAYS:
                                 continue  # Skip Monday and Friday
 
+                        # Check H4 EMA20 filter
+                        if USE_H4_EMA_FILTER and df_h4 is not None:
+                            # Find corresponding H4 bar
+                            current_time = times[i]
+                            h4_bar = df_h4[df_h4.index <= current_time].iloc[-1] if len(df_h4[df_h4.index <= current_time]) > 0 else None
+                            if h4_bar is None or pd.isna(h4_bar['ema20']):
+                                continue  # Skip if no H4 data available
+
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -317,6 +362,11 @@ def run_combined_backtest():
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
 
                         if closes[i] > london_high:
+                            # Check H4 EMA20 filter for LONG
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] <= h4_bar['ema20']:
+                                    continue  # Skip LONG if H4 close not above EMA20
+
                             # Check trend filter for LONG
                             if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
                                 continue  # Skip LONG if not in uptrend
@@ -332,6 +382,11 @@ def run_combined_backtest():
                                 'range_type': 'london'
                             }
                         elif closes[i] < london_low:
+                            # Check H4 EMA20 filter for SHORT
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] >= h4_bar['ema20']:
+                                    continue  # Skip SHORT if H4 close not below EMA20
+
                             # Check trend filter for SHORT
                             if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
                                 continue  # Skip SHORT if not in downtrend
@@ -359,6 +414,14 @@ def run_combined_backtest():
                             if weekday in SKIP_WEEKDAYS:
                                 continue  # Skip Monday and Friday
 
+                        # Check H4 EMA20 filter
+                        if USE_H4_EMA_FILTER and df_h4 is not None:
+                            # Find corresponding H4 bar
+                            current_time = times[i]
+                            h4_bar = df_h4[df_h4.index <= current_time].iloc[-1] if len(df_h4[df_h4.index <= current_time]) > 0 else None
+                            if h4_bar is None or pd.isna(h4_bar['ema20']):
+                                continue  # Skip if no H4 data available
+
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -370,6 +433,11 @@ def run_combined_backtest():
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
 
                         if closes[i] > ny_high:
+                            # Check H4 EMA20 filter for LONG
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] <= h4_bar['ema20']:
+                                    continue  # Skip LONG if H4 close not above EMA20
+
                             # Check trend filter for LONG
                             if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
                                 continue  # Skip LONG if not in uptrend
@@ -386,6 +454,11 @@ def run_combined_backtest():
                                 'range_type': 'ny'
                             }
                         elif closes[i] < ny_low:
+                            # Check H4 EMA20 filter for SHORT
+                            if USE_H4_EMA_FILTER and df_h4 is not None:
+                                if h4_bar['close'] >= h4_bar['ema20']:
+                                    continue  # Skip SHORT if H4 close not below EMA20
+
                             # Check trend filter for SHORT
                             if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
                                 continue  # Skip SHORT if not in downtrend
