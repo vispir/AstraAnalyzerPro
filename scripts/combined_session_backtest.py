@@ -112,16 +112,11 @@ def run_combined_backtest():
 
     # Load H4 data for EMA filter
     if USE_H4_EMA_FILTER:
-        print("Loading H4 data for EMA20 filter...")
-        # H4 cache only available until 2024-12-31
-        h4_end_date = "2024-12-31" if END_DATE > "2024-12-31" else END_DATE
-        df_h4 = load_timeframe("H4", start=START_DATE, end=h4_end_date, symbol="XAUUSD")
-        if 'datetime' in df_h4.columns:
-            df_h4.set_index('datetime', inplace=True)
-        df_h4 = df_h4.sort_index()
+        print("Resampling M15 to H4 for EMA20 filter...")
+        df_h4 = df.resample('4H').agg({'open':'first','high':'max','low':'min','close':'last'}).dropna()
         df_h4['ema20'] = calculate_ema(df_h4, H4_EMA_PERIOD)
-        print(f"Loaded {len(df_h4):,} H4 bars, calculated EMA{H4_EMA_PERIOD}\n")
-        print(f"Note: H4 data available until {h4_end_date}, M15 data until {END_DATE}\n")
+        df_h4['atr'] = calculate_atr(df_h4, ATR_PERIOD)
+        print(f"Resampled {len(df_h4):,} H4 bars, calculated EMA{H4_EMA_PERIOD}\n")
     else:
         df_h4 = None
 
