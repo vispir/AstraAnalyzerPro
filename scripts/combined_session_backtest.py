@@ -12,42 +12,45 @@ from astra_v2.data.dukascopy import load_timeframe
 
 # Optimal parameters from extended grid search optimization
 ASIAN_PARAMS = {
-    'tp_rr': 3.0,
+    'tp_rr': 4.0,  # Increased for AGGRESSIVE
     'stop_buffer_atr': 0.1,
     'min_range_atr': 0.7,
     'max_range_atr': 3.0,
-    'trailing_start': 3.5,  # Optimized - improves PnL by $603
-    'trailing_distance': 0.2,  # Optimized - improves PnL by $50
+    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_distance': 0.2,
     'range_hours': (0, 7),
     'breakout_hours': (7, 10)
 }
 
 LONDON_PARAMS = {
-    'tp_rr': 3.5,
+    'tp_rr': 4.5,  # Increased for AGGRESSIVE
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.3,
     'max_range_atr': 3.0,
-    'trailing_start': 2.0,
-    'trailing_distance': 0.2,  # Optimized - improves PnL by $517
+    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_distance': 0.2,
     'range_hours': (7, 12),
     'breakout_hours': (13, 16)
 }
 
 NY_PARAMS = {
-    'tp_rr': 4.5,
+    'tp_rr': 5.5,  # Increased for AGGRESSIVE
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
-    'trailing_start': 3.0,  # Optimized - improves PnL by $302
-    'trailing_distance': 0.1,  # Optimized - improves PnL by $191
+    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_distance': 0.1,
     'range_hours': (13, 17),
     'breakout_hours': (18, 21)
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 100
+RISK_PER_TRADE = 200  # Testing increased risk
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
+
+# Breakout Confirmation Filter
+USE_CONFIRMATION = False  # Require 2-bar confirmation before entry
 
 # EMA Trend Filter
 USE_TREND_FILTER = False
@@ -58,6 +61,10 @@ EMA_SLOW = 200
 USE_VOLATILITY_FILTER = False  # Disabled - filters out all trades
 ATR_MA_BARS = 96  # 96 bars on M15 = 1 day (24h)
 VOLATILITY_THRESHOLD = 0.5  # current_atr must be > 0.5 * atr_ma (lowered from 0.7)
+
+# Direction Filter
+USE_DIRECTION_FILTER = True  # Only trade one direction
+ALLOWED_DIRECTION = 'LONG'  # 'LONG' or 'SHORT' or None for both
 
 # Day of Week Filter
 USE_WEEKDAY_FILTER = False  # Disabled - filter worsens results (DD 13.34% vs 7.38%)
@@ -284,6 +291,31 @@ def run_combined_backtest():
                         ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
 
+                        # Breakout confirmation logic
+                        if USE_CONFIRMATION:
+                            if i < 2:
+                                continue  # Need at least 2 previous bars
+
+                            # Check 2-bar confirmation
+                            bar_2_close = closes[i - 2]
+                            bar_1_close = closes[i - 1]
+                            bar_1_open = df['open'].iloc[i - 1]
+                            bar_1_body = abs(bar_1_close - bar_1_open)
+                            is_doji = bar_1_body < 0.15 * atr
+
+                            # LONG confirmation
+                            if closes[i] > asian_high:
+                                if not (bar_2_close > asian_high and bar_1_close > asian_high):
+                                    continue  # Need bar[-2] and bar[-1] both above range_high
+                                if is_doji and not (closes[i] > asian_high):
+                                    continue  # If bar[-1] is doji, need current bar also above
+                            # SHORT confirmation
+                            elif closes[i] < asian_low:
+                                if not (bar_2_close < asian_low and bar_1_close < asian_low):
+                                    continue  # Need bar[-2] and bar[-1] both below range_low
+                                if is_doji and not (closes[i] < asian_low):
+                                    continue  # If bar[-1] is doji, need current bar also below
+
                         if closes[i] > asian_high:
                             # Check H4 EMA20 filter for LONG
                             if USE_H4_EMA_FILTER and df_h4 is not None:
@@ -306,6 +338,10 @@ def run_combined_backtest():
                                 'range_type': 'asian'
                             }
                         elif closes[i] < asian_low:
+                            # Check direction filter
+                            if USE_DIRECTION_FILTER and ALLOWED_DIRECTION == 'LONG':
+                                continue  # Skip SHORT if only LONG allowed
+
                             # Check H4 EMA20 filter for SHORT
                             if USE_H4_EMA_FILTER and df_h4 is not None:
                                 if h4_bar['close'] >= h4_bar['ema20']:
@@ -355,6 +391,36 @@ def run_combined_backtest():
                         # Get EMA values for trend filter
                         ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
+
+                        # Breakout confirmation logic
+                        if USE_CONFIRMATION:
+                            if i < 2:
+                                continue  # Need at least 2 previous bars
+
+                            # Check 2-bar confirmation
+                            bar_2_close = closes[i - 2]
+                            bar_1_close = closes[i - 1]
+                            bar_1_open = df['open'].iloc[i - 1]
+                            bar_1_body = abs(bar_1_close - bar_1_open)
+                            is_doji = bar_1_body < 0.15 * atr
+
+                            # LONG confirmation
+                            if closes[i] > london_high:
+                                if not (bar_2_close > london_high and bar_1_close > london_high):
+                                    continue
+                                if is_doji and not (closes[i] > london_high):
+                                    continue
+                            # SHORT confirmation
+                            elif closes[i] < london_low:
+                                if not (bar_2_close < london_low and bar_1_close < london_low):
+                                    continue
+                                if is_doji and not (closes[i] < london_low):
+                                    continue
+
+                        # Check direction filter for SHORT
+                        if closes[i] < london_low:
+                            if USE_DIRECTION_FILTER and ALLOWED_DIRECTION == 'LONG':
+                                continue  # Skip SHORT if only LONG allowed
 
                         if closes[i] > london_high:
                             # Check H4 EMA20 filter for LONG
@@ -426,6 +492,36 @@ def run_combined_backtest():
                         # Get EMA values for trend filter
                         ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
                         ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
+
+                        # Breakout confirmation logic
+                        if USE_CONFIRMATION:
+                            if i < 2:
+                                continue  # Need at least 2 previous bars
+
+                            # Check 2-bar confirmation
+                            bar_2_close = closes[i - 2]
+                            bar_1_close = closes[i - 1]
+                            bar_1_open = df['open'].iloc[i - 1]
+                            bar_1_body = abs(bar_1_close - bar_1_open)
+                            is_doji = bar_1_body < 0.15 * atr
+
+                            # LONG confirmation
+                            if closes[i] > ny_high:
+                                if not (bar_2_close > ny_high and bar_1_close > ny_high):
+                                    continue
+                                if is_doji and not (closes[i] > ny_high):
+                                    continue
+                            # SHORT confirmation
+                            elif closes[i] < ny_low:
+                                if not (bar_2_close < ny_low and bar_1_close < ny_low):
+                                    continue
+                                if is_doji and not (closes[i] < ny_low):
+                                    continue
+
+                        # Check direction filter for SHORT
+                        if closes[i] < ny_low:
+                            if USE_DIRECTION_FILTER and ALLOWED_DIRECTION == 'LONG':
+                                continue  # Skip SHORT if only LONG allowed
 
                         if closes[i] > ny_high:
                             # Check H4 EMA20 filter for LONG
@@ -537,6 +633,13 @@ def run_combined_backtest():
     print(f"Max Daily DD < 5%: {'PASS' if passes_daily_dd else 'FAIL'} ({max_daily_dd:.2f}%)")
     print(f"Total Trades >= 150: {'PASS' if passes_trades else 'FAIL'} ({total_trades})")
 
+    # Detailed win/loss statistics
+    print(f"\n=== WIN/LOSS STATISTICS ===")
+    print(f"Winning trades: {len(wins)}, Total: ${total_profit:,.2f}")
+    print(f"Losing trades: {len(losses)}, Total: ${-total_loss:,.2f}")
+    print(f"Net PnL: ${total_pnl:,.2f}")
+    print(f"Verification: Winning + Losing = ${total_profit - total_loss:,.2f} (should equal Net PnL)")
+
     if passes_dd and passes_daily_dd and passes_trades:
         print(f"\n{'='*80}")
         print("ALL FILTERS PASSED - STRATEGY IS VALID")
@@ -545,6 +648,8 @@ def run_combined_backtest():
         print(f"\n{'='*80}")
         print("SOME FILTERS FAILED - NEED ADJUSTMENT")
         print(f"{'='*80}")
+
+    return trades_df
 
 if __name__ == "__main__":
     run_combined_backtest()
