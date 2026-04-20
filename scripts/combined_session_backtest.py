@@ -34,11 +34,11 @@ LONDON_PARAMS = {
 }
 
 NY_PARAMS = {
-    'tp_rr': 4.5,  # Optimized from 3.5 - improves PnL by $600
+    'tp_rr': 4.5,
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
-    'trailing_start': None,
+    'trailing_start': 3.0,  # Optimized - improves PnL by $302
     'trailing_distance': 0.3,
     'range_hours': (13, 17),
     'breakout_hours': (18, 21)
