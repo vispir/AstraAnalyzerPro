@@ -17,7 +17,7 @@ ASIAN_PARAMS = {
     'min_range_atr': 0.7,
     'max_range_atr': 3.0,
     'trailing_start': 3.5,  # Optimized - improves PnL by $603
-    'trailing_distance': 0.3,
+    'trailing_distance': 0.2,  # Optimized - improves PnL by $50
     'range_hours': (0, 7),
     'breakout_hours': (7, 10)
 }
