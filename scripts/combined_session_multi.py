@@ -34,7 +34,7 @@ LONDON_PARAMS = {
 }
 
 NY_PARAMS = {
-    'tp_rr': 4.5,  # Optimized from 3.5 - improves PnL by $600
+    'tp_rr': 3.5,
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
@@ -47,7 +47,7 @@ NY_PARAMS = {
 ATR_PERIOD = 20
 RISK_PER_TRADE = 100
 START_DATE = "2020-01-01"
-END_DATE = "2026-04-18"
+END_DATE = "2024-12-31"  # Changed to match available data for all symbols
 
 # EMA Trend Filter
 USE_TREND_FILTER = False
@@ -58,10 +58,6 @@ EMA_SLOW = 200
 USE_VOLATILITY_FILTER = False  # Disabled - filters out all trades
 ATR_MA_BARS = 96  # 96 bars on M15 = 1 day (24h)
 VOLATILITY_THRESHOLD = 0.5  # current_atr must be > 0.5 * atr_ma (lowered from 0.7)
-
-# Day of Week Filter
-USE_WEEKDAY_FILTER = False  # Disabled - filter worsens results (DD 13.34% vs 7.38%)
-SKIP_WEEKDAYS = [0, 4]  # Skip Monday (0) and Friday (4)
 
 def calculate_atr(df, period=20):
     high = df['high']
@@ -93,13 +89,13 @@ def get_session_range(df, start_hour, end_hour):
 
     return range_high, range_low
 
-def run_combined_backtest():
-    print("=== Combined Session Backtest ===")
-    print(f"Testing all 3 sessions with optimal parameters\n")
+def run_combined_backtest(symbol):
+    print(f"=== Testing {symbol} ===")
+    print(f"All 3 sessions with optimal parameters\n")
 
     # Load data
-    print("Loading data...")
-    df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol="XAUUSD")
+    print(f"Loading {symbol} data...")
+    df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol=symbol)
     print(f"Loaded {len(df):,} bars\n")
 
     if 'datetime' in df.columns:
@@ -246,12 +242,6 @@ def run_combined_backtest():
                 if asian_high is not None and 'asian' not in active_trades:
                     asian_range = asian_high - asian_low
                     if ASIAN_PARAMS['min_range_atr'] * atr <= asian_range <= ASIAN_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -300,12 +290,6 @@ def run_combined_backtest():
                 if london_high is not None and 'london' not in active_trades:
                     london_range = london_high - london_low
                     if LONDON_PARAMS['min_range_atr'] * atr <= london_range <= LONDON_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -353,12 +337,6 @@ def run_combined_backtest():
                 if ny_high is not None and 'ny' not in active_trades:
                     ny_range = ny_high - ny_low
                     if NY_PARAMS['min_range_atr'] * atr <= ny_range <= NY_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
                         # Check volatility filter
                         if USE_VOLATILITY_FILTER:
                             atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
@@ -437,46 +415,58 @@ def run_combined_backtest():
 
     total_pnl = balance - 10000
 
-    # Print results
-    print("=" * 80)
-    print("=== COMBINED BACKTEST RESULTS ===")
-    print("=" * 80)
-    print(f"\nTotal Trades: {total_trades}")
-    print(f"Win Rate: {win_rate:.1%}")
-    print(f"Profit Factor: {profit_factor:.3f}")
-    print(f"Total PnL: ${total_pnl:,.0f}")
-    print(f"Final Balance: ${balance:,.0f}")
-    print(f"Max Drawdown: {max_dd:.2f}%")
-    print(f"Max Daily Drawdown: {max_daily_dd:.2f}%")
-
-    # Breakdown by session
-    print(f"\n=== BREAKDOWN BY SESSION ===")
-    for session in ['asian', 'london', 'ny']:
-        session_trades = trades_df[trades_df['range_type'] == session]
-        if len(session_trades) > 0:
-            session_pnl = session_trades['pnl'].sum()
-            session_wins = len(session_trades[session_trades['pnl'] > 0])
-            session_wr = session_wins / len(session_trades)
-            print(f"{session.upper()}: {len(session_trades)} trades, PnL=${session_pnl:,.0f}, WR={session_wr:.1%}")
-
-    # Check filters
-    print(f"\n=== FILTER CHECK ===")
-    passes_dd = max_dd < 10.0
-    passes_daily_dd = max_daily_dd < 5.0
-    passes_trades = total_trades >= 150
-
-    print(f"Max DD < 10%: {'PASS' if passes_dd else 'FAIL'} ({max_dd:.2f}%)")
-    print(f"Max Daily DD < 5%: {'PASS' if passes_daily_dd else 'FAIL'} ({max_daily_dd:.2f}%)")
-    print(f"Total Trades >= 150: {'PASS' if passes_trades else 'FAIL'} ({total_trades})")
-
-    if passes_dd and passes_daily_dd and passes_trades:
-        print(f"\n{'='*80}")
-        print("ALL FILTERS PASSED - STRATEGY IS VALID")
-        print(f"{'='*80}")
-    else:
-        print(f"\n{'='*80}")
-        print("SOME FILTERS FAILED - NEED ADJUSTMENT")
-        print(f"{'='*80}")
+    # Return results instead of printing
+    return {
+        'symbol': symbol,
+        'total_trades': total_trades,
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'total_pnl': total_pnl,
+        'final_balance': balance,
+        'max_dd': max_dd,
+        'max_daily_dd': max_daily_dd,
+        'passes_filters': max_dd < 10.0 and max_daily_dd < 5.0 and total_trades >= 150
+    }
 
 if __name__ == "__main__":
-    run_combined_backtest()
+    # Test on multiple symbols
+    symbols = ["XAUUSD", "XAGUSD", "EURUSD"]
+
+    print("=" * 100)
+    print("=== MULTI-SYMBOL BACKTEST ===")
+    print(f"Testing Session Range Breakout on {len(symbols)} instruments")
+    print(f"Period: {START_DATE} to {END_DATE}")
+    print("=" * 100)
+    print()
+
+    results = []
+    for symbol in symbols:
+        try:
+            result = run_combined_backtest(symbol)
+            results.append(result)
+            print()
+        except Exception as e:
+            print(f"ERROR testing {symbol}: {str(e)}")
+            print()
+
+    # Print summary table
+    print("=" * 100)
+    print("=== SUMMARY TABLE ===")
+    print("=" * 100)
+    print(f"{'Symbol':<10} {'PnL':<15} {'PF':<8} {'DD%':<8} {'DailyDD%':<10} {'Trades':<8} {'WR%':<8} {'Status':<8}")
+    print("-" * 100)
+
+    for r in results:
+        status = "PASS" if r['passes_filters'] else "FAIL"
+        print(f"{r['symbol']:<10} ${r['total_pnl']:<14,.0f} {r['profit_factor']:<8.3f} {r['max_dd']:<8.2f} "
+              f"{r['max_daily_dd']:<10.2f} {r['total_trades']:<8} {r['win_rate']*100:<8.1f} {status:<8}")
+
+    print("=" * 100)
+
+    # Calculate total if all pass
+    passed = [r for r in results if r['passes_filters']]
+    if len(passed) > 0:
+        total_pnl = sum(r['total_pnl'] for r in passed)
+        print(f"\nTotal PnL from passing instruments: ${total_pnl:,.0f}")
+        print(f"Instruments passed: {len(passed)}/{len(results)}")
+

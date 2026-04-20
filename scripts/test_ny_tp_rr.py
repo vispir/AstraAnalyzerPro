@@ -1,6 +1,6 @@
 """
-Combined Session Backtest - All 3 sessions with optimal parameters
-Tests Asian + London + NY together to verify combined DD and DailyDD
+Test NY Session TP_RR variants
+Tests TP_RR = [4.0, 4.5, 5.0] for NY session only
 """
 import sys
 import os
@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 from astra_v2.data.dukascopy import load_timeframe
 
-# Optimal parameters from extended grid search optimization
+# Fixed Asian and London parameters
 ASIAN_PARAMS = {
     'tp_rr': 3.0,
     'stop_buffer_atr': 0.1,
@@ -33,8 +33,9 @@ LONDON_PARAMS = {
     'breakout_hours': (13, 16)
 }
 
-NY_PARAMS = {
-    'tp_rr': 4.5,  # Optimized from 3.5 - improves PnL by $600
+# NY baseline
+NY_BASELINE = {
+    'tp_rr': 3.5,
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
@@ -48,20 +49,6 @@ ATR_PERIOD = 20
 RISK_PER_TRADE = 100
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
-
-# EMA Trend Filter
-USE_TREND_FILTER = False
-EMA_FAST = 50
-EMA_SLOW = 200
-
-# Volatility Filter
-USE_VOLATILITY_FILTER = False  # Disabled - filters out all trades
-ATR_MA_BARS = 96  # 96 bars on M15 = 1 day (24h)
-VOLATILITY_THRESHOLD = 0.5  # current_atr must be > 0.5 * atr_ma (lowered from 0.7)
-
-# Day of Week Filter
-USE_WEEKDAY_FILTER = False  # Disabled - filter worsens results (DD 13.34% vs 7.38%)
-SKIP_WEEKDAYS = [0, 4]  # Skip Monday (0) and Friday (4)
 
 def calculate_atr(df, period=20):
     high = df['high']
@@ -77,10 +64,6 @@ def calculate_atr(df, period=20):
 
     return atr
 
-def calculate_ema(df, period):
-    """Calculate Exponential Moving Average"""
-    return df['close'].ewm(span=period, adjust=False).mean()
-
 def get_session_range(df, start_hour, end_hour):
     mask = (df.index.hour >= start_hour) & (df.index.hour < end_hour)
     session_bars = df[mask]
@@ -93,41 +76,18 @@ def get_session_range(df, start_hour, end_hour):
 
     return range_high, range_low
 
-def run_combined_backtest():
-    print("=== Combined Session Backtest ===")
-    print(f"Testing all 3 sessions with optimal parameters\n")
-
-    # Load data
-    print("Loading data...")
+def run_backtest(ny_params):
+    """Run backtest with given NY parameters"""
     df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol="XAUUSD")
-    print(f"Loaded {len(df):,} bars\n")
 
     if 'datetime' in df.columns:
         df.set_index('datetime', inplace=True)
     df = df.sort_index()
 
-    # Calculate ATR
     df['atr'] = calculate_atr(df, ATR_PERIOD)
 
-    # Calculate ATR MA for volatility filter (on same M15 timeframe)
-    if USE_VOLATILITY_FILTER:
-        print(f"Calculating ATR MA{ATR_MA_BARS} bars for volatility filter...")
-        df['atr_ma'] = df['atr'].rolling(window=ATR_MA_BARS).mean()
-        print(f"Volatility filter enabled: current_atr must be > {VOLATILITY_THRESHOLD} * atr_ma (96 bars = 1 day)\n")
-    else:
-        print("Volatility filter disabled\n")
-
-    # Calculate EMA for trend filter
-    if USE_TREND_FILTER:
-        print(f"Calculating EMA{EMA_FAST} and EMA{EMA_SLOW} for trend filter...")
-        df['ema_fast'] = calculate_ema(df, EMA_FAST)
-        df['ema_slow'] = calculate_ema(df, EMA_SLOW)
-        print(f"Trend filter enabled: LONG requires EMA{EMA_FAST} > EMA{EMA_SLOW}, SHORT requires EMA{EMA_FAST} < EMA{EMA_SLOW}\n")
-    else:
-        print("Trend filter disabled\n")
-
     trades = []
-    active_trades = {}  # Can have multiple active trades (one per session)
+    active_trades = {}
     balance = 10000
     peak_balance = 10000
     max_dd = 0
@@ -146,7 +106,7 @@ def run_combined_backtest():
         # Calculate ranges for all sessions
         asian_high, asian_low = get_session_range(day_data, *ASIAN_PARAMS['range_hours'])
         london_high, london_low = get_session_range(day_data, *LONDON_PARAMS['range_hours'])
-        ny_high, ny_low = get_session_range(day_data, *NY_PARAMS['range_hours'])
+        ny_high, ny_low = get_session_range(day_data, *ny_params['range_hours'])
 
         # Convert to numpy arrays
         highs = day_data['high'].to_numpy()
@@ -167,17 +127,15 @@ def run_combined_backtest():
             # Check exits for all active trades
             for session_name in list(active_trades.keys()):
                 trade = active_trades[session_name]
-                params = {'asian': ASIAN_PARAMS, 'london': LONDON_PARAMS, 'ny': NY_PARAMS}[session_name]
+                params = {'asian': ASIAN_PARAMS, 'london': LONDON_PARAMS, 'ny': ny_params}[session_name]
 
                 # Breakeven and trailing logic
                 if trade['direction'] == 'LONG':
                     risk = trade['entry'] - trade['initial_sl']
 
-                    # Breakeven at 1R
                     if highs[i] >= trade['entry'] + risk:
                         trade['sl'] = max(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
                     if params['trailing_start'] is not None:
                         if highs[i] >= trade['entry'] + params['trailing_start'] * risk:
                             trailing_sl = highs[i] - params['trailing_distance'] * risk
@@ -186,11 +144,9 @@ def run_combined_backtest():
                 else:  # SHORT
                     risk = trade['initial_sl'] - trade['entry']
 
-                    # Breakeven at 1R
                     if lows[i] <= trade['entry'] - risk:
                         trade['sl'] = min(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
                     if params['trailing_start'] is not None:
                         if lows[i] <= trade['entry'] - params['trailing_start'] * risk:
                             trailing_sl = lows[i] + params['trailing_distance'] * risk
@@ -233,7 +189,6 @@ def run_combined_backtest():
                     trades.append(trade)
                     del active_trades[session_name]
 
-                    # Update max DD
                     if balance > peak_balance:
                         peak_balance = balance
                     dd = (peak_balance - balance) / peak_balance * 100
@@ -246,27 +201,7 @@ def run_combined_backtest():
                 if asian_high is not None and 'asian' not in active_trades:
                     asian_range = asian_high - asian_low
                     if ASIAN_PARAMS['min_range_atr'] * atr <= asian_range <= ASIAN_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
-                        # Check volatility filter
-                        if USE_VOLATILITY_FILTER:
-                            atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
-                            if not (atr > VOLATILITY_THRESHOLD * atr_ma_val):
-                                continue  # Skip if volatility too low
-
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > asian_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
                             sl = asian_low - ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
@@ -279,10 +214,6 @@ def run_combined_backtest():
                                 'range_type': 'asian'
                             }
                         elif closes[i] < asian_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = asian_high + ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
@@ -300,26 +231,7 @@ def run_combined_backtest():
                 if london_high is not None and 'london' not in active_trades:
                     london_range = london_high - london_low
                     if LONDON_PARAMS['min_range_atr'] * atr <= london_range <= LONDON_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
-                        # Check volatility filter
-                        if USE_VOLATILITY_FILTER:
-                            atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
-                            if not (atr > VOLATILITY_THRESHOLD * atr_ma_val):
-                                continue  # Skip if volatility too low
-
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > london_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
                             entry = closes[i]
                             sl = london_low - LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
@@ -332,10 +244,6 @@ def run_combined_backtest():
                                 'range_type': 'london'
                             }
                         elif closes[i] < london_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = london_high + LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
@@ -349,35 +257,15 @@ def run_combined_backtest():
                             }
 
             # NY breakout
-            if NY_PARAMS['breakout_hours'][0] <= hour < NY_PARAMS['breakout_hours'][1]:
+            if ny_params['breakout_hours'][0] <= hour < ny_params['breakout_hours'][1]:
                 if ny_high is not None and 'ny' not in active_trades:
                     ny_range = ny_high - ny_low
-                    if NY_PARAMS['min_range_atr'] * atr <= ny_range <= NY_PARAMS['max_range_atr'] * atr:
-                        # Check weekday filter
-                        if USE_WEEKDAY_FILTER:
-                            weekday = times[i].weekday()
-                            if weekday in SKIP_WEEKDAYS:
-                                continue  # Skip Monday and Friday
-
-                        # Check volatility filter
-                        if USE_VOLATILITY_FILTER:
-                            atr_ma_val = df['atr_ma'].iloc[day_data.index.get_loc(times[i])]
-                            if not (atr > VOLATILITY_THRESHOLD * atr_ma_val):
-                                continue  # Skip if volatility too low
-
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
+                    if ny_params['min_range_atr'] * atr <= ny_range <= ny_params['max_range_atr'] * atr:
                         if closes[i] > ny_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
-                            sl = ny_low - NY_PARAMS['stop_buffer_atr'] * atr
+                            sl = ny_low - ny_params['stop_buffer_atr'] * atr
                             risk = entry - sl
-                            tp = entry + risk * NY_PARAMS['tp_rr']
+                            tp = entry + risk * ny_params['tp_rr']
                             size = RISK_PER_TRADE / risk
 
                             active_trades['ny'] = {
@@ -386,14 +274,10 @@ def run_combined_backtest():
                                 'range_type': 'ny'
                             }
                         elif closes[i] < ny_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
-                            sl = ny_high + NY_PARAMS['stop_buffer_atr'] * atr
+                            sl = ny_high + ny_params['stop_buffer_atr'] * atr
                             risk = sl - entry
-                            tp = entry - risk * NY_PARAMS['tp_rr']
+                            tp = entry - risk * ny_params['tp_rr']
                             size = RISK_PER_TRADE / risk
 
                             active_trades['ny'] = {
@@ -437,46 +321,82 @@ def run_combined_backtest():
 
     total_pnl = balance - 10000
 
-    # Print results
-    print("=" * 80)
-    print("=== COMBINED BACKTEST RESULTS ===")
-    print("=" * 80)
-    print(f"\nTotal Trades: {total_trades}")
-    print(f"Win Rate: {win_rate:.1%}")
-    print(f"Profit Factor: {profit_factor:.3f}")
-    print(f"Total PnL: ${total_pnl:,.0f}")
-    print(f"Final Balance: ${balance:,.0f}")
-    print(f"Max Drawdown: {max_dd:.2f}%")
-    print(f"Max Daily Drawdown: {max_daily_dd:.2f}%")
+    # NY session stats
+    ny_trades = trades_df[trades_df['range_type'] == 'ny']
+    ny_pnl = ny_trades['pnl'].sum() if len(ny_trades) > 0 else 0
+    ny_wins = len(ny_trades[ny_trades['pnl'] > 0])
+    ny_wr = ny_wins / len(ny_trades) if len(ny_trades) > 0 else 0
 
-    # Breakdown by session
-    print(f"\n=== BREAKDOWN BY SESSION ===")
-    for session in ['asian', 'london', 'ny']:
-        session_trades = trades_df[trades_df['range_type'] == session]
-        if len(session_trades) > 0:
-            session_pnl = session_trades['pnl'].sum()
-            session_wins = len(session_trades[session_trades['pnl'] > 0])
-            session_wr = session_wins / len(session_trades)
-            print(f"{session.upper()}: {len(session_trades)} trades, PnL=${session_pnl:,.0f}, WR={session_wr:.1%}")
-
-    # Check filters
-    print(f"\n=== FILTER CHECK ===")
-    passes_dd = max_dd < 10.0
-    passes_daily_dd = max_daily_dd < 5.0
-    passes_trades = total_trades >= 150
-
-    print(f"Max DD < 10%: {'PASS' if passes_dd else 'FAIL'} ({max_dd:.2f}%)")
-    print(f"Max Daily DD < 5%: {'PASS' if passes_daily_dd else 'FAIL'} ({max_daily_dd:.2f}%)")
-    print(f"Total Trades >= 150: {'PASS' if passes_trades else 'FAIL'} ({total_trades})")
-
-    if passes_dd and passes_daily_dd and passes_trades:
-        print(f"\n{'='*80}")
-        print("ALL FILTERS PASSED - STRATEGY IS VALID")
-        print(f"{'='*80}")
-    else:
-        print(f"\n{'='*80}")
-        print("SOME FILTERS FAILED - NEED ADJUSTMENT")
-        print(f"{'='*80}")
+    return {
+        'total_trades': total_trades,
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'total_pnl': total_pnl,
+        'final_balance': balance,
+        'max_dd': max_dd,
+        'max_daily_dd': max_daily_dd,
+        'ny_trades': len(ny_trades),
+        'ny_pnl': ny_pnl,
+        'ny_wr': ny_wr,
+        'passes_filters': max_dd < 10.0 and max_daily_dd < 5.0 and total_trades >= 150
+    }
 
 if __name__ == "__main__":
-    run_combined_backtest()
+    print("=" * 100)
+    print("=== NY SESSION TP_RR COMPARISON ===")
+    print(f"Period: {START_DATE} to {END_DATE}")
+    print("Asian and London parameters fixed, testing NY TP_RR variants")
+    print("=" * 100)
+    print()
+
+    # Test baseline
+    print("Testing BASELINE (NY TP_RR=3.5)...")
+    baseline = run_backtest(NY_BASELINE)
+
+    # Test variants
+    tp_rr_values = [4.0, 4.5, 5.0]
+    variants = []
+
+    for tp_rr in tp_rr_values:
+        print(f"Testing NY TP_RR={tp_rr}...")
+        ny_params = NY_BASELINE.copy()
+        ny_params['tp_rr'] = tp_rr
+        result = run_backtest(ny_params)
+        variants.append((tp_rr, result))
+
+    # Print results table
+    print()
+    print("=" * 100)
+    print("=== RESULTS TABLE ===")
+    print("=" * 100)
+    print(f"{'NY TP_RR':<10} {'Total PnL':<15} {'PF':<8} {'DD%':<8} {'DailyDD%':<10} {'Trades':<8} {'WR%':<8} {'NY Trades':<10} {'NY PnL':<12} {'Status':<8}")
+    print("-" * 100)
+
+    # Baseline
+    status = "PASS" if baseline['passes_filters'] else "FAIL"
+    print(f"{'3.5':<10} ${baseline['total_pnl']:<14,.0f} {baseline['profit_factor']:<8.3f} {baseline['max_dd']:<8.2f} "
+          f"{baseline['max_daily_dd']:<10.2f} {baseline['total_trades']:<8} {baseline['win_rate']*100:<8.1f} "
+          f"{baseline['ny_trades']:<10} ${baseline['ny_pnl']:<11,.0f} {status:<8}")
+
+    # Variants
+    for tp_rr, r in variants:
+        status = "PASS" if r['passes_filters'] else "FAIL"
+        print(f"{tp_rr:<10.1f} ${r['total_pnl']:<14,.0f} {r['profit_factor']:<8.3f} {r['max_dd']:<8.2f} "
+              f"{r['max_daily_dd']:<10.2f} {r['total_trades']:<8} {r['win_rate']*100:<8.1f} "
+              f"{r['ny_trades']:<10} ${r['ny_pnl']:<11,.0f} {status:<8}")
+
+    print("=" * 100)
+
+    # Find best variant
+    all_results = [("3.5", baseline)] + [(str(tp_rr), r) for tp_rr, r in variants]
+    passed = [r for r in all_results if r[1]['passes_filters']]
+
+    if len(passed) > 0:
+        best = max(passed, key=lambda x: x[1]['total_pnl'])
+        print(f"\nBest NY TP_RR: {best[0]}")
+        print(f"Total PnL: ${best[1]['total_pnl']:,.0f}")
+
+        if best[0] != "3.5":
+            improvement = best[1]['total_pnl'] - baseline['total_pnl']
+            improvement_pct = (improvement / baseline['total_pnl']) * 100
+            print(f"Improvement vs baseline: ${improvement:,.0f} ({improvement_pct:+.1f}%)")
