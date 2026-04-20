@@ -45,7 +45,7 @@ NY_PARAMS = {
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 190  # Optimized for DD < 10%
+RISK_PER_TRADE = 200  # Optimal balance: profit + safety
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
 
