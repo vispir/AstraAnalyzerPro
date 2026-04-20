@@ -1,0 +1,2270 @@
+[
+  {
+    "run": 4,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 488,
+      "win_rate": 0.25,
+      "profit_factor": 1.4353994050126537,
+      "max_drawdown_pct": 7.434944237918255,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 9251.558699628182,
+      "final_balance": 19251.55869962818
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.157657
+  },
+  {
+    "run": 2,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 339,
+      "win_rate": 0.3775811209439528,
+      "profit_factor": 1.16932153938266,
+      "max_drawdown_pct": 19.23131591091427,
+      "max_daily_dd": 2.609195092055909,
+      "total_pnl": 2767.127909708679,
+      "final_balance": 12767.127909708679
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.195791
+  },
+  {
+    "run": 3,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 315,
+      "win_rate": 0.3047619047619048,
+      "profit_factor": 1.1958372067665113,
+      "max_drawdown_pct": 16.112829704317047,
+      "max_daily_dd": 2.5432871419215775,
+      "total_pnl": 3024.205254001772,
+      "final_balance": 13024.205254001772
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.390245
+  },
+  {
+    "run": 1,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 295,
+      "win_rate": 0.2542372881355932,
+      "profit_factor": 1.3352375797625857,
+      "max_drawdown_pct": 11.764705882352917,
+      "max_daily_dd": 2.2140221402213998,
+      "total_pnl": 4707.5552065169795,
+      "final_balance": 14707.55520651698
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.432909
+  },
+  {
+    "run": 6,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 546,
+      "win_rate": 0.31868131868131866,
+      "profit_factor": 1.4384139365335191,
+      "max_drawdown_pct": 7.145707791220776,
+      "max_daily_dd": 1.7609802801407721,
+      "total_pnl": 10587.013211644622,
+      "final_balance": 20587.013211644622
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.294286
+  },
+  {
+    "run": 7,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 295,
+      "win_rate": 0.2542372881355932,
+      "profit_factor": 1.3352375797625857,
+      "max_drawdown_pct": 11.764705882352917,
+      "max_daily_dd": 2.2140221402213998,
+      "total_pnl": 4707.5552065169795,
+      "final_balance": 14707.55520651698
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.457238
+  },
+  {
+    "run": 5,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 628,
+      "win_rate": 0.3964968152866242,
+      "profit_factor": 1.3101133634929638,
+      "max_drawdown_pct": 11.259484846802794,
+      "max_daily_dd": 1.8039747202721417,
+      "total_pnl": 8884.264490489037,
+      "final_balance": 18884.264490489037
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.693764
+  },
+  {
+    "run": 8,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 339,
+      "win_rate": 0.3775811209439528,
+      "profit_factor": 1.16932153938266,
+      "max_drawdown_pct": 19.23131591091427,
+      "max_daily_dd": 2.609195092055909,
+      "total_pnl": 2767.127909708679,
+      "final_balance": 12767.127909708679
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.828047
+  },
+  {
+    "run": 9,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 315,
+      "win_rate": 0.3047619047619048,
+      "profit_factor": 1.1958372067665113,
+      "max_drawdown_pct": 16.112829704317047,
+      "max_daily_dd": 2.5432871419215775,
+      "total_pnl": 3024.205254001772,
+      "final_balance": 13024.205254001772
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.178946
+  },
+  {
+    "run": 11,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 628,
+      "win_rate": 0.3964968152866242,
+      "profit_factor": 1.3101133634929638,
+      "max_drawdown_pct": 11.259484846802794,
+      "max_daily_dd": 1.8039747202721417,
+      "total_pnl": 8884.264490489037,
+      "final_balance": 18884.264490489037
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.429189
+  },
+  {
+    "run": 10,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 488,
+      "win_rate": 0.25,
+      "profit_factor": 1.4353994050126537,
+      "max_drawdown_pct": 7.434944237918255,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 9251.558699628182,
+      "final_balance": 19251.55869962818
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.54818
+  },
+  {
+    "run": 12,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 546,
+      "win_rate": 0.31868131868131866,
+      "profit_factor": 1.4384139365335191,
+      "max_drawdown_pct": 7.145707791220776,
+      "max_daily_dd": 1.7609802801407721,
+      "total_pnl": 10587.013211644622,
+      "final_balance": 20587.013211644622
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.412861
+  },
+  {
+    "run": 13,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 293,
+      "win_rate": 0.2525597269624573,
+      "profit_factor": 1.326883503863488,
+      "max_drawdown_pct": 11.683848797250834,
+      "max_daily_dd": 2.1978021978021953,
+      "total_pnl": 4557.5552065169795,
+      "final_balance": 14557.55520651698
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 66.960473
+  },
+  {
+    "run": 14,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 336,
+      "win_rate": 0.375,
+      "profit_factor": 1.1582216116535853,
+      "max_drawdown_pct": 19.09038917770543,
+      "max_daily_dd": 2.5866977617076437,
+      "total_pnl": 2569.9057924192657,
+      "final_balance": 12569.905792419266
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.376579
+  },
+  {
+    "run": 15,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 313,
+      "win_rate": 0.3035143769968051,
+      "profit_factor": 1.1867601480390377,
+      "max_drawdown_pct": 15.992125817908756,
+      "max_daily_dd": 2.521907360048482,
+      "total_pnl": 2865.357260911658,
+      "final_balance": 12865.357260911658
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.677352
+  },
+  {
+    "run": 16,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 486,
+      "win_rate": 0.24897119341563786,
+      "profit_factor": 1.4303654614710624,
+      "max_drawdown_pct": 7.380073800738046,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 9101.558699628182,
+      "final_balance": 19101.55869962818
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.694967
+  },
+  {
+    "run": 17,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 625,
+      "win_rate": 0.3952,
+      "profit_factor": 1.3042913019943576,
+      "max_drawdown_pct": 11.182869894223451,
+      "max_daily_dd": 1.8039747202721417,
+      "total_pnl": 8687.042373199623,
+      "final_balance": 18687.042373199623
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.524522
+  },
+  {
+    "run": 18,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 544,
+      "win_rate": 0.3180147058823529,
+      "profit_factor": 1.4336316474029975,
+      "max_drawdown_pct": 7.0977283320407345,
+      "max_daily_dd": 1.7609802801407721,
+      "total_pnl": 10428.165218554514,
+      "final_balance": 20428.165218554514
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.555463
+  },
+  {
+    "run": 19,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 285,
+      "win_rate": 0.24210526315789474,
+      "profit_factor": 1.2833793254371875,
+      "max_drawdown_pct": 14.03508771929824,
+      "max_daily_dd": 2.2988505747126426,
+      "total_pnl": 3808.9232597901446,
+      "final_balance": 13808.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.681625
+  },
+  {
+    "run": 20,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2232378935025672,
+      "max_drawdown_pct": 14.179366764026025,
+      "max_daily_dd": 2.4667824274846955,
+      "total_pnl": 3447.0334448959384,
+      "final_balance": 13447.033444895938
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.759842
+  },
+  {
+    "run": 21,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.167873563630906,
+      "max_drawdown_pct": 10.614612350252887,
+      "max_daily_dd": 2.5168503868639545,
+      "total_pnl": 2407.487658683329,
+      "final_balance": 12407.487658683329
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.037962
+  },
+  {
+    "run": 22,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 462,
+      "win_rate": 0.24025974025974026,
+      "profit_factor": 1.3638072956736906,
+      "max_drawdown_pct": 8.695652173913045,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 7402.550556057762,
+      "final_balance": 17402.550556057762
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.611328
+  },
+  {
+    "run": 23,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3996655518394649,
+      "profit_factor": 1.3262461742144394,
+      "max_drawdown_pct": 11.556689172867369,
+      "max_daily_dd": 1.8405499921092108,
+      "total_pnl": 8889.376138187508,
+      "final_balance": 18889.37613818751
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.562227
+  },
+  {
+    "run": 24,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 518,
+      "win_rate": 0.3127413127413127,
+      "profit_factor": 1.4237308097411674,
+      "max_drawdown_pct": 5.553586157925571,
+      "max_daily_dd": 1.8950005152174567,
+      "total_pnl": 9554.049010479688,
+      "final_balance": 19554.049010479688
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.873432
+  },
+  {
+    "run": 25,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 285,
+      "win_rate": 0.24210526315789474,
+      "profit_factor": 1.2833793254371875,
+      "max_drawdown_pct": 14.03508771929824,
+      "max_daily_dd": 2.2988505747126426,
+      "total_pnl": 3808.9232597901446,
+      "final_balance": 13808.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.321726
+  },
+  {
+    "run": 26,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2232378935025672,
+      "max_drawdown_pct": 14.179366764026025,
+      "max_daily_dd": 2.4667824274846955,
+      "total_pnl": 3447.0334448959384,
+      "final_balance": 13447.033444895938
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.544467
+  },
+  {
+    "run": 27,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.167873563630906,
+      "max_drawdown_pct": 10.614612350252887,
+      "max_daily_dd": 2.5168503868639545,
+      "total_pnl": 2407.487658683329,
+      "final_balance": 12407.487658683329
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.547914
+  },
+  {
+    "run": 28,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 462,
+      "win_rate": 0.24025974025974026,
+      "profit_factor": 1.3638072956736906,
+      "max_drawdown_pct": 8.695652173913045,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 7402.550556057762,
+      "final_balance": 17402.550556057762
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.666935
+  },
+  {
+    "run": 29,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3996655518394649,
+      "profit_factor": 1.3262461742144394,
+      "max_drawdown_pct": 11.556689172867369,
+      "max_daily_dd": 1.8405499921092108,
+      "total_pnl": 8889.376138187508,
+      "final_balance": 18889.37613818751
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.744246
+  },
+  {
+    "run": 30,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 518,
+      "win_rate": 0.3127413127413127,
+      "profit_factor": 1.4237308097411674,
+      "max_drawdown_pct": 5.553586157925571,
+      "max_daily_dd": 1.8950005152174567,
+      "total_pnl": 9554.049010479688,
+      "final_balance": 19554.049010479688
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.877782
+  },
+  {
+    "run": 31,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 283,
+      "win_rate": 0.24028268551236748,
+      "profit_factor": 1.2742599664959713,
+      "max_drawdown_pct": 13.93728222996515,
+      "max_daily_dd": 2.2813688212927747,
+      "total_pnl": 3658.9232597901446,
+      "final_balance": 13658.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.770713
+  },
+  {
+    "run": 32,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 324,
+      "win_rate": 0.37962962962962965,
+      "profit_factor": 1.2168187690142684,
+      "max_drawdown_pct": 14.075040496743126,
+      "max_daily_dd": 2.4466644644617443,
+      "total_pnl": 3326.2333741657294,
+      "final_balance": 13326.23337416573
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.884746
+  },
+  {
+    "run": 33,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 300,
+      "win_rate": 0.2833333333333333,
+      "profit_factor": 1.1605698522427472,
+      "max_drawdown_pct": 10.530972590358367,
+      "max_daily_dd": 2.4959109388240965,
+      "total_pnl": 2286.68758795312,
+      "final_balance": 12286.68758795312
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.179888
+  },
+  {
+    "run": 34,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 461,
+      "win_rate": 0.2386117136659436,
+      "profit_factor": 1.3515207434604142,
+      "max_drawdown_pct": 8.695652173913045,
+      "max_daily_dd": 1.869158878504673,
+      "total_pnl": 7152.550556057762,
+      "final_balance": 17152.550556057762
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.311001
+  },
+  {
+    "run": 35,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 596,
+      "win_rate": 0.39932885906040266,
+      "profit_factor": 1.3229981544146108,
+      "max_drawdown_pct": 11.47892766594849,
+      "max_daily_dd": 1.8405499921092108,
+      "total_pnl": 8768.5760674573,
+      "final_balance": 18768.5760674573
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.465823
+  },
+  {
+    "run": 36,
+    "params": {
+      "tp_rr": 2.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 516,
+      "win_rate": 0.312015503875969,
+      "profit_factor": 1.4202370056922065,
+      "max_drawdown_pct": 5.515569977568465,
+      "max_daily_dd": 1.8950005152174567,
+      "total_pnl": 9433.24893974948,
+      "final_balance": 19433.24893974948
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.572952
+  },
+  {
+    "run": 37,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 280,
+      "win_rate": 0.20357142857142857,
+      "profit_factor": 1.2534410260665765,
+      "max_drawdown_pct": 16.546762589928058,
+      "max_daily_dd": 2.4193548387096775,
+      "total_pnl": 3457.555206516965,
+      "final_balance": 13457.555206516965
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.18984
+  },
+  {
+    "run": 38,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 338,
+      "win_rate": 0.3757396449704142,
+      "profit_factor": 1.1639737463538828,
+      "max_drawdown_pct": 19.317170466839585,
+      "max_daily_dd": 2.5991902832131877,
+      "total_pnl": 2679.731897368918,
+      "final_balance": 12679.731897368918
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.407194
+  },
+  {
+    "run": 39,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 314,
+      "win_rate": 0.30254777070063693,
+      "profit_factor": 1.194315649806632,
+      "max_drawdown_pct": 16.629392952089184,
+      "max_daily_dd": 2.5507323838030085,
+      "total_pnl": 3000.7086946487034,
+      "final_balance": 13000.708694648703
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.67165
+  },
+  {
+    "run": 40,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 425,
+      "win_rate": 0.1976470588235294,
+      "profit_factor": 1.3435216388781182,
+      "max_drawdown_pct": 12.244897959183687,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 6423.854647020802,
+      "final_balance": 16423.854647020802
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.513312
+  },
+  {
+    "run": 41,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 624,
+      "win_rate": 0.3942307692307692,
+      "profit_factor": 1.3142093089498939,
+      "max_drawdown_pct": 11.238714587904402,
+      "max_daily_dd": 1.7878485523119128,
+      "total_pnl": 8970.186012586437,
+      "final_balance": 18970.186012586437
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.216513
+  },
+  {
+    "run": 42,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 548,
+      "win_rate": 0.3175182481751825,
+      "profit_factor": 1.428881109203021,
+      "max_drawdown_pct": 7.178583846046124,
+      "max_daily_dd": 1.7456103530976992,
+      "total_pnl": 10485.474623188413,
+      "final_balance": 20485.474623188413
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 69.029604
+  },
+  {
+    "run": 43,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 280,
+      "win_rate": 0.20357142857142857,
+      "profit_factor": 1.2534410260665765,
+      "max_drawdown_pct": 16.546762589928058,
+      "max_daily_dd": 2.4193548387096775,
+      "total_pnl": 3457.555206516965,
+      "final_balance": 13457.555206516965
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.001707
+  },
+  {
+    "run": 44,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 338,
+      "win_rate": 0.3757396449704142,
+      "profit_factor": 1.1639737463538828,
+      "max_drawdown_pct": 19.317170466839585,
+      "max_daily_dd": 2.5991902832131877,
+      "total_pnl": 2679.731897368918,
+      "final_balance": 12679.731897368918
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.737713
+  },
+  {
+    "run": 45,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 314,
+      "win_rate": 0.30254777070063693,
+      "profit_factor": 1.194315649806632,
+      "max_drawdown_pct": 16.629392952089184,
+      "max_daily_dd": 2.5507323838030085,
+      "total_pnl": 3000.7086946487034,
+      "final_balance": 13000.708694648703
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.657869
+  },
+  {
+    "run": 46,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 425,
+      "win_rate": 0.1976470588235294,
+      "profit_factor": 1.3435216388781182,
+      "max_drawdown_pct": 12.244897959183687,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 6423.854647020802,
+      "final_balance": 16423.854647020802
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.411587
+  },
+  {
+    "run": 47,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 624,
+      "win_rate": 0.3942307692307692,
+      "profit_factor": 1.3142093089498939,
+      "max_drawdown_pct": 11.238714587904402,
+      "max_daily_dd": 1.7878485523119128,
+      "total_pnl": 8970.186012586437,
+      "final_balance": 18970.186012586437
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.799105
+  },
+  {
+    "run": 48,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 548,
+      "win_rate": 0.3175182481751825,
+      "profit_factor": 1.428881109203021,
+      "max_drawdown_pct": 7.178583846046124,
+      "max_daily_dd": 1.7456103530976992,
+      "total_pnl": 10485.474623188413,
+      "final_balance": 20485.474623188413
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 67.922369
+  },
+  {
+    "run": 49,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 278,
+      "win_rate": 0.2014388489208633,
+      "profit_factor": 1.2405441008764224,
+      "max_drawdown_pct": 16.428571428571427,
+      "max_daily_dd": 2.4,
+      "total_pnl": 3257.555206516965,
+      "final_balance": 13257.555206516965
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.373972
+  },
+  {
+    "run": 50,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 335,
+      "win_rate": 0.373134328358209,
+      "profit_factor": 1.152840893821327,
+      "max_drawdown_pct": 19.176329495563067,
+      "max_daily_dd": 2.576864413398312,
+      "total_pnl": 2482.5097800795047,
+      "final_balance": 12482.509780079505
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.041666
+  },
+  {
+    "run": 51,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 312,
+      "win_rate": 0.30128205128205127,
+      "profit_factor": 1.185228673774711,
+      "max_drawdown_pct": 16.505198927323534,
+      "max_daily_dd": 2.5292277731794655,
+      "total_pnl": 2841.8607015585894,
+      "final_balance": 12841.86070155859
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.925816
+  },
+  {
+    "run": 52,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 424,
+      "win_rate": 0.1957547169811321,
+      "profit_factor": 1.327478858129455,
+      "max_drawdown_pct": 12.244897959183687,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 6123.854647020804,
+      "final_balance": 16123.854647020804
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.020199
+  },
+  {
+    "run": 53,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 621,
+      "win_rate": 0.392914653784219,
+      "profit_factor": 1.3083811799271536,
+      "max_drawdown_pct": 11.162381078134164,
+      "max_daily_dd": 1.7878485523119128,
+      "total_pnl": 8772.963895297024,
+      "final_balance": 18772.963895297024
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.517106
+  },
+  {
+    "run": 54,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 546,
+      "win_rate": 0.31684981684981683,
+      "profit_factor": 1.4241185915231707,
+      "max_drawdown_pct": 7.130163378164053,
+      "max_daily_dd": 1.7456103530976992,
+      "total_pnl": 10326.626630098297,
+      "final_balance": 20326.626630098297
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.814308
+  },
+  {
+    "run": 55,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 271,
+      "win_rate": 0.2066420664206642,
+      "profit_factor": 1.318569877770259,
+      "max_drawdown_pct": 15.384615384615385,
+      "max_daily_dd": 2.3255813953488373,
+      "total_pnl": 4058.9232597901446,
+      "final_balance": 14058.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.554919
+  },
+  {
+    "run": 56,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2405837129867403,
+      "max_drawdown_pct": 14.005548167183116,
+      "max_daily_dd": 2.454558782807482,
+      "total_pnl": 3714.8715746728813,
+      "final_balance": 13714.871574672881
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.995455
+  },
+  {
+    "run": 57,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.177574537303964,
+      "max_drawdown_pct": 11.141583911509105,
+      "max_daily_dd": 2.5374643082059394,
+      "total_pnl": 2546.6100665834037,
+      "final_balance": 12546.610066583404
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.203569
+  },
+  {
+    "run": 58,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 419,
+      "win_rate": 0.2052505966587112,
+      "profit_factor": 1.4053240223671468,
+      "max_drawdown_pct": 9.395973154362416,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 7417.429609318788,
+      "final_balance": 17417.429609318788
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.481644
+  },
+  {
+    "run": 59,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3979933110367893,
+      "profit_factor": 1.3328820525610767,
+      "max_drawdown_pct": 11.586573302599493,
+      "max_daily_dd": 1.823766326618874,
+      "total_pnl": 9103.47510320977,
+      "final_balance": 19103.47510320977
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.433936
+  },
+  {
+    "run": 60,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 523,
+      "win_rate": 0.31166347992351817,
+      "profit_factor": 1.4121802948486069,
+      "max_drawdown_pct": 5.595579399636862,
+      "max_daily_dd": 1.8772139085976272,
+      "total_pnl": 9458.48647782761,
+      "final_balance": 19458.48647782761
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.779465
+  },
+  {
+    "run": 61,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 271,
+      "win_rate": 0.2066420664206642,
+      "profit_factor": 1.318569877770259,
+      "max_drawdown_pct": 15.384615384615385,
+      "max_daily_dd": 2.3255813953488373,
+      "total_pnl": 4058.9232597901446,
+      "final_balance": 14058.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.636042
+  },
+  {
+    "run": 62,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2405837129867403,
+      "max_drawdown_pct": 14.005548167183116,
+      "max_daily_dd": 2.454558782807482,
+      "total_pnl": 3714.8715746728813,
+      "final_balance": 13714.871574672881
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.342254
+  },
+  {
+    "run": 63,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.177574537303964,
+      "max_drawdown_pct": 11.141583911509105,
+      "max_daily_dd": 2.5374643082059394,
+      "total_pnl": 2546.6100665834037,
+      "final_balance": 12546.610066583404
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.225413
+  },
+  {
+    "run": 64,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 419,
+      "win_rate": 0.2052505966587112,
+      "profit_factor": 1.4053240223671468,
+      "max_drawdown_pct": 9.395973154362416,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 7417.429609318788,
+      "final_balance": 17417.429609318788
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 69.221551
+  },
+  {
+    "run": 65,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3979933110367893,
+      "profit_factor": 1.3328820525610767,
+      "max_drawdown_pct": 11.586573302599493,
+      "max_daily_dd": 1.823766326618874,
+      "total_pnl": 9103.47510320977,
+      "final_balance": 19103.47510320977
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.75175
+  },
+  {
+    "run": 66,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 523,
+      "win_rate": 0.31166347992351817,
+      "profit_factor": 1.4121802948486069,
+      "max_drawdown_pct": 5.595579399636862,
+      "max_daily_dd": 1.8772139085976272,
+      "total_pnl": 9458.48647782761,
+      "final_balance": 19458.48647782761
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.116207
+  },
+  {
+    "run": 67,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 269,
+      "win_rate": 0.20446096654275092,
+      "profit_factor": 1.3052685573464908,
+      "max_drawdown_pct": 15.277777777777779,
+      "max_daily_dd": 2.307692307692308,
+      "total_pnl": 3858.9232597901446,
+      "final_balance": 13858.923259790145
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.048013
+  },
+  {
+    "run": 68,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 324,
+      "win_rate": 0.37962962962962965,
+      "profit_factor": 1.2342776563083346,
+      "max_drawdown_pct": 13.902826974120844,
+      "max_daily_dd": 2.4346389018094783,
+      "total_pnl": 3594.0715039426723,
+      "final_balance": 13594.071503942672
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.297681
+  },
+  {
+    "run": 69,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 300,
+      "win_rate": 0.2833333333333333,
+      "profit_factor": 1.1703389455801396,
+      "max_drawdown_pct": 11.053553826907175,
+      "max_daily_dd": 2.5161819023057572,
+      "total_pnl": 2425.809995853195,
+      "final_balance": 12425.809995853195
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.600745
+  },
+  {
+    "run": 70,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 418,
+      "win_rate": 0.20334928229665072,
+      "profit_factor": 1.388930579744196,
+      "max_drawdown_pct": 9.395973154362416,
+      "max_daily_dd": 1.8867924528301887,
+      "total_pnl": 7117.429609318788,
+      "final_balance": 17117.429609318788
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.184243
+  },
+  {
+    "run": 71,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 596,
+      "win_rate": 0.3976510067114094,
+      "profit_factor": 1.3296703073423497,
+      "max_drawdown_pct": 11.508410472957031,
+      "max_daily_dd": 1.823766326618874,
+      "total_pnl": 8982.675032479561,
+      "final_balance": 18982.67503247956
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.493329
+  },
+  {
+    "run": 72,
+    "params": {
+      "tp_rr": 3.0,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 521,
+      "win_rate": 0.31094049904030713,
+      "profit_factor": 1.408697103368498,
+      "max_drawdown_pct": 5.556997588074076,
+      "max_daily_dd": 1.8772139085976272,
+      "total_pnl": 9337.6864070974,
+      "final_balance": 19337.6864070974
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.404597
+  },
+  {
+    "run": 73,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 269,
+      "win_rate": 0.1895910780669145,
+      "profit_factor": 1.3581947864716388,
+      "max_drawdown_pct": 16.014234875444853,
+      "max_daily_dd": 2.3809523809523827,
+      "total_pnl": 4707.555206516954,
+      "final_balance": 14707.555206516954
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.876388
+  },
+  {
+    "run": 74,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 338,
+      "win_rate": 0.3757396449704142,
+      "profit_factor": 1.1736059655350966,
+      "max_drawdown_pct": 19.306657536158564,
+      "max_daily_dd": 2.5975217717448387,
+      "total_pnl": 2837.145907576629,
+      "final_balance": 12837.145907576629
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.2197
+  },
+  {
+    "run": 75,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 314,
+      "win_rate": 0.30254777070063693,
+      "profit_factor": 1.21254722585915,
+      "max_drawdown_pct": 16.814701746536095,
+      "max_daily_dd": 2.554742157868906,
+      "total_pnl": 3282.248801337895,
+      "final_balance": 13282.248801337895
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.197168
+  },
+  {
+    "run": 76,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 416,
+      "win_rate": 0.1778846153846154,
+      "profit_factor": 1.363696013069884,
+      "max_drawdown_pct": 14.696485623003214,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6873.854647020809,
+      "final_balance": 16873.85464702081
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.359568
+  },
+  {
+    "run": 77,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 626,
+      "win_rate": 0.39456869009584666,
+      "profit_factor": 1.3209311276618045,
+      "max_drawdown_pct": 11.189631903732474,
+      "max_daily_dd": 1.7712899929743737,
+      "total_pnl": 9194.176572281336,
+      "final_balance": 19194.176572281336
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.039051
+  },
+  {
+    "run": 78,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 550,
+      "win_rate": 0.3181818181818182,
+      "profit_factor": 1.4436337108462443,
+      "max_drawdown_pct": 7.147449859305722,
+      "max_daily_dd": 1.729821493942094,
+      "total_pnl": 10890.516109575154,
+      "final_balance": 20890.516109575154
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 69.291971
+  },
+  {
+    "run": 79,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 269,
+      "win_rate": 0.1895910780669145,
+      "profit_factor": 1.3581947864716388,
+      "max_drawdown_pct": 16.014234875444853,
+      "max_daily_dd": 2.3809523809523827,
+      "total_pnl": 4707.555206516954,
+      "final_balance": 14707.555206516954
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.375043
+  },
+  {
+    "run": 80,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 338,
+      "win_rate": 0.3757396449704142,
+      "profit_factor": 1.1736059655350966,
+      "max_drawdown_pct": 19.306657536158564,
+      "max_daily_dd": 2.5975217717448387,
+      "total_pnl": 2837.145907576629,
+      "final_balance": 12837.145907576629
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.788732
+  },
+  {
+    "run": 81,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 314,
+      "win_rate": 0.30254777070063693,
+      "profit_factor": 1.21254722585915,
+      "max_drawdown_pct": 16.814701746536095,
+      "max_daily_dd": 2.554742157868906,
+      "total_pnl": 3282.248801337895,
+      "final_balance": 13282.248801337895
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.161073
+  },
+  {
+    "run": 82,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 416,
+      "win_rate": 0.1778846153846154,
+      "profit_factor": 1.363696013069884,
+      "max_drawdown_pct": 14.696485623003214,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6873.854647020809,
+      "final_balance": 16873.85464702081
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.830182
+  },
+  {
+    "run": 83,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 626,
+      "win_rate": 0.39456869009584666,
+      "profit_factor": 1.3209311276618045,
+      "max_drawdown_pct": 11.189631903732474,
+      "max_daily_dd": 1.7712899929743737,
+      "total_pnl": 9194.176572281336,
+      "final_balance": 19194.176572281336
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.012209
+  },
+  {
+    "run": 84,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 550,
+      "win_rate": 0.3181818181818182,
+      "profit_factor": 1.4436337108462443,
+      "max_drawdown_pct": 7.147449859305722,
+      "max_daily_dd": 1.729821493942094,
+      "total_pnl": 10890.516109575154,
+      "final_balance": 20890.516109575154
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.18662
+  },
+  {
+    "run": 85,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 267,
+      "win_rate": 0.18726591760299627,
+      "profit_factor": 1.3417729786937094,
+      "max_drawdown_pct": 15.901060070671392,
+      "max_daily_dd": 2.362204724409451,
+      "total_pnl": 4457.555206516954,
+      "final_balance": 14457.555206516954
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.876134
+  },
+  {
+    "run": 86,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 335,
+      "win_rate": 0.373134328358209,
+      "profit_factor": 1.1625324157694805,
+      "max_drawdown_pct": 19.165969263914516,
+      "max_daily_dd": 2.5752244333027283,
+      "total_pnl": 2639.9237902872155,
+      "final_balance": 12639.923790287216
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.170784
+  },
+  {
+    "run": 87,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 312,
+      "win_rate": 0.30128205128205127,
+      "profit_factor": 1.203579080797768,
+      "max_drawdown_pct": 16.689193266492396,
+      "max_daily_dd": 2.5331701691218673,
+      "total_pnl": 3123.4008082477812,
+      "final_balance": 13123.400808247781
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.00183
+  },
+  {
+    "run": 88,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 415,
+      "win_rate": 0.17590361445783131,
+      "profit_factor": 1.3451774945513655,
+      "max_drawdown_pct": 14.696485623003214,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6523.854647020809,
+      "final_balance": 16523.85464702081
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.341714
+  },
+  {
+    "run": 89,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 623,
+      "win_rate": 0.39325842696629215,
+      "profit_factor": 1.3151469588244997,
+      "max_drawdown_pct": 11.113961434032353,
+      "max_daily_dd": 1.7712899929743737,
+      "total_pnl": 8996.954454991926,
+      "final_balance": 18996.954454991926
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.850176
+  },
+  {
+    "run": 90,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.3,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 548,
+      "win_rate": 0.3175182481751825,
+      "profit_factor": 1.4389510146940052,
+      "max_drawdown_pct": 7.099447081811864,
+      "max_daily_dd": 1.729821493942094,
+      "total_pnl": 10731.668116485042,
+      "final_balance": 20731.66811648504
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.036565
+  },
+  {
+    "run": 91,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 259,
+      "win_rate": 0.1891891891891892,
+      "profit_factor": 1.412560052701189,
+      "max_drawdown_pct": 15.19434628975265,
+      "max_daily_dd": 2.34375,
+      "total_pnl": 5008.923259790152,
+      "final_balance": 15008.923259790152
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.020892
+  },
+  {
+    "run": 92,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2499326863238247,
+      "max_drawdown_pct": 14.307007219821221,
+      "max_daily_dd": 2.456965937586807,
+      "total_pnl": 3859.229789412977,
+      "final_balance": 13859.229789412977
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.343094
+  },
+  {
+    "run": 93,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.187162910785404,
+      "max_drawdown_pct": 11.348354592504208,
+      "max_daily_dd": 2.5414289370968075,
+      "total_pnl": 2684.117666494525,
+      "final_balance": 12684.117666494525
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.316829
+  },
+  {
+    "run": 94,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 383,
+      "win_rate": 0.17754569190600522,
+      "profit_factor": 1.3840602110712747,
+      "max_drawdown_pct": 14.333333333333284,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6567.429609318799,
+      "final_balance": 16567.4296093188
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.7532
+  },
+  {
+    "run": 95,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3979933110367893,
+      "profit_factor": 1.3445200480369428,
+      "max_drawdown_pct": 11.443840822471893,
+      "max_daily_dd": 1.807285989963546,
+      "total_pnl": 9421.744596114855,
+      "final_balance": 19421.744596114855
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.795632
+  },
+  {
+    "run": 96,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.3,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 523,
+      "win_rate": 0.31166347992351817,
+      "profit_factor": 1.425619444807716,
+      "max_drawdown_pct": 5.506260086418728,
+      "max_daily_dd": 1.859758089833317,
+      "total_pnl": 9766.880692083829,
+      "final_balance": 19766.88069208383
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 69.299324
+  },
+  {
+    "run": 97,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 259,
+      "win_rate": 0.1891891891891892,
+      "profit_factor": 1.412560052701189,
+      "max_drawdown_pct": 15.19434628975265,
+      "max_daily_dd": 2.34375,
+      "total_pnl": 5008.923259790152,
+      "final_balance": 15008.923259790152
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.113017
+  },
+  {
+    "run": 98,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 326,
+      "win_rate": 0.3803680981595092,
+      "profit_factor": 1.2499326863238247,
+      "max_drawdown_pct": 14.307007219821221,
+      "max_daily_dd": 2.456965937586807,
+      "total_pnl": 3859.229789412977,
+      "final_balance": 13859.229789412977
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.365517
+  },
+  {
+    "run": 99,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 302,
+      "win_rate": 0.2847682119205298,
+      "profit_factor": 1.187162910785404,
+      "max_drawdown_pct": 11.348354592504208,
+      "max_daily_dd": 2.5414289370968075,
+      "total_pnl": 2684.117666494525,
+      "final_balance": 12684.117666494525
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.874879
+  },
+  {
+    "run": 100,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 383,
+      "win_rate": 0.17754569190600522,
+      "profit_factor": 1.3840602110712747,
+      "max_drawdown_pct": 14.333333333333284,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6567.429609318799,
+      "final_balance": 16567.4296093188
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 69.145853
+  },
+  {
+    "run": 101,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 598,
+      "win_rate": 0.3979933110367893,
+      "profit_factor": 1.3445200480369428,
+      "max_drawdown_pct": 11.443840822471893,
+      "max_daily_dd": 1.807285989963546,
+      "total_pnl": 9421.744596114855,
+      "final_balance": 19421.744596114855
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.834433
+  },
+  {
+    "run": 102,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.5,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 523,
+      "win_rate": 0.31166347992351817,
+      "profit_factor": 1.425619444807716,
+      "max_drawdown_pct": 5.506260086418728,
+      "max_daily_dd": 1.859758089833317,
+      "total_pnl": 9766.880692083829,
+      "final_balance": 19766.88069208383
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.399025
+  },
+  {
+    "run": 103,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 257,
+      "win_rate": 0.1867704280155642,
+      "profit_factor": 1.3952240619726521,
+      "max_drawdown_pct": 15.087719298245613,
+      "max_daily_dd": 2.3255813953488373,
+      "total_pnl": 4758.923259790152,
+      "final_balance": 14758.923259790152
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.276841
+  },
+  {
+    "run": 104,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 324,
+      "win_rate": 0.37962962962962965,
+      "profit_factor": 1.2436875704352697,
+      "max_drawdown_pct": 14.202333283637422,
+      "max_daily_dd": 2.437007125926614,
+      "total_pnl": 3738.429718682768,
+      "final_balance": 13738.429718682768
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.526645
+  },
+  {
+    "run": 105,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 2.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 300,
+      "win_rate": 0.2833333333333333,
+      "profit_factor": 1.1799946480540169,
+      "max_drawdown_pct": 11.258750856168849,
+      "max_daily_dd": 2.520080254157732,
+      "total_pnl": 2563.317595764316,
+      "final_balance": 12563.317595764316
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 67.823475
+  },
+  {
+    "run": 106,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": null
+    },
+    "summary": {
+      "total_trades": 381,
+      "win_rate": 0.17585301837270342,
+      "profit_factor": 1.3716135064305175,
+      "max_drawdown_pct": 14.23841059602644,
+      "max_daily_dd": 1.8604651162790697,
+      "total_pnl": 6317.429609318799,
+      "final_balance": 16317.429609318799
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.876746
+  },
+  {
+    "run": 107,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 1.5
+    },
+    "summary": {
+      "total_trades": 596,
+      "win_rate": 0.3976510067114094,
+      "profit_factor": 1.3413510150562908,
+      "max_drawdown_pct": 11.36758553628749,
+      "max_daily_dd": 1.807285989963546,
+      "total_pnl": 9300.944525384646,
+      "final_balance": 19300.944525384646
+    },
+    "passes_filter": false,
+    "elapsed_seconds": 68.657467
+  },
+  {
+    "run": 108,
+    "params": {
+      "tp_rr": 3.5,
+      "stop_buffer_atr": 0.5,
+      "min_range_atr": 0.7,
+      "max_range_atr": 3.0,
+      "trailing_start": 2.0
+    },
+    "summary": {
+      "total_trades": 521,
+      "win_rate": 0.31094049904030713,
+      "profit_factor": 1.4221950745539857,
+      "max_drawdown_pct": 5.468896054457342,
+      "max_daily_dd": 1.859758089833317,
+      "total_pnl": 9646.08062135362,
+      "final_balance": 19646.08062135362
+    },
+    "passes_filter": true,
+    "elapsed_seconds": 68.473973
+  }
+]
