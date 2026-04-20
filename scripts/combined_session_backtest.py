@@ -10,44 +10,47 @@ import pandas as pd
 import numpy as np
 from astra_v2.data.dukascopy import load_timeframe
 
-# Optimal parameters from extended grid search optimization
+# Optimal parameters with unified TP_RR=5.5 and step trailing
 ASIAN_PARAMS = {
-    'tp_rr': 4.0,  # Increased for AGGRESSIVE
+    'tp_rr': 5.5,  # Unified TP for all sessions
     'stop_buffer_atr': 0.1,
     'min_range_atr': 0.7,
     'max_range_atr': 3.0,
-    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_start': None,  # Using step trailing instead
     'trailing_distance': 0.2,
     'range_hours': (0, 7),
     'breakout_hours': (7, 10)
 }
 
 LONDON_PARAMS = {
-    'tp_rr': 4.5,  # Increased for AGGRESSIVE
+    'tp_rr': 5.5,  # Unified TP for all sessions
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.3,
     'max_range_atr': 3.0,
-    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_start': None,  # Using step trailing instead
     'trailing_distance': 0.2,
     'range_hours': (7, 12),
     'breakout_hours': (13, 16)
 }
 
 NY_PARAMS = {
-    'tp_rr': 5.5,  # Increased for AGGRESSIVE
+    'tp_rr': 5.5,  # Unified TP for all sessions
     'stop_buffer_atr': 0.3,
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
-    'trailing_start': None,  # Disabled for AGGRESSIVE
+    'trailing_start': None,  # Using step trailing instead
     'trailing_distance': 0.1,
     'range_hours': (13, 17),
     'breakout_hours': (18, 21)
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 200  # Testing increased risk
+RISK_PER_TRADE = 190  # Optimized for DD < 10%
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
+
+# Step Trailing Stop (1R step)
+USE_STEP_TRAILING = True  # When price reaches 2R -> SL to 1R, 3R -> 2R, etc.
 
 # Breakout Confirmation Filter
 USE_CONFIRMATION = False  # Require 2-bar confirmation before entry
@@ -194,28 +197,52 @@ def run_combined_backtest():
                 if trade['direction'] == 'LONG':
                     risk = trade['entry'] - trade['initial_sl']
 
-                    # Breakeven at 1R
-                    if highs[i] >= trade['entry'] + risk:
-                        trade['sl'] = max(trade['sl'], trade['entry'])
+                    # Step Trailing Stop (1R step)
+                    if USE_STEP_TRAILING:
+                        profit_r = (highs[i] - trade['entry']) / risk
+                        if profit_r >= 2.0:
+                            trade['sl'] = max(trade['sl'], trade['entry'] + 1.0 * risk)
+                        if profit_r >= 3.0:
+                            trade['sl'] = max(trade['sl'], trade['entry'] + 2.0 * risk)
+                        if profit_r >= 4.0:
+                            trade['sl'] = max(trade['sl'], trade['entry'] + 3.0 * risk)
+                        if profit_r >= 5.0:
+                            trade['sl'] = max(trade['sl'], trade['entry'] + 4.0 * risk)
+                    else:
+                        # Breakeven at 1R (old logic)
+                        if highs[i] >= trade['entry'] + risk:
+                            trade['sl'] = max(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
-                    if params['trailing_start'] is not None:
-                        if highs[i] >= trade['entry'] + params['trailing_start'] * risk:
-                            trailing_sl = highs[i] - params['trailing_distance'] * risk
-                            trade['sl'] = max(trade['sl'], trailing_sl)
+                        # Trailing SL if enabled (old logic)
+                        if params['trailing_start'] is not None:
+                            if highs[i] >= trade['entry'] + params['trailing_start'] * risk:
+                                trailing_sl = highs[i] - params['trailing_distance'] * risk
+                                trade['sl'] = max(trade['sl'], trailing_sl)
 
                 else:  # SHORT
                     risk = trade['initial_sl'] - trade['entry']
 
-                    # Breakeven at 1R
-                    if lows[i] <= trade['entry'] - risk:
-                        trade['sl'] = min(trade['sl'], trade['entry'])
+                    # Step Trailing Stop (1R step)
+                    if USE_STEP_TRAILING:
+                        profit_r = (trade['entry'] - lows[i]) / risk
+                        if profit_r >= 2.0:
+                            trade['sl'] = min(trade['sl'], trade['entry'] - 1.0 * risk)
+                        if profit_r >= 3.0:
+                            trade['sl'] = min(trade['sl'], trade['entry'] - 2.0 * risk)
+                        if profit_r >= 4.0:
+                            trade['sl'] = min(trade['sl'], trade['entry'] - 3.0 * risk)
+                        if profit_r >= 5.0:
+                            trade['sl'] = min(trade['sl'], trade['entry'] - 4.0 * risk)
+                    else:
+                        # Breakeven at 1R (old logic)
+                        if lows[i] <= trade['entry'] - risk:
+                            trade['sl'] = min(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
-                    if params['trailing_start'] is not None:
-                        if lows[i] <= trade['entry'] - params['trailing_start'] * risk:
-                            trailing_sl = lows[i] + params['trailing_distance'] * risk
-                            trade['sl'] = min(trade['sl'], trailing_sl)
+                        # Trailing SL if enabled (old logic)
+                        if params['trailing_start'] is not None:
+                            if lows[i] <= trade['entry'] - params['trailing_start'] * risk:
+                                trailing_sl = lows[i] + params['trailing_distance'] * risk
+                                trade['sl'] = min(trade['sl'], trailing_sl)
 
                 # Check SL/TP
                 exit_trade = False
