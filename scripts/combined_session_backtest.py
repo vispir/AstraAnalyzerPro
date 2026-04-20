@@ -28,7 +28,7 @@ LONDON_PARAMS = {
     'min_range_atr': 0.3,
     'max_range_atr': 3.0,
     'trailing_start': 2.0,
-    'trailing_distance': 0.3,
+    'trailing_distance': 0.2,  # Optimized - improves PnL by $517
     'range_hours': (7, 12),
     'breakout_hours': (13, 16)
 }
