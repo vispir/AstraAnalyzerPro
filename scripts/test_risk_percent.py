@@ -1,6 +1,6 @@
 """
-Combined Session Backtest - All 3 sessions with optimal parameters
-Tests Asian + London + NY together to verify combined DD and DailyDD
+Risk Percent Testing - Compare different risk percentages
+Tests RISK_PERCENT = [1.0, 1.2, 1.5, 1.8, 2.0] vs fixed $100
 """
 import sys
 import os
@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 from astra_v2.data.dukascopy import load_timeframe
 
-# Optimal parameters from extended grid search optimization
+# Optimal parameters from extended grid search
 ASIAN_PARAMS = {
     'tp_rr': 3.0,
     'stop_buffer_atr': 0.1,
@@ -45,14 +45,12 @@ NY_PARAMS = {
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 100
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
+INITIAL_BALANCE = 10000
 
-# EMA Trend Filter
-USE_TREND_FILTER = False
-EMA_FAST = 50
-EMA_SLOW = 200
+# Risk percentages to test
+RISK_PERCENTS = [1.0, 1.2, 1.5, 1.8, 2.0]
 
 def calculate_atr(df, period=20):
     high = df['high']
@@ -68,10 +66,6 @@ def calculate_atr(df, period=20):
 
     return atr
 
-def calculate_ema(df, period):
-    """Calculate Exponential Moving Average"""
-    return df['close'].ewm(span=period, adjust=False).mean()
-
 def get_session_range(df, start_hour, end_hour):
     mask = (df.index.hour >= start_hour) & (df.index.hour < end_hour)
     session_bars = df[mask]
@@ -84,35 +78,12 @@ def get_session_range(df, start_hour, end_hour):
 
     return range_high, range_low
 
-def run_combined_backtest():
-    print("=== Combined Session Backtest ===")
-    print(f"Testing all 3 sessions with optimal parameters\n")
-
-    # Load data
-    print("Loading data...")
-    df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol="XAUUSD")
-    print(f"Loaded {len(df):,} bars\n")
-
-    if 'datetime' in df.columns:
-        df.set_index('datetime', inplace=True)
-    df = df.sort_index()
-
-    # Calculate ATR
-    df['atr'] = calculate_atr(df, ATR_PERIOD)
-
-    # Calculate EMA for trend filter
-    if USE_TREND_FILTER:
-        print(f"Calculating EMA{EMA_FAST} and EMA{EMA_SLOW} for trend filter...")
-        df['ema_fast'] = calculate_ema(df, EMA_FAST)
-        df['ema_slow'] = calculate_ema(df, EMA_SLOW)
-        print(f"Trend filter enabled: LONG requires EMA{EMA_FAST} > EMA{EMA_SLOW}, SHORT requires EMA{EMA_FAST} < EMA{EMA_SLOW}\n")
-    else:
-        print("Trend filter disabled\n")
-
+def run_backtest_with_risk_percent(df, risk_percent):
+    """Run backtest with percentage-based risk"""
     trades = []
-    active_trades = {}  # Can have multiple active trades (one per session)
-    balance = 10000
-    peak_balance = 10000
+    active_trades = {}
+    balance = INITIAL_BALANCE
+    peak_balance = INITIAL_BALANCE
     max_dd = 0
     max_daily_dd = 0
 
@@ -223,26 +194,21 @@ def run_combined_backtest():
                     if dd > max_dd:
                         max_dd = dd
 
+            # Calculate risk amount based on current balance
+            risk_amount = balance * (risk_percent / 100.0)
+
             # Check for new trade entries in each session
             # Asian breakout
             if ASIAN_PARAMS['breakout_hours'][0] <= hour < ASIAN_PARAMS['breakout_hours'][1]:
                 if asian_high is not None and 'asian' not in active_trades:
                     asian_range = asian_high - asian_low
                     if ASIAN_PARAMS['min_range_atr'] * atr <= asian_range <= ASIAN_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > asian_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
                             sl = asian_low - ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
                             tp = entry + risk * ASIAN_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['asian'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -250,15 +216,11 @@ def run_combined_backtest():
                                 'range_type': 'asian'
                             }
                         elif closes[i] < asian_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = asian_high + ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
                             tp = entry - risk * ASIAN_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['asian'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -271,19 +233,12 @@ def run_combined_backtest():
                 if london_high is not None and 'london' not in active_trades:
                     london_range = london_high - london_low
                     if LONDON_PARAMS['min_range_atr'] * atr <= london_range <= LONDON_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > london_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
                             entry = closes[i]
                             sl = london_low - LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
                             tp = entry + risk * LONDON_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['london'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -291,15 +246,11 @@ def run_combined_backtest():
                                 'range_type': 'london'
                             }
                         elif closes[i] < london_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = london_high + LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
                             tp = entry - risk * LONDON_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['london'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -312,20 +263,12 @@ def run_combined_backtest():
                 if ny_high is not None and 'ny' not in active_trades:
                     ny_range = ny_high - ny_low
                     if NY_PARAMS['min_range_atr'] * atr <= ny_range <= NY_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > ny_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
                             sl = ny_low - NY_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
                             tp = entry + risk * NY_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['ny'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -333,15 +276,11 @@ def run_combined_backtest():
                                 'range_type': 'ny'
                             }
                         elif closes[i] < ny_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = ny_high + NY_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
                             tp = entry - risk * NY_PARAMS['tp_rr']
-                            size = RISK_PER_TRADE / risk
+                            size = risk_amount / risk
 
                             active_trades['ny'] = {
                                 'entry': entry, 'sl': sl, 'initial_sl': sl, 'tp': tp,
@@ -382,48 +321,105 @@ def run_combined_backtest():
     total_loss = abs(losses['pnl'].sum()) if len(losses) > 0 else 0
     profit_factor = total_profit / total_loss if total_loss > 0 else 0
 
-    total_pnl = balance - 10000
+    total_pnl = balance - INITIAL_BALANCE
 
-    # Print results
-    print("=" * 80)
-    print("=== COMBINED BACKTEST RESULTS ===")
-    print("=" * 80)
-    print(f"\nTotal Trades: {total_trades}")
-    print(f"Win Rate: {win_rate:.1%}")
-    print(f"Profit Factor: {profit_factor:.3f}")
-    print(f"Total PnL: ${total_pnl:,.0f}")
-    print(f"Final Balance: ${balance:,.0f}")
-    print(f"Max Drawdown: {max_dd:.2f}%")
-    print(f"Max Daily Drawdown: {max_daily_dd:.2f}%")
+    return {
+        'total_trades': total_trades,
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'max_drawdown_pct': max_dd,
+        'max_daily_dd': max_daily_dd,
+        'total_pnl': total_pnl,
+        'final_balance': balance
+    }
 
-    # Breakdown by session
-    print(f"\n=== BREAKDOWN BY SESSION ===")
-    for session in ['asian', 'london', 'ny']:
-        session_trades = trades_df[trades_df['range_type'] == session]
-        if len(session_trades) > 0:
-            session_pnl = session_trades['pnl'].sum()
-            session_wins = len(session_trades[session_trades['pnl'] > 0])
-            session_wr = session_wins / len(session_trades)
-            print(f"{session.upper()}: {len(session_trades)} trades, PnL=${session_pnl:,.0f}, WR={session_wr:.1%}")
+def run_risk_comparison():
+    print("=== Risk Percent Comparison ===")
+    print(f"Testing RISK_PERCENT = {RISK_PERCENTS}")
+    print(f"Initial Balance: ${INITIAL_BALANCE:,}\n")
 
-    # Check filters
-    print(f"\n=== FILTER CHECK ===")
-    passes_dd = max_dd < 10.0
-    passes_daily_dd = max_daily_dd < 5.0
-    passes_trades = total_trades >= 150
+    # Load data
+    print("Loading data...")
+    df = load_timeframe("M15", start=START_DATE, end=END_DATE, symbol="XAUUSD")
+    print(f"Loaded {len(df):,} bars\n")
 
-    print(f"Max DD < 10%: {'✓ PASS' if passes_dd else '✗ FAIL'} ({max_dd:.2f}%)")
-    print(f"Max Daily DD < 5%: {'✓ PASS' if passes_daily_dd else '✗ FAIL'} ({max_daily_dd:.2f}%)")
-    print(f"Total Trades >= 150: {'✓ PASS' if passes_trades else '✗ FAIL'} ({total_trades})")
+    if 'datetime' in df.columns:
+        df.set_index('datetime', inplace=True)
+    df = df.sort_index()
 
-    if passes_dd and passes_daily_dd and passes_trades:
-        print(f"\n{'='*80}")
-        print("✓ ALL FILTERS PASSED - STRATEGY IS VALID")
-        print(f"{'='*80}")
+    # Calculate ATR
+    df['atr'] = calculate_atr(df, ATR_PERIOD)
+
+    print("=" * 100)
+    print(f"{'Risk%':<8} {'PnL':<15} {'Final Balance':<18} {'PF':<8} {'Max DD%':<10} {'Daily DD%':<12} {'Trades':<8} {'WR%':<8} {'Status':<8}")
+    print("=" * 100)
+
+    results = []
+
+    # Test fixed $100 first (baseline)
+    print("Testing fixed $100 risk (baseline)...")
+    # We already know this result: $19,913, DD=7.38%, DailyDD=2.57%
+    baseline = {
+        'risk_type': 'Fixed $100',
+        'total_pnl': 19913,
+        'final_balance': 29913,
+        'profit_factor': 1.502,
+        'max_drawdown_pct': 7.38,
+        'max_daily_dd': 2.57,
+        'total_trades': 898,
+        'win_rate': 0.281
+    }
+
+    passes = baseline['max_drawdown_pct'] < 10.0 and baseline['max_daily_dd'] < 5.0
+    status = "PASS" if passes else "FAIL"
+
+    print(f"{'$100':<8} ${baseline['total_pnl']:<14,.0f} ${baseline['final_balance']:<17,.0f} "
+          f"{baseline['profit_factor']:<8.3f} {baseline['max_drawdown_pct']:<10.2f} "
+          f"{baseline['max_daily_dd']:<12.2f} {baseline['total_trades']:<8} "
+          f"{baseline['win_rate']*100:<8.1f} {status:<8}")
+
+    results.append(baseline)
+
+    # Test percentage-based risk
+    for risk_pct in RISK_PERCENTS:
+        print(f"Testing {risk_pct}% risk...")
+        result = run_backtest_with_risk_percent(df, risk_pct)
+
+        passes = result['max_drawdown_pct'] < 10.0 and result['max_daily_dd'] < 5.0
+        status = "PASS" if passes else "FAIL"
+
+        print(f"{risk_pct:<8.1f} ${result['total_pnl']:<14,.0f} ${result['final_balance']:<17,.0f} "
+              f"{result['profit_factor']:<8.3f} {result['max_drawdown_pct']:<10.2f} "
+              f"{result['max_daily_dd']:<12.2f} {result['total_trades']:<8} "
+              f"{result['win_rate']*100:<8.1f} {status:<8}")
+
+        result['risk_type'] = f'{risk_pct}%'
+        results.append(result)
+
+    print("=" * 100)
+
+    # Find best result that passes filters
+    passed_results = [r for r in results if r['max_drawdown_pct'] < 10.0 and r['max_daily_dd'] < 5.0]
+
+    if len(passed_results) > 0:
+        best = max(passed_results, key=lambda x: x['total_pnl'])
+
+        print(f"\n=== BEST RESULT (passes filters) ===")
+        print(f"Risk Type: {best['risk_type']}")
+        print(f"Total PnL: ${best['total_pnl']:,.0f}")
+        print(f"Final Balance: ${best['final_balance']:,.0f}")
+        print(f"Profit Factor: {best['profit_factor']:.3f}")
+        print(f"Max DD: {best['max_drawdown_pct']:.2f}%")
+        print(f"Max Daily DD: {best['max_daily_dd']:.2f}%")
+        print(f"Total Trades: {best['total_trades']}")
+        print(f"Win Rate: {best['win_rate']:.1%}")
+
+        if best['risk_type'] != 'Fixed $100':
+            improvement = best['total_pnl'] - baseline['total_pnl']
+            improvement_pct = (improvement / baseline['total_pnl']) * 100
+            print(f"\nImprovement vs Fixed $100: ${improvement:,.0f} ({improvement_pct:+.1f}%)")
     else:
-        print(f"\n{'='*80}")
-        print("✗ SOME FILTERS FAILED - NEED ADJUSTMENT")
-        print(f"{'='*80}")
+        print("\nNo results passed the filters!")
 
 if __name__ == "__main__":
-    run_combined_backtest()
+    run_risk_comparison()

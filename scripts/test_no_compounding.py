@@ -1,6 +1,6 @@
 """
-Combined Session Backtest - All 3 sessions with optimal parameters
-Tests Asian + London + NY together to verify combined DD and DailyDD
+No Compounding Test - Calculate average monthly profit
+Fixed balance $10,000 throughout, no reinvestment
 """
 import sys
 import os
@@ -8,9 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from astra_v2.data.dukascopy import load_timeframe
 
-# Optimal parameters from extended grid search optimization
+# Optimal parameters
 ASIAN_PARAMS = {
     'tp_rr': 3.0,
     'stop_buffer_atr': 0.1,
@@ -46,13 +47,9 @@ NY_PARAMS = {
 
 ATR_PERIOD = 20
 RISK_PER_TRADE = 100
+FIXED_BALANCE = 10000
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
-
-# EMA Trend Filter
-USE_TREND_FILTER = False
-EMA_FAST = 50
-EMA_SLOW = 200
 
 def calculate_atr(df, period=20):
     high = df['high']
@@ -68,10 +65,6 @@ def calculate_atr(df, period=20):
 
     return atr
 
-def calculate_ema(df, period):
-    """Calculate Exponential Moving Average"""
-    return df['close'].ewm(span=period, adjust=False).mean()
-
 def get_session_range(df, start_hour, end_hour):
     mask = (df.index.hour >= start_hour) & (df.index.hour < end_hour)
     session_bars = df[mask]
@@ -84,9 +77,11 @@ def get_session_range(df, start_hour, end_hour):
 
     return range_high, range_low
 
-def run_combined_backtest():
-    print("=== Combined Session Backtest ===")
-    print(f"Testing all 3 sessions with optimal parameters\n")
+def run_no_compounding_backtest():
+    print("=== No Compounding Backtest ===")
+    print(f"Fixed Balance: ${FIXED_BALANCE:,}")
+    print(f"Risk per Trade: ${RISK_PER_TRADE}")
+    print(f"Period: {START_DATE} to {END_DATE}\n")
 
     # Load data
     print("Loading data...")
@@ -100,27 +95,17 @@ def run_combined_backtest():
     # Calculate ATR
     df['atr'] = calculate_atr(df, ATR_PERIOD)
 
-    # Calculate EMA for trend filter
-    if USE_TREND_FILTER:
-        print(f"Calculating EMA{EMA_FAST} and EMA{EMA_SLOW} for trend filter...")
-        df['ema_fast'] = calculate_ema(df, EMA_FAST)
-        df['ema_slow'] = calculate_ema(df, EMA_SLOW)
-        print(f"Trend filter enabled: LONG requires EMA{EMA_FAST} > EMA{EMA_SLOW}, SHORT requires EMA{EMA_FAST} < EMA{EMA_SLOW}\n")
-    else:
-        print("Trend filter disabled\n")
-
     trades = []
-    active_trades = {}  # Can have multiple active trades (one per session)
-    balance = 10000
-    peak_balance = 10000
-    max_dd = 0
-    max_daily_dd = 0
+    active_trades = {}
+    total_pnl = 0  # Cumulative PnL (not added to balance)
+    peak_pnl = 0
+    max_dd_dollars = 0
+    max_dd_pct = 0
 
     dates = df.index.date
     unique_dates = sorted(set(dates))
 
     for date in unique_dates:
-        day_start_balance = balance
         day_data = df[df.index.date == date]
 
         if len(day_data) < 10:
@@ -156,11 +141,9 @@ def run_combined_backtest():
                 if trade['direction'] == 'LONG':
                     risk = trade['entry'] - trade['initial_sl']
 
-                    # Breakeven at 1R
                     if highs[i] >= trade['entry'] + risk:
                         trade['sl'] = max(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
                     if params['trailing_start'] is not None:
                         if highs[i] >= trade['entry'] + params['trailing_start'] * risk:
                             trailing_sl = highs[i] - params['trailing_distance'] * risk
@@ -169,11 +152,9 @@ def run_combined_backtest():
                 else:  # SHORT
                     risk = trade['initial_sl'] - trade['entry']
 
-                    # Breakeven at 1R
                     if lows[i] <= trade['entry'] - risk:
                         trade['sl'] = min(trade['sl'], trade['entry'])
 
-                    # Trailing SL if enabled
                     if params['trailing_start'] is not None:
                         if lows[i] <= trade['entry'] - params['trailing_start'] * risk:
                             trailing_sl = lows[i] + params['trailing_distance'] * risk
@@ -184,14 +165,14 @@ def run_combined_backtest():
                 if trade['direction'] == 'LONG':
                     if lows[i] <= trade['sl']:
                         pnl = (trade['sl'] - trade['entry']) * trade['size']
-                        balance += pnl
+                        total_pnl += pnl
                         trade['exit'] = trade['sl']
                         trade['pnl'] = pnl
                         trade['status'] = 'sl'
                         exit_trade = True
                     elif highs[i] >= trade['tp']:
                         pnl = (trade['tp'] - trade['entry']) * trade['size']
-                        balance += pnl
+                        total_pnl += pnl
                         trade['exit'] = trade['tp']
                         trade['pnl'] = pnl
                         trade['status'] = 'tp'
@@ -199,14 +180,14 @@ def run_combined_backtest():
                 else:  # SHORT
                     if highs[i] >= trade['sl']:
                         pnl = (trade['entry'] - trade['sl']) * trade['size']
-                        balance += pnl
+                        total_pnl += pnl
                         trade['exit'] = trade['sl']
                         trade['pnl'] = pnl
                         trade['status'] = 'sl'
                         exit_trade = True
                     elif lows[i] <= trade['tp']:
                         pnl = (trade['entry'] - trade['tp']) * trade['size']
-                        balance += pnl
+                        total_pnl += pnl
                         trade['exit'] = trade['tp']
                         trade['pnl'] = pnl
                         trade['status'] = 'tp'
@@ -216,12 +197,15 @@ def run_combined_backtest():
                     trades.append(trade)
                     del active_trades[session_name]
 
-                    # Update max DD
-                    if balance > peak_balance:
-                        peak_balance = balance
-                    dd = (peak_balance - balance) / peak_balance * 100
-                    if dd > max_dd:
-                        max_dd = dd
+                    # Update max DD based on PnL
+                    if total_pnl > peak_pnl:
+                        peak_pnl = total_pnl
+                    dd_dollars = peak_pnl - total_pnl
+                    if dd_dollars > max_dd_dollars:
+                        max_dd_dollars = dd_dollars
+                    dd_pct = (dd_dollars / FIXED_BALANCE) * 100
+                    if dd_pct > max_dd_pct:
+                        max_dd_pct = dd_pct
 
             # Check for new trade entries in each session
             # Asian breakout
@@ -229,15 +213,7 @@ def run_combined_backtest():
                 if asian_high is not None and 'asian' not in active_trades:
                     asian_range = asian_high - asian_low
                     if ASIAN_PARAMS['min_range_atr'] * atr <= asian_range <= ASIAN_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > asian_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
                             sl = asian_low - ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
@@ -250,10 +226,6 @@ def run_combined_backtest():
                                 'range_type': 'asian'
                             }
                         elif closes[i] < asian_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = asian_high + ASIAN_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
@@ -271,14 +243,7 @@ def run_combined_backtest():
                 if london_high is not None and 'london' not in active_trades:
                     london_range = london_high - london_low
                     if LONDON_PARAMS['min_range_atr'] * atr <= london_range <= LONDON_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > london_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
                             entry = closes[i]
                             sl = london_low - LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
@@ -291,10 +256,6 @@ def run_combined_backtest():
                                 'range_type': 'london'
                             }
                         elif closes[i] < london_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = london_high + LONDON_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
@@ -312,15 +273,7 @@ def run_combined_backtest():
                 if ny_high is not None and 'ny' not in active_trades:
                     ny_range = ny_high - ny_low
                     if NY_PARAMS['min_range_atr'] * atr <= ny_range <= NY_PARAMS['max_range_atr'] * atr:
-                        # Get EMA values for trend filter
-                        ema_fast_val = df['ema_fast'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-                        ema_slow_val = df['ema_slow'].iloc[day_data.index.get_loc(times[i])] if USE_TREND_FILTER else None
-
                         if closes[i] > ny_high:
-                            # Check trend filter for LONG
-                            if USE_TREND_FILTER and not (ema_fast_val > ema_slow_val):
-                                continue  # Skip LONG if not in uptrend
-
                             entry = closes[i]
                             sl = ny_low - NY_PARAMS['stop_buffer_atr'] * atr
                             risk = entry - sl
@@ -333,10 +286,6 @@ def run_combined_backtest():
                                 'range_type': 'ny'
                             }
                         elif closes[i] < ny_low:
-                            # Check trend filter for SHORT
-                            if USE_TREND_FILTER and not (ema_fast_val < ema_slow_val):
-                                continue  # Skip SHORT if not in downtrend
-
                             entry = closes[i]
                             sl = ny_high + NY_PARAMS['stop_buffer_atr'] * atr
                             risk = sl - entry
@@ -349,12 +298,6 @@ def run_combined_backtest():
                                 'range_type': 'ny'
                             }
 
-        # Calculate daily drawdown at end of day
-        if day_start_balance > 0:
-            daily_dd = (day_start_balance - balance) / day_start_balance * 100
-            if daily_dd > max_daily_dd:
-                max_daily_dd = daily_dd
-
     # Close any remaining active trades
     for session_name, trade in active_trades.items():
         last_bar = df.iloc[-1]
@@ -363,7 +306,7 @@ def run_combined_backtest():
         else:
             pnl = (trade['entry'] - last_bar['close']) * trade['size']
 
-        balance += pnl
+        total_pnl += pnl
         trade['exit'] = last_bar['close']
         trade['pnl'] = pnl
         trade['status'] = 'eod'
@@ -371,6 +314,7 @@ def run_combined_backtest():
 
     # Calculate statistics
     trades_df = pd.DataFrame(trades)
+    trades_df['date'] = pd.to_datetime(trades_df['entry_time']).dt.date
 
     total_trades = len(trades_df)
     wins = trades_df[trades_df['pnl'] > 0]
@@ -382,21 +326,36 @@ def run_combined_backtest():
     total_loss = abs(losses['pnl'].sum()) if len(losses) > 0 else 0
     profit_factor = total_profit / total_loss if total_loss > 0 else 0
 
-    total_pnl = balance - 10000
+    # Calculate monthly statistics
+    trades_df['month'] = pd.to_datetime(trades_df['entry_time']).dt.to_period('M')
+    monthly_pnl = trades_df.groupby('month')['pnl'].sum()
+
+    total_months = len(monthly_pnl)
+    avg_monthly_pnl = monthly_pnl.mean()
+    median_monthly_pnl = monthly_pnl.median()
+    best_month = monthly_pnl.max()
+    worst_month = monthly_pnl.min()
+    positive_months = len(monthly_pnl[monthly_pnl > 0])
+    monthly_win_rate = positive_months / total_months if total_months > 0 else 0
 
     # Print results
     print("=" * 80)
-    print("=== COMBINED BACKTEST RESULTS ===")
+    print("=== NO COMPOUNDING RESULTS ===")
     print("=" * 80)
-    print(f"\nTotal Trades: {total_trades}")
+    print(f"\nTotal PnL: ${total_pnl:,.0f}")
+    print(f"Total Trades: {total_trades}")
     print(f"Win Rate: {win_rate:.1%}")
     print(f"Profit Factor: {profit_factor:.3f}")
-    print(f"Total PnL: ${total_pnl:,.0f}")
-    print(f"Final Balance: ${balance:,.0f}")
-    print(f"Max Drawdown: {max_dd:.2f}%")
-    print(f"Max Daily Drawdown: {max_daily_dd:.2f}%")
+    print(f"Max Drawdown: ${max_dd_dollars:,.0f} ({max_dd_pct:.2f}%)")
 
-    # Breakdown by session
+    print(f"\n=== MONTHLY STATISTICS ===")
+    print(f"Total Months: {total_months}")
+    print(f"Average Monthly PnL: ${avg_monthly_pnl:,.0f}")
+    print(f"Median Monthly PnL: ${median_monthly_pnl:,.0f}")
+    print(f"Best Month: ${best_month:,.0f}")
+    print(f"Worst Month: ${worst_month:,.0f}")
+    print(f"Positive Months: {positive_months}/{total_months} ({monthly_win_rate:.1%})")
+
     print(f"\n=== BREAKDOWN BY SESSION ===")
     for session in ['asian', 'london', 'ny']:
         session_trades = trades_df[trades_df['range_type'] == session]
@@ -406,24 +365,10 @@ def run_combined_backtest():
             session_wr = session_wins / len(session_trades)
             print(f"{session.upper()}: {len(session_trades)} trades, PnL=${session_pnl:,.0f}, WR={session_wr:.1%}")
 
-    # Check filters
-    print(f"\n=== FILTER CHECK ===")
-    passes_dd = max_dd < 10.0
-    passes_daily_dd = max_daily_dd < 5.0
-    passes_trades = total_trades >= 150
-
-    print(f"Max DD < 10%: {'✓ PASS' if passes_dd else '✗ FAIL'} ({max_dd:.2f}%)")
-    print(f"Max Daily DD < 5%: {'✓ PASS' if passes_daily_dd else '✗ FAIL'} ({max_daily_dd:.2f}%)")
-    print(f"Total Trades >= 150: {'✓ PASS' if passes_trades else '✗ FAIL'} ({total_trades})")
-
-    if passes_dd and passes_daily_dd and passes_trades:
-        print(f"\n{'='*80}")
-        print("✓ ALL FILTERS PASSED - STRATEGY IS VALID")
-        print(f"{'='*80}")
-    else:
-        print(f"\n{'='*80}")
-        print("✗ SOME FILTERS FAILED - NEED ADJUSTMENT")
-        print(f"{'='*80}")
+    print(f"\n=== COMPARISON WITH COMPOUNDING ===")
+    print(f"No Compounding: ${total_pnl:,.0f}")
+    print(f"With Compounding: $19,913")
+    print(f"Difference: ${19913 - total_pnl:,.0f}")
 
 if __name__ == "__main__":
-    run_combined_backtest()
+    run_no_compounding_backtest()
