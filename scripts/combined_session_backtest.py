@@ -45,12 +45,12 @@ NY_PARAMS = {
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 200  # Optimal balance: profit + safety
+RISK_PER_TRADE = 200  # Maximum profit variant
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
 
 # Step Trailing Stop (1R step)
-USE_STEP_TRAILING = True  # When price reaches 2R -> SL to 1R, 3R -> 2R, etc.
+USE_STEP_TRAILING = False  # Disabled for maximum profit
 
 # Breakout Confirmation Filter
 USE_CONFIRMATION = False  # Require 2-bar confirmation before entry
