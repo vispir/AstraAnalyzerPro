@@ -39,7 +39,7 @@ NY_PARAMS = {
     'min_range_atr': 0.5,
     'max_range_atr': 3.0,
     'trailing_start': 3.0,  # Optimized - improves PnL by $302
-    'trailing_distance': 0.3,
+    'trailing_distance': 0.1,  # Optimized - improves PnL by $191
     'range_hours': (13, 17),
     'breakout_hours': (18, 21)
 }
