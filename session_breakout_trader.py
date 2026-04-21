@@ -25,8 +25,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from astra_v2.data.dukascopy import load_timeframe
 from astra_v2.mt5.mt5_signal_writer import write_signal, get_active_signal
 from services.telegram_service import telegram_service
+import requests
 
 logger = logging.getLogger("SessionBreakout")
+
+# Supabase для чтения свечей
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "your-anon-key")
+SUPABASE_REST_URL = f"{SUPABASE_URL}/rest/v1"
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
 
 # ============================================================================
 # ПАРАМЕТРЫ СТРАТЕГИИ (из бэктеста v2.1)
@@ -69,6 +80,45 @@ NY_PARAMS = {
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=300):
+    """
+    Загрузить свечи из Supabase (синхронизированные из MT5)
+
+    Args:
+        symbol: Символ (XAUUSD)
+        timeframe: Таймфрейм (M15)
+        limit: Количество свечей
+
+    Returns:
+        pandas.DataFrame или None
+    """
+    try:
+        url = f"{SUPABASE_REST_URL}/mt5_candles?symbol=eq.{symbol}&timeframe=eq.{timeframe}&order=time.desc&limit={limit}"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not data or len(data) == 0:
+            logger.warning(f"No candles found in Supabase for {symbol} {timeframe}")
+            return None
+
+        # Преобразуем в DataFrame
+        df = pd.DataFrame(data)
+        df['time'] = pd.to_datetime(df['time'])
+        df = df.set_index('time')
+        df = df.sort_index()  # Сортируем по времени (от старых к новым)
+
+        # Оставляем только нужные колонки
+        df = df[['open', 'high', 'low', 'close', 'volume']]
+
+        logger.info(f"✓ Loaded {len(df)} candles from Supabase")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error loading candles from Supabase: {e}")
+        return None
 
 def calculate_atr(df, period=20):
     """Calculate ATR"""
@@ -124,28 +174,35 @@ def check_session_breakout():
 
         logger.info("✓ No active trades - checking for entry conditions")
 
-        # 2. Загрузить M15 данные (последние 3 дня для расчета ATR и определения range)
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=3)
+        # 2. Загрузить M15 данные
+        # Сначала пробуем из Supabase (свежие данные из MT5)
+        logger.info("Loading M15 data from Supabase (MT5 sync)...")
+        df = load_candles_from_supabase('XAUUSD', 'M15', 300)
 
-        logger.info(f"Loading M15 data from {start_date.date()} to {end_date.date()}")
+        # Если нет данных в Supabase - fallback на Dukascopy
+        if df is None or len(df) == 0:
+            logger.warning("No data in Supabase, falling back to Dukascopy...")
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=3)
 
-        try:
-            df = load_timeframe(
-                'M15',
-                start=start_date.strftime('%Y-%m-%d'),
-                end=end_date.strftime('%Y-%m-%d'),
-                symbol='XAUUSD'
-            )
-        except FileNotFoundError:
-            # Fallback для локального теста - используем последние доступные данные
-            logger.warning("Current data not available, using latest cached data for testing")
-            df = load_timeframe(
-                'M15',
-                start='2026-03-01',
-                end='2026-03-31',
-                symbol='XAUUSD'
-            )
+            logger.info(f"Loading M15 data from Dukascopy: {start_date.date()} to {end_date.date()}")
+
+            try:
+                df = load_timeframe(
+                    'M15',
+                    start=start_date.strftime('%Y-%m-%d'),
+                    end=end_date.strftime('%Y-%m-%d'),
+                    symbol='XAUUSD'
+                )
+            except FileNotFoundError:
+                # Fallback для локального теста - используем последние доступные данные
+                logger.warning("Current data not available, using latest cached data for testing")
+                df = load_timeframe(
+                    'M15',
+                    start='2026-03-01',
+                    end='2026-03-31',
+                    symbol='XAUUSD'
+                )
 
         if df is None or len(df) == 0:
             logger.error("Failed to load M15 data")

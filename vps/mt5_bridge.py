@@ -112,6 +112,57 @@ def get_active_signals():
         logger.error(f"Error getting active signals: {e}")
         return []
 
+def sync_candles_to_supabase():
+    """
+    Синхронизация свечей M15 из MT5 в Supabase
+    Отправляет последние 300 свечей M15 (3+ дня)
+    """
+    if TEST_MODE:
+        logger.debug("[TEST MODE] Skipping candle sync")
+        return True
+
+    if not MT5_AVAILABLE:
+        logger.error("MT5 not available for candle sync")
+        return False
+
+    try:
+        # Получаем последние 300 свечей M15 из MT5
+        candles = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M15, 0, 300)
+
+        if candles is None or len(candles) == 0:
+            logger.error("Failed to get candles from MT5")
+            return False
+
+        # Преобразуем в формат для Supabase
+        candles_data = []
+        for candle in candles:
+            candles_data.append({
+                'symbol': SYMBOL,
+                'timeframe': 'M15',
+                'time': datetime.fromtimestamp(candle['time'], tz=timezone.utc).isoformat(),
+                'open': float(candle['open']),
+                'high': float(candle['high']),
+                'low': float(candle['low']),
+                'close': float(candle['close']),
+                'volume': int(candle['tick_volume'])
+            })
+
+        # Отправляем в Supabase (upsert - обновляет существующие или создает новые)
+        url = f"{SUPABASE_REST_URL}/mt5_candles"
+        headers_upsert = HEADERS.copy()
+        headers_upsert['Prefer'] = 'resolution=merge-duplicates'
+
+        response = requests.post(url, headers=headers_upsert, json=candles_data)
+        response.raise_for_status()
+
+        logger.info(f"✓ Synced {len(candles_data)} M15 candles to Supabase")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error syncing candles: {e}")
+        return False
+
+
 # ============================================================================
 # MT5 FUNCTIONS
 # ============================================================================
@@ -265,9 +316,21 @@ def main():
 
     logger.info("✓ Bridge ready. Monitoring for signals...")
 
+    # Счетчик для синхронизации свечей (каждые 15 минут = 180 итераций по 5 сек)
+    candle_sync_counter = 0
+    CANDLE_SYNC_INTERVAL = 180  # 15 минут / 5 секунд = 180 итераций
+
     try:
         while True:
-            # 1. Проверяем новые сигналы
+            # 1. Синхронизация свечей (каждые 15 минут)
+            if candle_sync_counter >= CANDLE_SYNC_INTERVAL:
+                logger.info("Syncing candles from MT5 to Supabase...")
+                sync_candles_to_supabase()
+                candle_sync_counter = 0
+            else:
+                candle_sync_counter += 1
+
+            # 2. Проверяем новые сигналы
             new_signals = get_new_signals()
 
             for signal in new_signals:
