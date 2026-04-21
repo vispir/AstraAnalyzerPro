@@ -17,7 +17,15 @@ class TelegramService:
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL")
         self.use_polling = os.getenv("USE_TELEGRAM_POLLING", "false").lower() == "true"
-        
+
+        # Admin chat IDs для статусов (может быть несколько)
+        admin_ids = []
+        if os.getenv("TELEGRAM_ADMIN_CHAT_ID"):
+            admin_ids.append(os.getenv("TELEGRAM_ADMIN_CHAT_ID"))
+        if os.getenv("TELEGRAM_ADMIN_CHAT_ID_2"):
+            admin_ids.append(os.getenv("TELEGRAM_ADMIN_CHAT_ID_2"))
+        self.admin_chat_ids = admin_ids
+
         # Astra Signal Bot — только BUY/SELL (без анализа и WAIT)
         self.bot_signals_token = os.getenv("TELEGRAM_BOT_TOKEN_SIGNALS")
         self.bot_signals = None
@@ -26,19 +34,20 @@ class TelegramService:
             logger.info("✅ Astra Signal Bot (@AstraSignal_Bot) инициализирован")
         else:
             logger.info("📱 TELEGRAM_BOT_TOKEN_SIGNALS: не установлен (Signal Bot отключен)")
-        
+
         # Логируем конфигурацию
         logger.info(f"📱 TELEGRAM_BOT_TOKEN: {'установлен ✅' if self.bot_token else '❌ не установлен'}")
         logger.info(f"📱 Режим работы: {'POLLING' if self.use_polling else 'WEBHOOK'}")
-        
+        logger.info(f"📱 Admin Chat IDs: {len(self.admin_chat_ids)} админов")
+
         if not self.use_polling and self.webhook_url:
             logger.info(f"📱 TELEGRAM_WEBHOOK_URL: {self.webhook_url}")
-        
+
         if not self.bot_token:
             logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
             self.bot = None
             return
-            
+
         # Инициализация бота
         self.bot = telebot.TeleBot(self.bot_token, threaded=False)
         # Ожидание ввода диапазона (chat_id -> True)
@@ -1112,11 +1121,13 @@ class TelegramService:
         Args:
             status_data: dict с информацией о проверке
         """
-        if not self.bot:
+        if not self.bot or not self.admin_chat_ids:
             return
 
         try:
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            current_price = status_data.get('current_price', 'N/A')
+            current_session = status_data.get('current_session', 'None')
 
             # Краткий статус
             if status_data.get('active_trade'):
@@ -1125,7 +1136,8 @@ class TelegramService:
                     f"<i>{timestamp}</i>\n\n"
                     f"✅ Active trade in progress\n"
                     f"Session: {status_data.get('session', 'N/A').upper()}\n"
-                    f"Direction: {status_data.get('direction', 'N/A')}"
+                    f"Direction: {status_data.get('direction', 'N/A')}\n"
+                    f"Current Price: ${current_price}"
                 )
             elif status_data.get('signal_generated'):
                 message = (
@@ -1137,19 +1149,20 @@ class TelegramService:
                 )
             else:
                 message = (
-                    f"<b>📊 Session Breakout Status</b>\n"
+                    f"<b>📊 Session Breakout Monitor</b>\n"
                     f"<i>{timestamp}</i>\n\n"
-                    f"⏳ Monitoring sessions...\n"
-                    f"No entry conditions met"
+                    f"💰 Price: ${current_price}\n"
+                    f"🕐 Session: {current_session.upper() if current_session != 'None' else 'Market Closed'}\n"
+                    f"⏳ No entry conditions met"
                 )
 
-            # Отправляем только админам (не спамим всех)
-            subscribers = self._get_all_subscribers()
-            for chat_id in subscribers[:1]:  # Только первому (админу)
-                try:
-                    self.bot.send_message(chat_id, message, parse_mode='HTML')
-                except Exception as e:
-                    logger.error(f"Ошибка отправки статуса в {chat_id}: {e}")
+            # Отправляем всем админам
+            for chat_id in self.admin_chat_ids:
+                if chat_id:
+                    try:
+                        self.bot.send_message(chat_id, message, parse_mode='HTML')
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки статуса в {chat_id}: {e}")
 
         except Exception as e:
             logger.error(f"Ошибка send_session_breakout_status: {e}")

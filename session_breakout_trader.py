@@ -159,11 +159,16 @@ def check_session_breakout():
             logger.info(f"✓ Active trade exists (ID: {active['id']}, status: {active['status']})")
             logger.info("Skipping new signal generation")
 
+            # Получаем текущую цену
+            df = load_candles_from_supabase('XAUUSD', 'M15', 1)
+            current_price = df['close'].iloc[-1] if df is not None and len(df) > 0 else 0
+
             # Отправляем статус в основной бот
             telegram_service.send_session_breakout_status({
                 'active_trade': True,
                 'session': active.get('session', 'N/A'),
-                'direction': active.get('direction', 'N/A')
+                'direction': active.get('direction', 'N/A'),
+                'current_price': f"{current_price:.2f}"
             })
 
             return {
@@ -266,13 +271,32 @@ def check_session_breakout():
 
         logger.info("✓ No entry conditions met for any session")
 
-        # Отправляем статус в основной бот (только каждый час, чтобы не спамить)
-        current_minute = datetime.now(timezone.utc).minute
-        if current_minute < 15:  # Отправляем только в первые 15 минут часа
-            telegram_service.send_session_breakout_status({
-                'active_trade': False,
-                'signal_generated': False
-            })
+        # Отправляем статус в основной бот каждые 15 минут
+        current_price = df['close'].iloc[-1] if len(df) > 0 else 0
+        current_hour = datetime.now(timezone.utc).hour
+
+        # Определяем текущую сессию
+        if 0 <= current_hour < 7:
+            current_session = "Asian Range"
+        elif 7 <= current_hour < 10:
+            current_session = "Asian Breakout"
+        elif 10 <= current_hour < 13:
+            current_session = "London Range"
+        elif 13 <= current_hour < 16:
+            current_session = "London Breakout"
+        elif 16 <= current_hour < 18:
+            current_session = "NY Range"
+        elif 18 <= current_hour < 21:
+            current_session = "NY Breakout"
+        else:
+            current_session = "None"
+
+        telegram_service.send_session_breakout_status({
+            'active_trade': False,
+            'signal_generated': False,
+            'current_price': f"{current_price:.2f}",
+            'current_session': current_session
+        })
 
         return {
             "success": True,
