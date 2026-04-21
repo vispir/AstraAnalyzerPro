@@ -1152,7 +1152,7 @@ class TelegramService:
                     f"<b>📊 Session Breakout Monitor</b>\n"
                     f"<i>{timestamp}</i>\n\n"
                     f"💰 Price: ${current_price}\n"
-                    f"🕐 Session: {current_session.upper() if current_session != 'None' else 'Market Closed'}\n"
+                    f"🕐 Session: {current_session.upper() if current_session != 'None' else 'Pause / No Active Session'}\n"
                     f"⏳ No entry conditions met"
                 )
 
