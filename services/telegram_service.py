@@ -1098,18 +1098,19 @@ class TelegramService:
                 f"<i>Strategy: Session Range Breakout v2.1</i>"
             )
 
-            # Отправляем всем подписчикам Signal Bot
-            subscribers = self._get_all_subscribers()
+            # Отправляем всем кто нажал /start в Signal Bot
+            # Для простоты отправляем админам (можно расширить позже)
             sent_count = 0
 
-            for chat_id in subscribers:
-                try:
-                    self.bot_signals.send_message(chat_id, message, parse_mode='HTML')
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"Ошибка отправки сигнала в {chat_id}: {e}")
+            for chat_id in self.admin_chat_ids:
+                if chat_id:
+                    try:
+                        self.bot_signals.send_message(chat_id, message, parse_mode='HTML')
+                        sent_count += 1
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки сигнала в {chat_id}: {e}")
 
-            logger.info(f"✅ Signal отправлен {sent_count} подписчикам")
+            logger.info(f"Signal sent to {sent_count} subscribers")
 
         except Exception as e:
             logger.error(f"Ошибка send_session_breakout_signal: {e}")
