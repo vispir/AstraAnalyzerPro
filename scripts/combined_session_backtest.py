@@ -45,7 +45,7 @@ NY_PARAMS = {
 }
 
 ATR_PERIOD = 20
-RISK_PER_TRADE = 165  # SAFE for prop trading - worst case 6 losses = $990 (9.9% DD)
+RISK_PER_TRADE = 158  # КОНСЕРВАТИВНЫЙ для баланса $9,950 - worst case 10 losses = $1,580 (15.88% DD)
 START_DATE = "2020-01-01"
 END_DATE = "2026-04-18"
 
@@ -278,6 +278,7 @@ def run_combined_backtest():
                         exit_trade = True
 
                 if exit_trade:
+                    trade['exit_time'] = times[i]
                     trades.append(trade)
                     del active_trades[session_name]
 
@@ -609,6 +610,7 @@ def run_combined_backtest():
 
         balance += pnl
         trade['exit'] = last_bar['close']
+        trade['exit_time'] = df.index[-1]
         trade['pnl'] = pnl
         trade['status'] = 'eod'
         trades.append(trade)
@@ -628,6 +630,68 @@ def run_combined_backtest():
 
     total_pnl = balance - 10000
 
+    # Calculate trade duration statistics
+    trades_df['duration_days'] = (trades_df['exit_time'] - trades_df['entry_time']).dt.total_seconds() / 86400
+    trades_df['duration_category'] = trades_df['duration_days'].apply(
+        lambda x: 'same_day' if x < 1 else ('1_day' if x < 2 else '2+_days')
+    )
+
+    avg_duration = trades_df['duration_days'].mean()
+    median_duration = trades_df['duration_days'].median()
+    max_duration = trades_df['duration_days'].max()
+
+    same_day_count = len(trades_df[trades_df['duration_category'] == 'same_day'])
+    one_day_count = len(trades_df[trades_df['duration_category'] == '1_day'])
+    two_plus_days_count = len(trades_df[trades_df['duration_category'] == '2+_days'])
+
+    # Calculate swap costs
+    # XAUUSD LONG swap: -$3 per lot per day (conservative estimate)
+    # XAUUSD SHORT swap: +$1.5 per lot per day (conservative estimate)
+    SWAP_LONG_PER_LOT = -3.0
+    SWAP_SHORT_PER_LOT = 1.5
+
+    def calculate_swap(row):
+        nights = int(row['duration_days'])  # Full nights held
+        lot_size = row['size'] / 100  # Convert to standard lots (assuming size is in oz, 100oz = 1 lot)
+
+        if nights == 0:
+            return 0.0
+
+        # Wednesday has triple swap (for weekend)
+        entry_weekday = row['entry_time'].weekday()
+        swap_cost = 0.0
+
+        for day in range(nights):
+            current_weekday = (entry_weekday + day) % 7
+            multiplier = 3 if current_weekday == 2 else 1  # Wednesday = 2
+
+            if row['direction'] == 'LONG':
+                swap_cost += SWAP_LONG_PER_LOT * lot_size * multiplier
+            else:
+                swap_cost += SWAP_SHORT_PER_LOT * lot_size * multiplier
+
+        return swap_cost
+
+    trades_df['swap_cost'] = trades_df.apply(calculate_swap, axis=1)
+    trades_df['pnl_after_swap'] = trades_df['pnl'] + trades_df['swap_cost']
+
+    total_swap_cost = trades_df['swap_cost'].sum()
+    total_pnl_after_swap = trades_df['pnl_after_swap'].sum()
+    balance_after_swap = 10000 + total_pnl_after_swap
+
+    # Recalculate max DD with swaps
+    balance_with_swap = 10000
+    peak_balance_with_swap = 10000
+    max_dd_with_swap = 0
+
+    for idx, trade in trades_df.iterrows():
+        balance_with_swap += trade['pnl_after_swap']
+        if balance_with_swap > peak_balance_with_swap:
+            peak_balance_with_swap = balance_with_swap
+        dd = (peak_balance_with_swap - balance_with_swap) / peak_balance_with_swap * 100
+        if dd > max_dd_with_swap:
+            max_dd_with_swap = dd
+
     # Print results
     print("=" * 80)
     print("=== COMBINED BACKTEST RESULTS ===")
@@ -639,6 +703,37 @@ def run_combined_backtest():
     print(f"Final Balance: ${balance:,.0f}")
     print(f"Max Drawdown: {max_dd:.2f}%")
     print(f"Max Daily Drawdown: {max_daily_dd:.2f}%")
+
+    # Trade duration statistics
+    print(f"\n=== TRADE DURATION STATISTICS ===")
+    print(f"Average duration: {avg_duration:.2f} days")
+    print(f"Median duration: {median_duration:.2f} days")
+    print(f"Maximum duration: {max_duration:.2f} days")
+    print(f"\nDuration distribution:")
+    print(f"  Same day (< 1 day): {same_day_count} trades ({same_day_count/total_trades:.1%})")
+    print(f"  1 day (1-2 days): {one_day_count} trades ({one_day_count/total_trades:.1%})")
+    print(f"  2+ days: {two_plus_days_count} trades ({two_plus_days_count/total_trades:.1%})")
+
+    # Swap impact analysis
+    print(f"\n=== SWAP IMPACT ANALYSIS ===")
+    print(f"Total swap cost: ${total_swap_cost:,.2f}")
+    print(f"PnL after swaps: ${total_pnl_after_swap:,.2f}")
+    print(f"Final balance after swaps: ${balance_after_swap:,.0f}")
+    print(f"Max DD with swaps: {max_dd_with_swap:.2f}%")
+    print(f"Swap impact on PnL: {(total_swap_cost/total_pnl)*100:.2f}%")
+
+    # Check if swaps kill the strategy
+    passes_dd_with_swap = max_dd_with_swap < 10.0
+    swap_kills_strategy = not passes_dd_with_swap and passes_dd
+
+    if swap_kills_strategy:
+        print(f"\nWARNING: Swaps push DD over 10% limit!")
+        print(f"  Without swaps: {max_dd:.2f}%")
+        print(f"  With swaps: {max_dd_with_swap:.2f}%")
+    elif total_pnl_after_swap < 0:
+        print(f"\nWARNING: Strategy becomes unprofitable with swaps!")
+    else:
+        print(f"\nSwaps are manageable - strategy remains profitable")
 
     # Breakdown by session
     print(f"\n=== BREAKDOWN BY SESSION ===")
