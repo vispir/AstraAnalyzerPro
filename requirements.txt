@@ -12,12 +12,10 @@ google-genai>=1.0.0          # new Gemini SDK (replaces google-generativeai)
 # google-generativeai>=0.7.0  # legacy, kept as fallback if google-genai unavailable
 
 # ── Storage ───────────────────────────────────────────────────────────────────
-supabase>=2.4.0
 python-dotenv>=1.0.0
 
 # ── Notifications ─────────────────────────────────────────────────────────────
-# Telegram uses stdlib urllib — no extra dep needed for basic alerts
-# pyTelegramBotAPI>=4.14.0   # only if switching to async bot commands
+pyTelegramBotAPI>=4.14.0
 
 # ── Full-auto trading (Windows VPS only) ─────────────────────────────────────
 # MetaTrader5>=5.0.45

@@ -1038,8 +1038,175 @@ class TelegramService:
             logger.info(f"   Новый:  {self.webhook_url}")
         
         logger.info(f"   Режим: {'POLLING' if self.use_polling else 'WEBHOOK'}")
-        
+
         return True
+
+    # ========================================================================
+    # SESSION BREAKOUT v2.1 - УВЕДОМЛЕНИЯ
+    # ========================================================================
+
+    def send_session_breakout_signal(self, signal_data, test_mode=False):
+        """
+        Отправка сигнала Session Breakout в Signal Bot
+
+        Args:
+            signal_data: dict с данными сигнала из Supabase
+            test_mode: bool - если True, добавляет метку [TEST MODE]
+        """
+        if not self.bot_signals:
+            logger.warning("Signal Bot не инициализирован")
+            return
+
+        try:
+            direction = signal_data.get('direction', 'LONG')
+            entry = signal_data.get('entry', 0)
+            sl = signal_data.get('sl', 0)
+            tp = signal_data.get('tp', 0)
+            session = signal_data.get('session', 'unknown').upper()
+            risk_usd = signal_data.get('risk_usd', 0)
+
+            # Рассчитываем R:R
+            risk_points = abs(entry - sl)
+            reward_points = abs(tp - entry)
+            rr_ratio = reward_points / risk_points if risk_points > 0 else 0
+
+            # Эмодзи для направления
+            dir_emoji = "🟢" if direction == "LONG" else "🔴"
+
+            # Метка тестового режима
+            mode_label = "⚠️ [TEST MODE] " if test_mode else ""
+
+            message = (
+                f"{mode_label}<b>{dir_emoji} {direction} SIGNAL</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>Session:</b> {session}\n"
+                f"<b>Entry:</b> {entry:.2f}\n"
+                f"<b>Stop Loss:</b> {sl:.2f}\n"
+                f"<b>Take Profit:</b> {tp:.2f}\n"
+                f"<b>Risk:</b> ${risk_usd:.0f}\n"
+                f"<b>R:R:</b> 1:{rr_ratio:.1f}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Strategy: Session Range Breakout v2.1</i>"
+            )
+
+            # Отправляем всем подписчикам Signal Bot
+            subscribers = self._get_all_subscribers()
+            sent_count = 0
+
+            for chat_id in subscribers:
+                try:
+                    self.bot_signals.send_message(chat_id, message, parse_mode='HTML')
+                    sent_count += 1
+                except Exception as e:
+                    logger.error(f"Ошибка отправки сигнала в {chat_id}: {e}")
+
+            logger.info(f"✅ Signal отправлен {sent_count} подписчикам")
+
+        except Exception as e:
+            logger.error(f"Ошибка send_session_breakout_signal: {e}")
+
+    def send_session_breakout_status(self, status_data):
+        """
+        Отправка статуса проверки Session Breakout в основной бот (каждые 15 мин)
+
+        Args:
+            status_data: dict с информацией о проверке
+        """
+        if not self.bot:
+            return
+
+        try:
+            timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+            # Краткий статус
+            if status_data.get('active_trade'):
+                message = (
+                    f"<b>📊 Session Breakout Status</b>\n"
+                    f"<i>{timestamp}</i>\n\n"
+                    f"✅ Active trade in progress\n"
+                    f"Session: {status_data.get('session', 'N/A').upper()}\n"
+                    f"Direction: {status_data.get('direction', 'N/A')}"
+                )
+            elif status_data.get('signal_generated'):
+                message = (
+                    f"<b>📊 Session Breakout Status</b>\n"
+                    f"<i>{timestamp}</i>\n\n"
+                    f"🎯 New signal generated!\n"
+                    f"Session: {status_data.get('session', 'N/A').upper()}\n"
+                    f"Check Signal Bot for details"
+                )
+            else:
+                message = (
+                    f"<b>📊 Session Breakout Status</b>\n"
+                    f"<i>{timestamp}</i>\n\n"
+                    f"⏳ Monitoring sessions...\n"
+                    f"No entry conditions met"
+                )
+
+            # Отправляем только админам (не спамим всех)
+            subscribers = self._get_all_subscribers()
+            for chat_id in subscribers[:1]:  # Только первому (админу)
+                try:
+                    self.bot.send_message(chat_id, message, parse_mode='HTML')
+                except Exception as e:
+                    logger.error(f"Ошибка отправки статуса в {chat_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Ошибка send_session_breakout_status: {e}")
+
+    def send_trade_update(self, trade_data, test_mode=False):
+        """
+        Отправка обновления по сделке (открытие, закрытие, trailing)
+
+        Args:
+            trade_data: dict с данными сделки
+            test_mode: bool - если True, добавляет метку [TEST MODE]
+        """
+        if not self.bot_signals:
+            return
+
+        try:
+            update_type = trade_data.get('type', 'unknown')  # 'opened', 'closed', 'trailing'
+            mode_label = "⚠️ [TEST] " if test_mode else ""
+
+            if update_type == 'opened':
+                message = (
+                    f"{mode_label}<b>✅ Trade Opened</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Ticket: #{trade_data.get('ticket', 'N/A')}\n"
+                    f"Entry: {trade_data.get('entry', 0):.2f}\n"
+                    f"Lot: {trade_data.get('lot', 0):.2f}"
+                )
+            elif update_type == 'closed':
+                pnl = trade_data.get('pnl', 0)
+                pnl_emoji = "💰" if pnl > 0 else "❌"
+                message = (
+                    f"{mode_label}<b>{pnl_emoji} Trade Closed</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Ticket: #{trade_data.get('ticket', 'N/A')}\n"
+                    f"Exit: {trade_data.get('exit', 0):.2f}\n"
+                    f"PnL: ${pnl:.2f}"
+                )
+            elif update_type == 'trailing':
+                message = (
+                    f"{mode_label}<b>📈 Trailing Stop Updated</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"New SL: {trade_data.get('new_sl', 0):.2f}\n"
+                    f"Profit: +{trade_data.get('profit_r', 0):.1f}R"
+                )
+            else:
+                return
+
+            subscribers = self._get_all_subscribers()
+            for chat_id in subscribers:
+                try:
+                    self.bot_signals.send_message(chat_id, message, parse_mode='HTML')
+                except Exception as e:
+                    logger.error(f"Ошибка отправки обновления в {chat_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Ошибка send_trade_update: {e}")
+
 
 
 # Singleton instance

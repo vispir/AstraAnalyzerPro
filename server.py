@@ -36,15 +36,18 @@ from services.telegram_service import telegram_service
 from services.db_service import db_service
 from services.oanda_service import oanda_service
 
-# --- ИСПРАВЛЕННЫЙ БЛОК ИМПОРТА WATCHER (Файл в корне) ---
-try:
-    # Так как файл в корне, импортируем напрямую
-    from watcher import start_watcher, run_analysis_cycle
-    logger.info("✅ Watcher successfully imported from root directory")
-except ImportError as e:
-    start_watcher = None
-    run_analysis_cycle = None
-    logger.error(f"❌ CRITICAL: watcher.py not found in root! Error: {e}")
+# --- СТАРАЯ ЛОГИКА WATCHER - ОТКЛЮЧЕНА ---
+# try:
+#     from watcher import start_watcher, run_analysis_cycle
+#     logger.info("✅ Watcher successfully imported from root directory")
+# except ImportError as e:
+#     start_watcher = None
+#     run_analysis_cycle = None
+#     logger.error(f"❌ CRITICAL: watcher.py not found in root! Error: {e}")
+
+start_watcher = None
+run_analysis_cycle = None
+logger.info("ℹ️ Old watcher logic disabled - using Session Breakout v2.1")
 
 # Импорт роутов
 from routes.market_routes import market_bp
@@ -76,53 +79,16 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
-# --- ЭНДПОИНТЫ ДЛЯ CRON ---
-@app.route('/api/cron/watcher', methods=['GET'])
-def trigger_watcher():
-    auth_header = request.headers.get('Authorization')
-    cron_secret = os.getenv('CRON_SECRET')
-    
-    if cron_secret and auth_header != f"Bearer {cron_secret}":
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
-    if run_analysis_cycle:
-        logger.info("⏰ Cron Trigger: Starting analysis cycle (Watcher)...")
-        # Запускаем анализ в отдельном потоке с безопасной обёрткой, чтобы не уронить процесс при ошибке
-        def run_safe():
-            try:
-                run_analysis_cycle()
-            except Exception as e:
-                logger.error(f"❌ Background watcher error: {e}", exc_info=True)
-        thread = threading.Thread(target=run_safe, daemon=True)
-        thread.start()
-        return jsonify({"success": True, "message": "Analysis started in background"}), 200
-    
-    return jsonify({"success": False, "error": "Watcher service not available"}), 500
+# --- СТАРЫЕ CRON ENDPOINTS - ОТКЛЮЧЕНЫ ---
+# @app.route('/api/cron/watcher', methods=['GET'])
+# def trigger_watcher():
+#     return jsonify({"success": False, "error": "Watcher disabled - using Session Breakout v2.1"}), 503
 
+# @app.route('/api/cron/manager', methods=['GET'])
+# def trigger_manager():
+#     return jsonify({"success": False, "error": "Manager disabled - using Session Breakout v2.1"}), 503
 
-@app.route('/api/cron/manager', methods=['GET'])
-def trigger_manager():
-    """
-    Cron endpoint для Trade Manager (управление активной сделкой).
-    Рекомендуется вызывать чаще, чем watcher (например, раз в 1–2 минуты).
-    """
-    auth_header = request.headers.get('Authorization')
-    cron_secret = os.getenv('CRON_SECRET')
-
-    if cron_secret and auth_header != f"Bearer {cron_secret}":
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-
-    if run_analysis_cycle:
-        logger.info("⏰ Cron Trigger: Starting trade manager cycle...")
-        try:
-            from watcher import run_trade_manager_cycle
-            run_trade_manager_cycle()
-        except Exception as e:
-            logger.error(f"❌ Error in trade manager cycle: {e}", exc_info=True)
-            return jsonify({"success": False, "error": str(e)}), 500
-        return jsonify({"success": True, "message": "Trade manager cycle complete"}), 200
-
-    return jsonify({"success": False, "error": "Watcher/Manager service not available"}), 500
+# --- НОВЫЙ CRON ENDPOINT - SESSION BREAKOUT v2.1 ---
 
 @app.route('/api/cron/session_breakout', methods=['GET'])
 def trigger_session_breakout():
@@ -232,16 +198,19 @@ app.register_blueprint(auth_bp, url_prefix='/api/auth')
 def index():
     return jsonify({
         "name": "Astra Analyzer Pro API",
-        "version": "2.1.0",
+        "version": "2.1.0 - Session Breakout",
         "status": "running",
         "symbol": SYMBOL,
+        "strategy": "Session Range Breakout (Asian/London/NY)",
         "endpoints": {
             "market": "/api/market/candles",
             "analysis": "/api/analysis/calculate",
-            "cron_watcher": "/api/cron/watcher",
-            "cron_manager": "/api/cron/manager",
             "cron_session_breakout": "/api/cron/session_breakout",
             "tg_webhook": "/api/tg/webhook"
+        },
+        "deprecated": {
+            "cron_watcher": "disabled - replaced by session_breakout",
+            "cron_manager": "disabled - replaced by session_breakout"
         }
     })
 

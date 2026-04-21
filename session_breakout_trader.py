@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from astra_v2.data.dukascopy import load_timeframe
 from astra_v2.mt5.mt5_signal_writer import write_signal, get_active_signal
+from services.telegram_service import telegram_service
 
 logger = logging.getLogger("SessionBreakout")
 
@@ -107,6 +108,14 @@ def check_session_breakout():
         if active:
             logger.info(f"✓ Active trade exists (ID: {active['id']}, status: {active['status']})")
             logger.info("Skipping new signal generation")
+
+            # Отправляем статус в основной бот
+            telegram_service.send_session_breakout_status({
+                'active_trade': True,
+                'session': active.get('session', 'N/A'),
+                'direction': active.get('direction', 'N/A')
+            })
+
             return {
                 "success": True,
                 "message": "Active trade exists",
@@ -199,6 +208,15 @@ def check_session_breakout():
                 return signal
 
         logger.info("✓ No entry conditions met for any session")
+
+        # Отправляем статус в основной бот (только каждый час, чтобы не спамить)
+        current_minute = datetime.now(timezone.utc).minute
+        if current_minute < 15:  # Отправляем только в первые 15 минут часа
+            telegram_service.send_session_breakout_status({
+                'active_trade': False,
+                'signal_generated': False
+            })
+
         return {
             "success": True,
             "message": "No entry conditions met"
@@ -309,6 +327,17 @@ def check_session_entry(session_name, params, today_data, df_h4, current_hour):
 
             if signal:
                 logger.info(f"✓✓✓ SIGNAL WRITTEN: LONG {session_name.upper()} @ {entry:.2f}")
+
+                # Отправляем сигнал в Signal Bot
+                telegram_service.send_session_breakout_signal(signal, test_mode=False)
+
+                # Отправляем статус в основной бот
+                telegram_service.send_session_breakout_status({
+                    'signal_generated': True,
+                    'session': session_name,
+                    'direction': 'LONG'
+                })
+
                 return {
                     "success": True,
                     "message": f"Signal generated for {session_name}",
