@@ -1,17 +1,26 @@
 """
 MT5 Signal Writer - Supabase Integration
 Writes trading signals from backtest strategy to Supabase for MT5 EA consumption
+Uses direct HTTP requests to avoid supabase-py dependency issues
 """
 import os
+import requests
 from datetime import datetime
-from supabase import create_client, Client
 
 # Supabase credentials (set as environment variables)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "your-anon-key")
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# REST API endpoint
+SUPABASE_REST_URL = f"{SUPABASE_URL}/rest/v1"
+
+# Headers for all requests
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
 def get_active_signal():
     """
@@ -19,9 +28,13 @@ def get_active_signal():
     Returns: dict or None
     """
     try:
-        response = supabase.table('mt5_signals').select('*').eq('status', 'active').execute()
-        if response.data and len(response.data) > 0:
-            return response.data[0]
+        url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&select=*"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+
+        data = response.json()
+        if data and len(data) > 0:
+            return data[0]
         return None
     except Exception as e:
         print(f"Error checking active signal: {e}")
@@ -60,10 +73,13 @@ def write_signal(direction, entry, sl, tp, session, risk_usd=165):
             'created_at': datetime.utcnow().isoformat()
         }
 
-        response = supabase.table('mt5_signals').insert(signal_data).execute()
+        url = f"{SUPABASE_REST_URL}/mt5_signals"
+        response = requests.post(url, headers=HEADERS, json=signal_data)
+        response.raise_for_status()
 
-        if response.data and len(response.data) > 0:
-            signal = response.data[0]
+        data = response.json()
+        if data and len(data) > 0:
+            signal = data[0]
             print(f"Signal written: {direction} {session.upper()} @ {entry:.2f}, SL: {sl:.2f}, TP: {tp:.2f}, Risk: ${risk_usd}")
             return signal
         else:
@@ -91,9 +107,12 @@ def update_signal_status(signal_id, status, exit_price=None, pnl=None):
         if pnl is not None:
             update_data['pnl'] = float(pnl)
 
-        response = supabase.table('mt5_signals').update(update_data).eq('id', signal_id).execute()
+        url = f"{SUPABASE_REST_URL}/mt5_signals?id=eq.{signal_id}"
+        response = requests.patch(url, headers=HEADERS, json=update_data)
+        response.raise_for_status()
+
         print(f"Signal {signal_id} updated to status: {status}")
-        return response.data
+        return response.json()
     except Exception as e:
         print(f"Error updating signal status: {e}")
         return None
@@ -101,8 +120,10 @@ def update_signal_status(signal_id, status, exit_price=None, pnl=None):
 def get_recent_signals(limit=10):
     """Get recent signals for monitoring"""
     try:
-        response = supabase.table('mt5_signals').select('*').order('created_at', desc=True).limit(limit).execute()
-        return response.data
+        url = f"{SUPABASE_REST_URL}/mt5_signals?select=*&order=created_at.desc&limit={limit}"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         print(f"Error fetching recent signals: {e}")
         return []

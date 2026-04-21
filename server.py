@@ -108,10 +108,10 @@ def trigger_manager():
     """
     auth_header = request.headers.get('Authorization')
     cron_secret = os.getenv('CRON_SECRET')
-    
+
     if cron_secret and auth_header != f"Bearer {cron_secret}":
         return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
+
     if run_analysis_cycle:
         logger.info("⏰ Cron Trigger: Starting trade manager cycle...")
         try:
@@ -121,8 +121,29 @@ def trigger_manager():
             logger.error(f"❌ Error in trade manager cycle: {e}", exc_info=True)
             return jsonify({"success": False, "error": str(e)}), 500
         return jsonify({"success": True, "message": "Trade manager cycle complete"}), 200
-    
+
     return jsonify({"success": False, "error": "Watcher/Manager service not available"}), 500
+
+@app.route('/api/cron/session_breakout', methods=['GET'])
+def trigger_session_breakout():
+    """
+    Cron endpoint для Session Breakout Trader (новая стратегия MT5).
+    Вызывается каждые 15 минут для проверки условий входа.
+    """
+    auth_header = request.headers.get('Authorization')
+    cron_secret = os.getenv('CRON_SECRET')
+
+    if cron_secret and auth_header != f"Bearer {cron_secret}":
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    logger.info("⏰ Cron Trigger: Starting Session Breakout check...")
+    try:
+        from session_breakout_trader import check_session_breakout
+        result = check_session_breakout()
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"❌ Error in session breakout: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # --- TELEGRAM WEBHOOK ENDPOINT ---
 @app.route('/api/tg/webhook', methods=['POST', 'GET'])
@@ -217,8 +238,9 @@ def index():
         "endpoints": {
             "market": "/api/market/candles",
             "analysis": "/api/analysis/calculate",
-            "cron_trigger": "/api/cron/watcher",
-            "manager_cron": "/api/cron/manager",
+            "cron_watcher": "/api/cron/watcher",
+            "cron_manager": "/api/cron/manager",
+            "cron_session_breakout": "/api/cron/session_breakout",
             "tg_webhook": "/api/tg/webhook"
         }
     })
