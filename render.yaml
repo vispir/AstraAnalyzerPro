@@ -1,0 +1,20 @@
+services:
+  - type: cron
+    name: astra-session-breakout
+    env: python
+    schedule: "1,16,31,46 * * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python session_breakout_trader.py"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_SIGNAL_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID_2
+        sync: false

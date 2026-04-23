@@ -81,14 +81,14 @@ NY_PARAMS = {
 # HELPER FUNCTIONS
 # ============================================================================
 
-def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=300):
+def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=500):
     """
     Загрузить свечи из Supabase (синхронизированные из MT5)
 
     Args:
         symbol: Символ (XAUUSD)
         timeframe: Таймфрейм (M15)
-        limit: Количество свечей
+        limit: Количество свечей (500 = ~31 H4 баров для EMA20)
 
     Returns:
         pandas.DataFrame или None
@@ -182,7 +182,7 @@ def check_session_breakout():
         # 2. Загрузить M15 данные
         # Сначала пробуем из Supabase (свежие данные из MT5)
         logger.info("Loading M15 data from Supabase (MT5 sync)...")
-        df = load_candles_from_supabase('XAUUSD', 'M15', 300)
+        df = load_candles_from_supabase('XAUUSD', 'M15', 500)
 
         # Если нет данных в Supabase - fallback на Dukascopy
         if df is None or len(df) == 0:
