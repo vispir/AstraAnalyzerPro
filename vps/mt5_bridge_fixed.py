@@ -55,6 +55,7 @@ def write_signals_to_file(signals):
             data.append({
                 'id': s['id'],
                 'direction': s['direction'],
+                'signal_type': s.get('signal_type', 'session_breakout'),
                 'entry': float(s['entry']),
                 'sl': float(s['sl']),
                 'tp': float(s['tp']),
@@ -62,7 +63,7 @@ def write_signals_to_file(signals):
             })
         with open(SIGNALS_FILE, 'w') as f:
             json.dump(data, f)
-        logger.info(f"Wrote {len(data)} signals")
+        logger.info(f"Wrote {len(data)} signals to file")
         return True
     except Exception as e:
         logger.error(f"Error writing signals: {e}")
