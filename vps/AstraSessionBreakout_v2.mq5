@@ -191,16 +191,18 @@ void UpdateTrailingStops()
       double entry = PositionGetDouble(POSITION_PRICE_OPEN);
       double currentSL = PositionGetDouble(POSITION_SL);
       double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
-      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+      if(posType == POSITION_TYPE_BUY)
       {
+         // LONG: SL below entry, profit when price goes UP
          double risk = entry - currentSL;
          if(risk <= 0) continue;
 
          double profitR = (currentPrice - entry) / risk;
          double newSL = currentSL;
 
-         // Step trailing: 2R→1R, 3R→2R, 4R→3R, 5R→4R
+         // Step trailing: 2R->1R, 3R->2R, 4R->3R, 5R->4R
          if(profitR >= 5.0)
             newSL = MathMax(newSL, entry + 4.0 * risk);
          else if(profitR >= 4.0)
@@ -223,7 +225,43 @@ void UpdateTrailingStops()
 
             if(OrderSend(request, result))
             {
-               Print("Trailing stop updated: ", ticket, " New SL: ", newSL, " (", profitR, "R)");
+               Print("LONG Trailing stop updated: ", ticket, " New SL: ", newSL, " (", profitR, "R)");
+            }
+         }
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         // SHORT: SL above entry, profit when price goes DOWN
+         double risk = currentSL - entry;
+         if(risk <= 0) continue;
+
+         double profitR = (entry - currentPrice) / risk;
+         double newSL = currentSL;
+
+         // Step trailing: 2R->1R, 3R->2R, 4R->3R, 5R->4R (inverse)
+         if(profitR >= 5.0)
+            newSL = MathMin(newSL, entry - 4.0 * risk);
+         else if(profitR >= 4.0)
+            newSL = MathMin(newSL, entry - 3.0 * risk);
+         else if(profitR >= 3.0)
+            newSL = MathMin(newSL, entry - 2.0 * risk);
+         else if(profitR >= 2.0)
+            newSL = MathMin(newSL, entry - 1.0 * risk);
+
+         if(newSL < currentSL - _Point * 10)
+         {
+            MqlTradeRequest request = {};
+            MqlTradeResult result = {};
+
+            request.action = TRADE_ACTION_SLTP;
+            request.position = ticket;
+            request.symbol = _Symbol;
+            request.sl = NormalizeDouble(newSL, _Digits);
+            request.tp = PositionGetDouble(POSITION_TP);
+
+            if(OrderSend(request, result))
+            {
+               Print("SHORT Trailing stop updated: ", ticket, " New SL: ", newSL, " (", profitR, "R)");
             }
          }
       }
@@ -235,9 +273,27 @@ void UpdateTrailingStops()
 //+------------------------------------------------------------------+
 bool OpenTrade(string direction, double entry, double sl, double tp, double riskUSD)
 {
+   // Check if we already have an open position
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetTicket(i) > 0)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+            PositionGetString(POSITION_SYMBOL) == _Symbol)
+         {
+            Print("Position already open - skipping signal");
+            return false;
+         }
+      }
+   }
+
    if(TestMode)
    {
-      Print("TEST MODE: Would open ", direction, " trade | Entry: ", entry, " | SL: ", sl, " | TP: ", tp, " | Risk: $", riskUSD);
+      Print("=== TEST MODE SIGNAL ===");
+      Print("Direction: ", direction);
+      Print("Entry: ", entry, " | SL: ", sl, " | TP: ", tp);
+      Print("Risk: $", riskUSD);
+      Print("========================");
       return true;
    }
 
@@ -265,16 +321,21 @@ bool OpenTrade(string direction, double entry, double sl, double tp, double risk
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = Slippage;
    request.magic = MagicNumber;
-   request.comment = "AstraSessionBreakout";
+   request.comment = "Astra_" + direction;
 
    if(OrderSend(request, result))
    {
-      Print("Trade opened: ", result.order, " | ", direction, " | Lot: ", lot, " | Risk: $", riskUSD);
+      Print("=== TRADE OPENED ===");
+      Print("Direction: ", direction);
+      Print("Entry: ", entry, " | SL: ", sl, " | TP: ", tp);
+      Print("Lot: ", lot, " | Risk: $", riskUSD);
+      Print("Ticket: ", result.order);
+      Print("====================");
       return true;
    }
    else
    {
-      Print("Error opening trade: ", GetLastError());
+      Print("ERROR opening trade: ", GetLastError());
       return false;
    }
 }
