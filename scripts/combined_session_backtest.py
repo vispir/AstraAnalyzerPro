@@ -762,6 +762,45 @@ def run_combined_backtest():
     print(f"Net PnL: ${total_pnl:,.2f}")
     print(f"Verification: Winning + Losing = ${total_profit - total_loss:,.2f} (should equal Net PnL)")
 
+    # Monthly breakdown
+    from collections import defaultdict
+    print(f"\n{'='*100}")
+    print("РАЗБИВКА СДЕЛОК ПО МЕСЯЦАМ (2020-2026)")
+    print(f"{'='*100}")
+
+    trades_df['month'] = pd.to_datetime(trades_df['entry_time']).dt.to_period('M')
+    monthly_stats = defaultdict(lambda: {'count': 0, 'pnl': 0, 'wins': 0})
+
+    for _, trade in trades_df.iterrows():
+        month_key = trade['month']
+        monthly_stats[month_key]['count'] += 1
+        monthly_stats[month_key]['pnl'] += trade['pnl']
+        if trade['pnl'] > 0:
+            monthly_stats[month_key]['wins'] += 1
+
+    print(f"{'Месяц':<12} {'Сделок':>8} {'PnL':>12} {'Win Rate':>10} {'Накопл.':>12}")
+    print("-"*100)
+
+    cumulative_pnl = 0
+    all_months = pd.period_range(start=START_DATE, end=END_DATE, freq='M')
+    months_without_trades = 0
+
+    for month in all_months:
+        stats = monthly_stats.get(month, {'count': 0, 'pnl': 0, 'wins': 0})
+
+        if stats['count'] == 0:
+            months_without_trades += 1
+            print(f"{str(month):<12} {0:>8} {'$0.00':>12} {'-':>10} ${cumulative_pnl:>11,.2f}")
+        else:
+            cumulative_pnl += stats['pnl']
+            win_rate = (stats['wins'] / stats['count'] * 100) if stats['count'] > 0 else 0
+            print(f"{str(month):<12} {stats['count']:>8} ${stats['pnl']:>11,.2f} {win_rate:>9.1f}% ${cumulative_pnl:>11,.2f}")
+
+    print("-"*100)
+    print(f"{'ИТОГО':<12} {total_trades:>8} ${total_pnl:>11,.2f} {win_rate*100:>9.1f}% ${cumulative_pnl:>11,.2f}")
+    print(f"{'='*100}")
+    print(f"\nМесяцев БЕЗ сделок: {months_without_trades} из {len(all_months)} ({months_without_trades/len(all_months)*100:.1f}%)")
+
     if passes_dd and passes_daily_dd and passes_trades:
         print(f"\n{'='*80}")
         print("ALL FILTERS PASSED - STRATEGY IS VALID")
