@@ -37,11 +37,27 @@ _daily_trade_count: dict = {}
 _trade_manager: TradeManager = None  # type: ignore
 _dry_run: bool = False
 _strategy_id: str = config.DEFAULT_STRATEGY_ID
+_strategy_ids: list[str] = []  # Multiple strategies support
 
 
 def _signal_tick() -> None:
-    global _daily_macro_cache, _daily_trade_count, _strategy_id
-    strategy = get_strategy(_strategy_id)
+    global _daily_macro_cache, _daily_trade_count, _strategy_id, _strategy_ids
+
+    # Determine which strategies to run
+    strategies_to_run = _strategy_ids if _strategy_ids else [_strategy_id]
+
+    for strategy_id in strategies_to_run:
+        try:
+            _run_strategy_tick(strategy_id)
+        except Exception as e:
+            logger.error(f"Error running strategy {strategy_id}: {e}", exc_info=True)
+
+
+def _run_strategy_tick(strategy_id: str) -> None:
+    """Run a single strategy tick"""
+    global _daily_macro_cache, _daily_trade_count
+
+    strategy = get_strategy(strategy_id)
     if not getattr(strategy, "supports_live_execution", True):
         logger.warning(f"Strategy {_strategy_id} is currently backtest-only and will not run in live scheduler.")
         return
@@ -144,7 +160,7 @@ def _signal_tick() -> None:
 
     signal, reason = strategy.generate_signal(
         StrategyContext(
-            strategy_id=_strategy_id,  # type: ignore[arg-type]
+            strategy_id=strategy_id,  # type: ignore[arg-type]
             now=signal_time,
             current_price=current_price,
             current_bar=signal_bar,
@@ -157,7 +173,7 @@ def _signal_tick() -> None:
     )
 
     if signal is None:
-        logger.debug(f"No signal: {reason}")
+        logger.debug(f"[{strategy_id}] No signal: {reason}")
         return
 
     logger.info(
@@ -214,7 +230,7 @@ def _heartbeat() -> None:
 
 
 def main() -> None:
-    global _trade_manager, _dry_run, _strategy_id
+    global _trade_manager, _dry_run, _strategy_id, _strategy_ids
 
     parser = argparse.ArgumentParser(description="Astra v2 Scheduler")
     parser.add_argument("--dry-run", action="store_true", help="Print signals without executing trades")
@@ -223,11 +239,21 @@ def main() -> None:
     _dry_run = args.dry_run
     _strategy_id = args.strategy
 
-    try:
-        get_strategy(_strategy_id)
-    except ValueError as e:
-        logger.critical(str(e))
-        sys.exit(1)
+    # Build list of strategies to run
+    _strategy_ids = [_strategy_id]
+
+    # Add SHORT strategy if enabled
+    if config.ENABLE_SHORT_STRATEGY and "short_reversal_v1" not in _strategy_ids:
+        _strategy_ids.append("short_reversal_v1")
+        logger.info("SHORT Reversal strategy enabled")
+
+    # Validate all strategies
+    for sid in _strategy_ids:
+        try:
+            get_strategy(sid)
+        except ValueError as e:
+            logger.critical(str(e))
+            sys.exit(1)
 
     try:
         config.validate()
@@ -238,8 +264,9 @@ def main() -> None:
     provider = build_provider()
     _trade_manager = TradeManager(provider)
 
-    logger.info(f"Astra v2 starting. Mode: {'DRY RUN' if _dry_run else 'LIVE'} strategy={_strategy_id}")
-    telegram.send_heartbeat("STARTING", f"Mode: {'dry-run' if _dry_run else 'live'} strategy={_strategy_id}")
+    strategies_str = ", ".join(_strategy_ids)
+    logger.info(f"Astra v2 starting. Mode: {'DRY RUN' if _dry_run else 'LIVE'} strategies=[{strategies_str}]")
+    telegram.send_heartbeat("STARTING", f"Mode: {'dry-run' if _dry_run else 'live'} strategies=[{strategies_str}]")
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(

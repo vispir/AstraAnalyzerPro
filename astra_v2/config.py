@@ -431,5 +431,5 @@ def validate():
 
 # ── SHORT Strategy Control ─────────────────────────────────────────────────────
 # Enable/disable SHORT reversal strategy
-# Set to False to keep only LONG strategy active (default for safety)
-ENABLE_SHORT_STRATEGY = os.environ.get("ENABLE_SHORT_STRATEGY", "false").lower() == "true"
+# Set to True to enable SHORT strategy alongside LONG
+ENABLE_SHORT_STRATEGY = os.environ.get("ENABLE_SHORT_STRATEGY", "true").lower() == "true"
