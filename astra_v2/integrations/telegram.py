@@ -75,7 +75,12 @@ def send_signal_alert(
     macro_confidence: float,
     macro_direction: str,
 ) -> None:
-    arrow = "LONG" if direction == "BULLISH" else "SHORT"
+    # Support both "LONG"/"SHORT" and "BULLISH"/"BEARISH"
+    if direction in ("LONG", "BULLISH"):
+        arrow = "🟢 LONG"
+    else:
+        arrow = "🔴 SHORT"
+
     rr = abs(tp - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 0
     text = (
         f"<b>ASTRA SIGNAL — {arrow}</b>\n"
@@ -91,8 +96,14 @@ def send_signal_alert(
 
 
 def send_trade_closed(direction: str, status: str, entry: float, exit_price: float, pnl_usd: float) -> None:
-    emoji = "✓" if pnl_usd >= 0 else "✗"
-    arrow = "LONG" if direction == "BULLISH" else "SHORT"
+    emoji = "✅" if pnl_usd >= 0 else "❌"
+
+    # Support both "LONG"/"SHORT" and "BULLISH"/"BEARISH"
+    if direction in ("LONG", "BULLISH"):
+        arrow = "🟢 LONG"
+    else:
+        arrow = "🔴 SHORT"
+
     text = (
         f"<b>{emoji} TRADE CLOSED — {arrow}</b>\n"
         f"Status: {status}\n"
