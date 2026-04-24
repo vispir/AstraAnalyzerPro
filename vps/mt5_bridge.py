@@ -115,7 +115,7 @@ def get_active_signals():
 def sync_candles_to_supabase():
     """
     Синхронизация свечей M15 из MT5 в Supabase
-    Отправляет последние 300 свечей M15 (3+ дня)
+    Отправляет последние 500 свечей M15 (для H4 EMA20 расчёта)
     """
     if TEST_MODE:
         logger.debug("[TEST MODE] Skipping candle sync")
@@ -126,8 +126,8 @@ def sync_candles_to_supabase():
         return False
 
     try:
-        # Получаем последние 300 свечей M15 из MT5
-        candles = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M15, 0, 300)
+        # Получаем последние 500 свечей M15 из MT5
+        candles = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M15, 0, 500)
 
         if candles is None or len(candles) == 0:
             logger.error("Failed to get candles from MT5")
