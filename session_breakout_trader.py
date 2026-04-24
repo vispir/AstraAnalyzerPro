@@ -1,17 +1,16 @@
 """
-Session Breakout Live Trader v2.1 - LONG + SHORT
-==================================================
-Интеграция Session Range Breakout (LONG) + Reversal (SHORT) стратегий с MT5 через Supabase
+Session Breakout Live Trader v3.0 - VALIDATED LOGIC
+====================================================
+ТОЧНАЯ копия логики из combined_strategy_backtest.py (606 trades, $57k PnL, DD 6.13%)
 
 Параметры:
-- Risk: $158 (консервативный для баланса $9,950)
+- Risk: $158
 - TP: 5.5R
-- Step Trailing: Управляется MT5 EA
-- Direction: LONG + SHORT
+- ATR: 14 periods
 - H4 EMA20 filter: Enabled (LONG above, SHORT below)
 
-LONG: Session Breakout (Asian/London/NY)
-SHORT: Reversal (Type1: Historical High, Type2: Local Reversal)
+LONG: Session Breakout (Asian 7-10, London 13-16, NY 18-21 UTC)
+SHORT: Reversal (Type1: Historical High, Type2: Local Reversal after 2+ ATR move)
 
 Вызывается через Render Cron каждые 15 минут
 """
@@ -21,6 +20,7 @@ import sys
 import logging
 from datetime import datetime, timedelta, timezone
 import pandas as pd
+import numpy as np
 
 # Добавляем путь к проекту
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,64 +43,47 @@ HEADERS = {
 }
 
 # ============================================================================
-# ПАРАМЕТРЫ СТРАТЕГИИ (из бэктеста v2.1)
+# VALIDATED PARAMETERS (606 trades, $57k PnL, DD 6.13%)
 # ============================================================================
 
-RISK_PER_TRADE = 158  # Консервативный для баланса $9,950
+RISK_PER_TRADE = 158
 TP_RR = 5.5
+ATR_PERIOD = 14
+ATR_BUFFER = 0.5
 USE_H4_EMA_FILTER = True
 H4_EMA_PERIOD = 20
-ATR_PERIOD = 20
 
-# Session parameters
-ASIAN_PARAMS = {
-    'tp_rr': 5.5,
-    'stop_buffer_atr': 0.1,
-    'min_range_atr': 0.7,
-    'max_range_atr': 3.0,
-    'range_hours': (0, 7),      # UTC
-    'breakout_hours': (7, 10)   # UTC
+# LONG: Session Breakout
+LONG_SESSIONS = {
+    'asian': (7, 10),    # UTC
+    'london': (13, 16),  # UTC
+    'ny': (18, 21)       # UTC
 }
 
-LONDON_PARAMS = {
-    'tp_rr': 5.5,
-    'stop_buffer_atr': 0.3,
-    'min_range_atr': 0.3,
-    'max_range_atr': 3.0,
-    'range_hours': (7, 12),     # UTC
-    'breakout_hours': (13, 16)  # UTC
-}
+# SHORT: Reversal parameters
+SHORT_TYPE1_LOOKBACK_H4_BARS = 5
+SHORT_TYPE1_H4_REVERSAL_BARS = 1
+SHORT_TYPE2_H4_LOOKBACK = 3
+SHORT_TYPE2_ATR_MULTIPLIER = 2.0
 
-NY_PARAMS = {
-    'tp_rr': 5.5,
-    'stop_buffer_atr': 0.3,
-    'min_range_atr': 0.5,
-    'max_range_atr': 3.0,
-    'range_hours': (13, 17),    # UTC
-    'breakout_hours': (18, 21)  # UTC
-}
+# SHORT State Machine (persistent across M15 bars)
+short_type1_reversal_active = False
+short_type1_reversal_h4_high = None
+short_type2_reversal_active = False
+short_type2_reversal_h4_high = None
+last_h4_index = None  # Track H4 bar changes
 
-# SHORT parameters
-SHORT_TYPE1_LOOKBACK = 5
-SHORT_TYPE2_LOOKBACK = 3
-SHORT_TYPE2_ATR_MULT = 2.0
+# LONG Session tracking (persistent across M15 bars, reset daily)
+session_highs = {}
+session_lows = {}
+last_trading_date = None  # Track day changes
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
 def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=500):
-    """
-    Загрузить свечи из Supabase (синхронизированные из MT5)
-
-    Args:
-        symbol: Символ (XAUUSD)
-        timeframe: Таймфрейм (M15)
-        limit: Количество свечей (500 = ~31 H4 баров для EMA20)
-
-    Returns:
-        pandas.DataFrame или None
-    """
+    """Загрузить свечи из Supabase"""
     try:
         url = f"{SUPABASE_REST_URL}/mt5_candles?symbol=eq.{symbol}&timeframe=eq.{timeframe}&order=time.desc&limit={limit}"
         response = requests.get(url, headers=HEADERS)
@@ -112,13 +95,10 @@ def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=500):
             logger.warning(f"No candles found in Supabase for {symbol} {timeframe}")
             return None
 
-        # Преобразуем в DataFrame
         df = pd.DataFrame(data)
         df['time'] = pd.to_datetime(df['time'])
         df = df.set_index('time')
-        df = df.sort_index()  # Сортируем по времени (от старых к новым)
-
-        # Оставляем только нужные колонки
+        df = df.sort_index()
         df = df[['open', 'high', 'low', 'close', 'volume']]
 
         logger.info(f"✓ Loaded {len(df)} candles from Supabase")
@@ -128,8 +108,8 @@ def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=500):
         logger.error(f"Error loading candles from Supabase: {e}")
         return None
 
-def calculate_atr(df, period=20):
-    """Calculate ATR"""
+def calculate_atr(df, period=14):
+    """Calculate ATR (VALIDATED: period=14)"""
     high = df['high']
     low = df['low']
     close = df['close']
@@ -148,511 +128,339 @@ def calculate_ema(df, period):
     return df['close'].ewm(span=period, adjust=False).mean()
 
 # ============================================================================
-# MAIN LOGIC
+# LONG STRATEGY (VALIDATED LOGIC)
 # ============================================================================
 
-def check_session_breakout():
+def check_long_session_breakout(today_data, df_h4, current_hour):
     """
-    Проверка условий входа для Session Breakout
-    Вызывается каждые 15 минут через Render Cron
+    LONG Session Breakout - VALIDATED LOGIC
+    Tracks session highs/lows during session windows, then checks for breakout
     """
-    try:
-        logger.info("="*80)
-        logger.info("Session Breakout Trader - Starting check")
-        logger.info("="*80)
+    global session_highs, session_lows, last_trading_date
 
-        # 1. Проверить есть ли активная сделка
-        active = get_active_signal()
-        if active:
-            logger.info(f"✓ Active trade exists (ID: {active['id']}, status: {active['status']})")
-            logger.info("Skipping new signal generation")
-
-            # Получаем текущую цену
-            df = load_candles_from_supabase('XAUUSD', 'M15', 1)
-            current_price = df['close'].iloc[-1] if df is not None and len(df) > 0 else 0
-
-            # Отправляем статус в основной бот
-            telegram_service.send_session_breakout_status({
-                'active_trade': True,
-                'session': active.get('session', 'N/A'),
-                'direction': active.get('direction', 'N/A'),
-                'current_price': f"{current_price:.2f}"
-            })
-
-            return {
-                "success": True,
-                "message": "Active trade exists",
-                "trade_id": active['id']
-            }
-
-        logger.info("✓ No active trades - checking for entry conditions")
-
-        # 2. Загрузить M15 данные
-        # Сначала пробуем из Supabase (свежие данные из MT5)
-        logger.info("Loading M15 data from Supabase (MT5 sync)...")
-        df = load_candles_from_supabase('XAUUSD', 'M15', 500)
-
-        # Если нет данных в Supabase - fallback на Dukascopy
-        if df is None or len(df) == 0:
-            logger.warning("No data in Supabase, falling back to Dukascopy...")
-            end_date = datetime.now(timezone.utc)
-            start_date = end_date - timedelta(days=3)
-
-            logger.info(f"Loading M15 data from Dukascopy: {start_date.date()} to {end_date.date()}")
-
-            try:
-                df = load_timeframe(
-                    'M15',
-                    start=start_date.strftime('%Y-%m-%d'),
-                    end=end_date.strftime('%Y-%m-%d'),
-                    symbol='XAUUSD'
-                )
-            except FileNotFoundError:
-                # Fallback для локального теста - используем последние доступные данные
-                logger.warning("Current data not available, using latest cached data for testing")
-                df = load_timeframe(
-                    'M15',
-                    start='2026-03-01',
-                    end='2026-03-31',
-                    symbol='XAUUSD'
-                )
-
-        if df is None or len(df) == 0:
-            logger.error("Failed to load M15 data")
-            return {"success": False, "error": "No M15 data"}
-
-        logger.info(f"✓ Loaded {len(df)} M15 bars")
-
-        # 3. Calculate ATR
-        df['atr'] = calculate_atr(df, ATR_PERIOD)
-
-        # 4. Resample to H4 for EMA20 filter
-        if USE_H4_EMA_FILTER:
-            logger.info("Resampling M15 to H4 for EMA20 filter...")
-            df_h4 = df.resample('4h').agg({
-                'open': 'first',
-                'high': 'max',
-                'low': 'min',
-                'close': 'last'
-            }).dropna()
-            df_h4['ema20'] = calculate_ema(df_h4, H4_EMA_PERIOD)
-            logger.info(f"✓ Resampled {len(df_h4)} H4 bars, calculated EMA20")
-        else:
-            df_h4 = None
-
-        # 5. Определить текущую сессию и проверить условия
-        current_time = datetime.now(timezone.utc)
-        current_hour = current_time.hour
-
-        logger.info(f"Current UTC time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"Current UTC hour: {current_hour}")
-
-        # Получить данные за сегодня
-        today = current_time.date()
-        today_data = df[df.index.date == today]
-
-        if len(today_data) == 0:
-            logger.warning("No data for today")
-            return {"success": False, "error": "No data for today"}
-
-        logger.info(f"✓ Today's data: {len(today_data)} bars")
-
-        # Проверяем каждую сессию
-        sessions_to_check = [
-            ('asian', ASIAN_PARAMS),
-            ('london', LONDON_PARAMS),
-            ('ny', NY_PARAMS)
-        ]
-
-        for session_name, params in sessions_to_check:
-            signal = check_session_entry(
-                session_name,
-                params,
-                today_data,
-                df_h4,
-                current_hour
-            )
-
-            if signal:
-                logger.info(f"✓ LONG signal generated for {session_name.upper()} session")
-                return signal
-
-        logger.info("✓ No LONG entry conditions met")
-
-        # Check SHORT conditions if no LONG signal
-        logger.info("Checking SHORT reversal conditions...")
-        short_signal = check_short_reversal(
-            today_data,
-            df_h4,
-            current_hour
-        )
-
-        if short_signal:
-            logger.info("✓ SHORT signal generated")
-            return short_signal
-
-        logger.info("✓ No SHORT entry conditions met")
-
-        # Отправляем статус в основной бот каждые 15 минут
-        current_price = df['close'].iloc[-1] if len(df) > 0 else 0
-        current_hour = datetime.now(timezone.utc).hour
-
-        # Определяем текущую сессию и причину для LONG
-        long_reason = "Waiting for conditions"
-        short_reason = "Waiting for conditions"
-        short_ema_status = "N/A"
-
-        if 0 <= current_hour < 7:
-            current_session = "Asian Range"
-            long_reason = "Forming range (0-7h)"
-        elif 7 <= current_hour < 10:
-            current_session = "Asian Breakout"
-            long_reason = "Checking breakout conditions"
-        elif 10 <= current_hour < 13:
-            current_session = "London Range"
-            long_reason = "Forming range (7-12h)"
-        elif 13 <= current_hour < 16:
-            current_session = "London Breakout"
-            long_reason = "Checking breakout conditions"
-        elif 16 <= current_hour < 18:
-            current_session = "NY Range"
-            long_reason = "Forming range (13-17h)"
-        elif 18 <= current_hour < 21:
-            current_session = "NY Breakout"
-            # Проверяем почему нет LONG сигнала
-            if len(today_data) > 0:
-                ny_range = today_data[(today_data.index.hour >= 13) & (today_data.index.hour < 17)]
-                if len(ny_range) > 0:
-                    range_size = ny_range['high'].max() - ny_range['low'].min()
-                    last_atr = today_data.iloc[-1].get('atr', 0)
-                    if last_atr > 0:
-                        range_atr = range_size / last_atr
-                        if range_atr > 3.0:
-                            long_reason = f"Range too wide ({range_atr:.1f} ATR > 3.0)"
-                        elif range_atr < 0.5:
-                            long_reason = f"Range too narrow ({range_atr:.1f} ATR < 0.5)"
-                        else:
-                            long_reason = "No breakout or H4 EMA filter failed"
-        else:
-            current_session = "Closed"
-            long_reason = "Market closed (21-24h)"
-
-        # Проверяем SHORT условия для статуса
-        if 0 <= current_hour < 21 and len(today_data) > 0 and len(df_h4) > 0:
-            last_bar = today_data.iloc[-1]
-            current_h4 = df_h4.iloc[-1]
-            h4_ema20 = current_h4.get('ema20')
-
-            if pd.notna(h4_ema20):
-                if last_bar['close'] < h4_ema20:
-                    short_ema_status = f"Below ✓ ({last_bar['close']:.2f} < {h4_ema20:.2f})"
-                    # Проверяем почему нет SHORT сигнала
-                    if len(df_h4) >= SHORT_TYPE1_LOOKBACK:
-                        last_n_h4 = df_h4.tail(SHORT_TYPE1_LOOKBACK)
-                        if last_n_h4['close'].iloc[-1] >= last_n_h4['close'].iloc[-2]:
-                            short_reason = "Waiting for H4 close lower"
-                        else:
-                            short_reason = "Waiting for M15 break below low"
-                    else:
-                        short_reason = "Not enough H4 data"
-                else:
-                    short_ema_status = f"Above ✗ ({last_bar['close']:.2f} > {h4_ema20:.2f})"
-                    short_reason = "Price above H4 EMA20"
-            else:
-                short_ema_status = "Calculating..."
-                short_reason = "EMA20 not ready"
-        else:
-            if current_hour >= 21:
-                short_ema_status = "Market closed"
-                short_reason = "Outside active hours (0-21h)"
-            else:
-                short_ema_status = "N/A"
-                short_reason = "No data"
-
-        telegram_service.send_session_breakout_status({
-            'active_trade': False,
-            'signal_generated': False,
-            'current_price': f"{current_price:.2f}",
-            'current_session': current_session,
-            'long_reason': long_reason,
-            'short_reason': short_reason,
-            'short_ema_status': short_ema_status
-        })
-
-        return {
-            "success": True,
-            "message": "No entry conditions met"
-        }
-
-    except Exception as e:
-        logger.error(f"Error in check_session_breakout: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
-
-def check_session_entry(session_name, params, today_data, df_h4, current_hour):
-    """
-    Проверка условий входа для конкретной сессии
-
-    Returns:
-        dict or None: Signal data if conditions met, None otherwise
-    """
-    # Проверяем что мы в breakout window
-    breakout_start, breakout_end = params['breakout_hours']
-
-    if not (breakout_start <= current_hour < breakout_end):
-        logger.debug(f"{session_name}: Not in breakout window ({breakout_start}-{breakout_end}h)")
+    if len(today_data) == 0:
         return None
 
-    logger.info(f"Checking {session_name.upper()} session (breakout window: {breakout_start}-{breakout_end}h)")
+    # Check if new trading day - reset session tracking
+    current_date = today_data.index[-1].date()
+    if last_trading_date != current_date:
+        session_highs = {}
+        session_lows = {}
+        last_trading_date = current_date
+        logger.info(f"New trading day: {current_date} - session tracking reset")
 
-    # Определяем range за сессию
-    range_start, range_end = params['range_hours']
-    range_data = today_data[
-        (today_data.index.hour >= range_start) &
-        (today_data.index.hour < range_end)
-    ]
-
-    if len(range_data) == 0:
-        logger.debug(f"{session_name}: No range data")
-        return None
-
-    range_high = range_data['high'].max()
-    range_low = range_data['low'].min()
-    range_size = range_high - range_low
-
-    logger.info(f"{session_name}: Range {range_low:.2f} - {range_high:.2f} (size: {range_size:.2f})")
-
-    # Получаем последнюю свечу
     last_bar = today_data.iloc[-1]
     last_close = last_bar['close']
     last_atr = last_bar['atr']
 
     if pd.isna(last_atr) or last_atr == 0:
-        logger.debug(f"{session_name}: Invalid ATR")
         return None
 
-    logger.info(f"{session_name}: Last close: {last_close:.2f}, ATR: {last_atr:.2f}")
-
-    # Проверяем размер range
-    min_range = params['min_range_atr'] * last_atr
-    max_range = params['max_range_atr'] * last_atr
-
-    if not (min_range <= range_size <= max_range):
-        logger.info(f"{session_name}: Range size {range_size:.2f} outside limits ({min_range:.2f} - {max_range:.2f})")
-        return None
-
-    logger.info(f"{session_name}: ✓ Range size valid")
-
-    # Проверяем H4 EMA20 filter
-    if USE_H4_EMA_FILTER and df_h4 is not None:
-        current_time = today_data.index[-1]
-        h4_bar = df_h4[df_h4.index <= current_time].iloc[-1] if len(df_h4[df_h4.index <= current_time]) > 0 else None
-
-        if h4_bar is None or pd.isna(h4_bar['ema20']):
-            logger.info(f"{session_name}: No H4 EMA20 data")
-            return None
-
-        h4_close = h4_bar['close']
-        h4_ema20 = h4_bar['ema20']
-
-        logger.info(f"{session_name}: H4 close: {h4_close:.2f}, H4 EMA20: {h4_ema20:.2f}")
-
-        # LONG only: H4 close должен быть выше EMA20
-        if h4_close <= h4_ema20:
-            logger.info(f"{session_name}: H4 close below EMA20 - no LONG signal")
-            return None
-
-        logger.info(f"{session_name}: ✓ H4 EMA20 filter passed (uptrend)")
-
-    # Проверяем breakout
-    if last_close > range_high:
-        logger.info(f"{session_name}: ✓ BREAKOUT detected! Close {last_close:.2f} > Range High {range_high:.2f}")
-
-        # Рассчитываем параметры сделки
-        entry = last_close
-        sl = range_low - params['stop_buffer_atr'] * last_atr
-        risk = entry - sl
-        tp = entry + risk * params['tp_rr']
-
-        logger.info(f"{session_name}: Entry: {entry:.2f}, SL: {sl:.2f}, TP: {tp:.2f}")
-        logger.info(f"{session_name}: Risk: {risk:.2f}, R:R: {params['tp_rr']}")
-
-        # Генерируем сигнал
-        try:
-            signal = write_signal(
-                direction='LONG',
-                entry=entry,
-                sl=sl,
-                tp=tp,
-                session=session_name,
-                risk_usd=RISK_PER_TRADE
-            )
-
-            if signal:
-                logger.info(f"✓✓✓ SIGNAL WRITTEN: LONG {session_name.upper()} @ {entry:.2f}")
-
-                # Отправляем сигнал в Signal Bot
-                telegram_service.send_session_breakout_signal(signal, test_mode=False)
-
-                # Отправляем статус в основной бот
-                telegram_service.send_session_breakout_status({
-                    'signal_generated': True,
-                    'session': session_name,
-                    'direction': 'LONG'
-                })
-
-                return {
-                    "success": True,
-                    "message": f"Signal generated for {session_name}",
-                    "signal": signal
-                }
+    # Track session ranges
+    for session_name, (start_hour, end_hour) in LONG_SESSIONS.items():
+        if start_hour <= current_hour < end_hour:
+            if session_name not in session_highs:
+                session_highs[session_name] = last_bar['high']
+                session_lows[session_name] = last_bar['low']
             else:
-                logger.error(f"Failed to write signal for {session_name}")
-                return None
+                session_highs[session_name] = max(session_highs[session_name], last_bar['high'])
+                session_lows[session_name] = min(session_lows[session_name], last_bar['low'])
 
-        except Exception as e:
-            logger.error(f"Error writing signal for {session_name}: {e}")
-            return None
+    # Check for breakout (during or after session window)
+    for session_name, (start_hour, end_hour) in LONG_SESSIONS.items():
+        if session_name in session_highs and current_hour >= end_hour:
+            session_high = session_highs[session_name]
+            session_low = session_lows[session_name]
 
-    logger.debug(f"{session_name}: No breakout (close {last_close:.2f} <= range high {range_high:.2f})")
+            # Breakout above session high
+            if last_close > session_high:
+                logger.info(f"{session_name}: BREAKOUT! Close {last_close:.2f} > High {session_high:.2f}")
+
+                # H4 EMA20 filter: LONG only if price ABOVE EMA20
+                if USE_H4_EMA_FILTER and df_h4 is not None:
+                    current_time = today_data.index[-1]
+                    h4_bar = df_h4[df_h4.index <= current_time].iloc[-1] if len(df_h4[df_h4.index <= current_time]) > 0 else None
+
+                    if h4_bar is None or pd.isna(h4_bar['ema20']):
+                        logger.info(f"{session_name}: No H4 EMA20 data")
+                        continue
+
+                    if h4_bar['close'] < h4_bar['ema20']:
+                        logger.info(f"{session_name}: H4 close {h4_bar['close']:.2f} below EMA20 {h4_bar['ema20']:.2f} - skip LONG")
+                        continue
+
+                    logger.info(f"{session_name}: ✓ H4 EMA20 filter passed")
+
+                # Calculate trade parameters
+                entry = last_close
+                sl = session_low - ATR_BUFFER * last_atr
+                risk = entry - sl
+
+                if risk <= 0:
+                    continue
+
+                tp = entry + risk * TP_RR
+
+                logger.info(f"{session_name}: Entry: {entry:.2f}, SL: {sl:.2f}, TP: {tp:.2f}, Risk: {risk:.2f}")
+
+                # Generate signal
+                try:
+                    signal = write_signal(
+                        direction='LONG',
+                        entry=entry,
+                        sl=sl,
+                        tp=tp,
+                        session=session_name,
+                        risk_usd=RISK_PER_TRADE
+                    )
+
+                    if signal:
+                        logger.info(f"✓✓✓ SIGNAL WRITTEN: LONG {session_name.upper()} @ {entry:.2f}")
+                        telegram_service.send_session_breakout_signal(signal, test_mode=False)
+
+                        # Clear session tracking after signal
+                        del session_highs[session_name]
+                        del session_lows[session_name]
+
+                        return signal
+
+                except Exception as e:
+                    logger.error(f"Error writing LONG signal: {e}")
+
     return None
+
+# ============================================================================
+# SHORT STRATEGY (VALIDATED LOGIC WITH STATE MACHINE)
+# ============================================================================
 
 def check_short_reversal(today_data, df_h4, current_hour):
     """
-    Проверка условий SHORT Reversal
-    Type 1: Historical High Reversal (5 H4 bars)
-    Type 2: Local Reversal (2+ ATR move in 3 H4 bars)
-
-    Returns:
-        dict or None: Signal data if conditions met, None otherwise
+    SHORT Reversal - VALIDATED LOGIC WITH STATE MACHINE
+    Type 1: Reversal After Historical High (new high over 5 H4 bars, then reversal)
+    Type 2: Local Reversal After Strong Move (2+ ATR move in 3 H4 bars, then reversal)
     """
+    global short_type1_reversal_active, short_type1_reversal_h4_high
+    global short_type2_reversal_active, short_type2_reversal_h4_high
+    global last_h4_index
+
     # Active hours: 00:00-21:00 UTC
     if current_hour < 0 or current_hour >= 21:
-        logger.debug("SHORT: Outside active hours (0-21h)")
         return None
 
     if len(today_data) == 0:
-        logger.debug("SHORT: No today data")
         return None
 
     # Get current bar
     last_bar = today_data.iloc[-1]
     last_close = last_bar['close']
+    last_atr = last_bar['atr']
+
+    if pd.isna(last_atr) or last_atr == 0:
+        return None
 
     # Get H4 data
-    if len(df_h4) < SHORT_TYPE1_LOOKBACK + 2:
-        logger.debug("SHORT: Not enough H4 data")
+    if df_h4 is None or len(df_h4) < SHORT_TYPE1_LOOKBACK_H4_BARS + 2:
         return None
 
-    current_h4 = df_h4.iloc[-1]
-    h4_ema20 = current_h4.get('ema20')
-    h4_atr = current_h4.get('atr')
+    current_time = today_data.index[-1]
+    h4_bars = df_h4[df_h4.index <= current_time]
 
-    # H4 EMA20 filter: SHORT only below EMA20
-    if pd.isna(h4_ema20) or last_close > h4_ema20:
-        logger.debug(f"SHORT: Price {last_close:.2f} above H4 EMA20 {h4_ema20:.2f}")
+    if len(h4_bars) < SHORT_TYPE1_LOOKBACK_H4_BARS + 2:
         return None
 
-    logger.info(f"SHORT: Price {last_close:.2f} below H4 EMA20 {h4_ema20:.2f} ✓")
+    current_h4 = h4_bars.iloc[-1]
+    prev_h4 = h4_bars.iloc[-2]
 
-    signal_type = None
+    # Check if we're on a new H4 bar
+    current_h4_index = current_h4.name
+    if last_h4_index != current_h4_index:
+        last_h4_index = current_h4_index
 
-    # Type 1: Historical High Reversal
-    last_n_h4 = df_h4.tail(SHORT_TYPE1_LOOKBACK)
-    if len(last_n_h4) >= SHORT_TYPE1_LOOKBACK:
-        last_h4_close = last_n_h4['close'].iloc[-1]
-        prev_h4_close = last_n_h4['close'].iloc[-2]
+        # H4 EMA20 filter: SHORT only if price BELOW EMA20
+        if USE_H4_EMA_FILTER:
+            if pd.isna(current_h4['ema20']):
+                short_type1_reversal_active = False
+                short_type2_reversal_active = False
+                return None
 
-        if last_h4_close < prev_h4_close:
-            # Check M15 break below previous M15 low
-            last_3_m15 = today_data.tail(3)
-            if len(last_3_m15) >= 3:
-                m15_low = last_3_m15['low'].min()
-                if last_close < m15_low:
-                    signal_type = 'Type1_HistoricalHigh'
-                    logger.info(f"SHORT Type1: H4 reversal detected, M15 break below {m15_low:.2f}")
+            if current_h4['close'] >= current_h4['ema20']:
+                # Reset reversal flags if price is above EMA20
+                short_type1_reversal_active = False
+                short_type2_reversal_active = False
+                return None
 
-    # Type 2: Local Reversal after strong move
-    if signal_type is None:
-        last_n_h4 = df_h4.tail(SHORT_TYPE2_LOOKBACK + 1)
-        if len(last_n_h4) >= SHORT_TYPE2_LOOKBACK + 1 and not pd.isna(h4_atr):
-            price_move = last_n_h4['close'].iloc[-1] - last_n_h4['close'].iloc[0]
+        # TYPE 1: Reversal After Historical High
+        if not short_type1_reversal_active:
+            lookback_highs = h4_bars.iloc[-SHORT_TYPE1_LOOKBACK_H4_BARS-1:-1]['high']
+            historical_high = lookback_highs.max()
 
-            if price_move > SHORT_TYPE2_ATR_MULT * h4_atr:
-                last_h4_close = last_n_h4['close'].iloc[-1]
-                prev_h4_close = last_n_h4['close'].iloc[-2]
+            if current_h4['high'] > historical_high:
+                if current_h4['close'] < prev_h4['close']:
+                    short_type1_reversal_active = True
+                    short_type1_reversal_h4_high = current_h4['high']
+                    logger.info(f"SHORT Type1: Reversal detected! New high {current_h4['high']:.2f} > historical {historical_high:.2f}")
 
-                if last_h4_close < prev_h4_close:
-                    # Check M15 break below previous M15 low
-                    last_3_m15 = today_data.tail(3)
-                    if len(last_3_m15) >= 3:
-                        m15_low = last_3_m15['low'].min()
-                        if last_close < m15_low:
-                            signal_type = 'Type2_LocalReversal'
-                            logger.info(f"SHORT Type2: Strong move {price_move:.2f} > {SHORT_TYPE2_ATR_MULT}*ATR, M15 break below {m15_low:.2f}")
+        # TYPE 2: Local Reversal After Strong Move
+        if not short_type2_reversal_active:
+            if len(h4_bars) >= SHORT_TYPE2_H4_LOOKBACK + 1:
+                lookback_bars = h4_bars.iloc[-SHORT_TYPE2_H4_LOOKBACK-1:-1]
+                price_change = current_h4['high'] - lookback_bars['low'].min()
 
-    if signal_type is None:
-        logger.debug("SHORT: No reversal signal detected")
-        return None
+                h4_atr = current_h4.get('atr', last_atr)
 
-    # Calculate trade parameters
-    entry = last_close
-    sl = entry + h4_atr
-    risk = sl - entry
-    tp = entry - risk * TP_RR
+                if not np.isnan(h4_atr) and price_change >= SHORT_TYPE2_ATR_MULTIPLIER * h4_atr:
+                    if current_h4['close'] < prev_h4['close']:
+                        short_type2_reversal_active = True
+                        short_type2_reversal_h4_high = current_h4['high']
+                        logger.info(f"SHORT Type2: Strong move {price_change:.2f} > {SHORT_TYPE2_ATR_MULTIPLIER}*ATR, reversal detected")
 
-    logger.info(f"SHORT {signal_type}: Entry: {entry:.2f}, SL: {sl:.2f}, TP: {tp:.2f}")
-    logger.info(f"SHORT: Risk: {risk:.2f}, R:R: {TP_RR}")
+    # M15 ENTRY LOGIC
+    if len(today_data) > 1:
+        prev_m15_low = today_data.iloc[-2]['low']
 
-    # Generate signal
+        # Type 1 entry (priority)
+        if short_type1_reversal_active and last_close < prev_m15_low:
+            entry = last_close
+            sl = short_type1_reversal_h4_high + ATR_BUFFER * last_atr
+            risk = sl - entry
+
+            if risk > 0:
+                tp = entry - risk * TP_RR
+
+                logger.info(f"SHORT Type1: Entry {entry:.2f}, SL {sl:.2f}, TP {tp:.2f}, Risk {risk:.2f}")
+
+                try:
+                    signal = write_signal(
+                        direction='SHORT',
+                        entry=entry,
+                        sl=sl,
+                        tp=tp,
+                        session='Type1_HistoricalHigh',
+                        risk_usd=RISK_PER_TRADE
+                    )
+
+                    if signal:
+                        logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT Type1 @ {entry:.2f}")
+                        telegram_service.send_session_breakout_signal(signal, test_mode=False)
+                        short_type1_reversal_active = False
+                        return signal
+
+                except Exception as e:
+                    logger.error(f"Error writing SHORT Type1 signal: {e}")
+
+        # Type 2 entry (if Type 1 didn't trigger)
+        elif short_type2_reversal_active and last_close < prev_m15_low:
+            entry = last_close
+            sl = short_type2_reversal_h4_high + ATR_BUFFER * last_atr
+            risk = sl - entry
+
+            if risk > 0:
+                tp = entry - risk * TP_RR
+
+                logger.info(f"SHORT Type2: Entry {entry:.2f}, SL {sl:.2f}, TP {tp:.2f}, Risk {risk:.2f}")
+
+                try:
+                    signal = write_signal(
+                        direction='SHORT',
+                        entry=entry,
+                        sl=sl,
+                        tp=tp,
+                        session='Type2_LocalReversal',
+                        risk_usd=RISK_PER_TRADE
+                    )
+
+                    if signal:
+                        logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT Type2 @ {entry:.2f}")
+                        telegram_service.send_session_breakout_signal(signal, test_mode=False)
+                        short_type2_reversal_active = False
+                        return signal
+
+                except Exception as e:
+                    logger.error(f"Error writing SHORT Type2 signal: {e}")
+
+    return None
+
+# ============================================================================
+# MAIN LOGIC
+# ============================================================================
+
+def check_session_breakout():
+    """
+    Main entry point - вызывается каждые 15 минут через Render Cron
+    """
     try:
-        signal = write_signal(
-            direction='SHORT',
-            entry=entry,
-            sl=sl,
-            tp=tp,
-            session=signal_type,
-            risk_usd=RISK_PER_TRADE
-        )
+        logger.info("="*80)
+        logger.info("Session Breakout Trader v3.0 - VALIDATED LOGIC")
+        logger.info("="*80)
 
-        if signal:
-            logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT {signal_type} @ {entry:.2f}")
+        # 1. Check for active trade
+        active = get_active_signal()
+        if active:
+            logger.info(f"✓ Active trade exists (ID: {active['id']}, status: {active['status']})")
+            logger.info("Skipping new signal generation")
+            return {"success": True, "message": "Active trade exists", "active_signal": active}
 
-            # Send to Signal Bot
-            telegram_service.send_session_breakout_signal(signal, test_mode=False)
+        # 2. Load M15 data
+        df = load_candles_from_supabase('XAUUSD', 'M15', limit=500)
+        if df is None or len(df) == 0:
+            logger.error("Failed to load M15 data")
+            return {"success": False, "message": "No M15 data"}
 
-            # Send status to main bot
-            telegram_service.send_session_breakout_status({
-                'signal_generated': True,
-                'session': signal_type,
-                'direction': 'SHORT'
-            })
+        # 3. Calculate indicators
+        df['atr'] = calculate_atr(df, ATR_PERIOD)
 
-            return {
-                "success": True,
-                "message": f"SHORT signal generated: {signal_type}",
-                "signal": signal
-            }
-        else:
-            logger.error(f"Failed to write SHORT signal")
-            return None
+        # 4. Resample to H4
+        df_h4 = df.resample('4h').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last'
+        }).dropna()
+
+        df_h4['atr'] = calculate_atr(df_h4, ATR_PERIOD)
+        df_h4['ema20'] = calculate_ema(df_h4, H4_EMA_PERIOD)
+
+        # 5. Get today's data
+        now_utc = datetime.now(timezone.utc)
+        today_date = now_utc.date()
+        today_data = df[df.index.date == today_date]
+
+        if len(today_data) == 0:
+            logger.warning("No data for today")
+            return {"success": False, "message": "No data for today"}
+
+        current_hour = now_utc.hour
+
+        logger.info(f"Current time: {now_utc.strftime('%Y-%m-%d %H:%M')} UTC (hour: {current_hour})")
+        logger.info(f"Today's data: {len(today_data)} M15 bars")
+
+        # 6. Check LONG conditions
+        logger.info("Checking LONG session breakout...")
+        long_signal = check_long_session_breakout(today_data, df_h4, current_hour)
+
+        if long_signal:
+            logger.info("✓ LONG signal generated")
+            return {"success": True, "message": "LONG signal generated", "signal": long_signal}
+
+        # 7. Check SHORT conditions
+        logger.info("Checking SHORT reversal conditions...")
+        short_signal = check_short_reversal(today_data, df_h4, current_hour)
+
+        if short_signal:
+            logger.info("✓ SHORT signal generated")
+            return {"success": True, "message": "SHORT signal generated", "signal": short_signal}
+
+        logger.info("✓ No entry conditions met")
+        return {"success": True, "message": "No entry conditions met"}
 
     except Exception as e:
-        logger.error(f"Error writing SHORT signal: {e}")
-        return None
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+        logger.error(f"Error in check_session_breakout: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
 
 if __name__ == "__main__":
-    # Настройка логирования для тестирования
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-
     result = check_session_breakout()
-    print("\n" + "="*80)
-    print("RESULT:")
-    print(result)
-    print("="*80)
+    print(f"\nResult: {result}")
