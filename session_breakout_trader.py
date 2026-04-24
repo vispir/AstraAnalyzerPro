@@ -1,14 +1,17 @@
 """
-Session Breakout Live Trader v2.1
-==================================
-Интеграция Session Range Breakout стратегии с MT5 через Supabase
+Session Breakout Live Trader v2.1 - LONG + SHORT
+==================================================
+Интеграция Session Range Breakout (LONG) + Reversal (SHORT) стратегий с MT5 через Supabase
 
 Параметры:
 - Risk: $158 (консервативный для баланса $9,950)
 - TP: 5.5R
 - Step Trailing: Управляется MT5 EA
-- Direction: LONG only
-- H4 EMA20 filter: Enabled
+- Direction: LONG + SHORT
+- H4 EMA20 filter: Enabled (LONG above, SHORT below)
+
+LONG: Session Breakout (Asian/London/NY)
+SHORT: Reversal (Type1: Historical High, Type2: Local Reversal)
 
 Вызывается через Render Cron каждые 15 минут
 """
@@ -76,6 +79,11 @@ NY_PARAMS = {
     'range_hours': (13, 17),    # UTC
     'breakout_hours': (18, 21)  # UTC
 }
+
+# SHORT parameters
+SHORT_TYPE1_LOOKBACK = 5
+SHORT_TYPE2_LOOKBACK = 3
+SHORT_TYPE2_ATR_MULT = 2.0
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -266,10 +274,24 @@ def check_session_breakout():
             )
 
             if signal:
-                logger.info(f"✓ Signal generated for {session_name.upper()} session")
+                logger.info(f"✓ LONG signal generated for {session_name.upper()} session")
                 return signal
 
-        logger.info("✓ No entry conditions met for any session")
+        logger.info("✓ No LONG entry conditions met")
+
+        # Check SHORT conditions if no LONG signal
+        logger.info("Checking SHORT reversal conditions...")
+        short_signal = check_short_reversal(
+            today_data,
+            df_h4,
+            current_hour
+        )
+
+        if short_signal:
+            logger.info("✓ SHORT signal generated")
+            return short_signal
+
+        logger.info("✓ No SHORT entry conditions met")
 
         # Отправляем статус в основной бот каждые 15 минут
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
@@ -434,6 +456,130 @@ def check_session_entry(session_name, params, today_data, df_h4, current_hour):
 
     logger.debug(f"{session_name}: No breakout (close {last_close:.2f} <= range high {range_high:.2f})")
     return None
+
+def check_short_reversal(today_data, df_h4, current_hour):
+    """
+    Проверка условий SHORT Reversal
+    Type 1: Historical High Reversal (5 H4 bars)
+    Type 2: Local Reversal (2+ ATR move in 3 H4 bars)
+
+    Returns:
+        dict or None: Signal data if conditions met, None otherwise
+    """
+    # Active hours: 00:00-21:00 UTC
+    if current_hour < 0 or current_hour >= 21:
+        logger.debug("SHORT: Outside active hours (0-21h)")
+        return None
+
+    if len(today_data) == 0:
+        logger.debug("SHORT: No today data")
+        return None
+
+    # Get current bar
+    last_bar = today_data.iloc[-1]
+    last_close = last_bar['close']
+
+    # Get H4 data
+    if len(df_h4) < SHORT_TYPE1_LOOKBACK + 2:
+        logger.debug("SHORT: Not enough H4 data")
+        return None
+
+    current_h4 = df_h4.iloc[-1]
+    h4_ema20 = current_h4.get('ema20')
+    h4_atr = current_h4.get('atr')
+
+    # H4 EMA20 filter: SHORT only below EMA20
+    if pd.isna(h4_ema20) or last_close > h4_ema20:
+        logger.debug(f"SHORT: Price {last_close:.2f} above H4 EMA20 {h4_ema20:.2f}")
+        return None
+
+    logger.info(f"SHORT: Price {last_close:.2f} below H4 EMA20 {h4_ema20:.2f} ✓")
+
+    signal_type = None
+
+    # Type 1: Historical High Reversal
+    last_n_h4 = df_h4.tail(SHORT_TYPE1_LOOKBACK)
+    if len(last_n_h4) >= SHORT_TYPE1_LOOKBACK:
+        last_h4_close = last_n_h4['close'].iloc[-1]
+        prev_h4_close = last_n_h4['close'].iloc[-2]
+
+        if last_h4_close < prev_h4_close:
+            # Check M15 break below previous M15 low
+            last_3_m15 = today_data.tail(3)
+            if len(last_3_m15) >= 3:
+                m15_low = last_3_m15['low'].min()
+                if last_close < m15_low:
+                    signal_type = 'Type1_HistoricalHigh'
+                    logger.info(f"SHORT Type1: H4 reversal detected, M15 break below {m15_low:.2f}")
+
+    # Type 2: Local Reversal after strong move
+    if signal_type is None:
+        last_n_h4 = df_h4.tail(SHORT_TYPE2_LOOKBACK + 1)
+        if len(last_n_h4) >= SHORT_TYPE2_LOOKBACK + 1 and not pd.isna(h4_atr):
+            price_move = last_n_h4['close'].iloc[-1] - last_n_h4['close'].iloc[0]
+
+            if price_move > SHORT_TYPE2_ATR_MULT * h4_atr:
+                last_h4_close = last_n_h4['close'].iloc[-1]
+                prev_h4_close = last_n_h4['close'].iloc[-2]
+
+                if last_h4_close < prev_h4_close:
+                    # Check M15 break below previous M15 low
+                    last_3_m15 = today_data.tail(3)
+                    if len(last_3_m15) >= 3:
+                        m15_low = last_3_m15['low'].min()
+                        if last_close < m15_low:
+                            signal_type = 'Type2_LocalReversal'
+                            logger.info(f"SHORT Type2: Strong move {price_move:.2f} > {SHORT_TYPE2_ATR_MULT}*ATR, M15 break below {m15_low:.2f}")
+
+    if signal_type is None:
+        logger.debug("SHORT: No reversal signal detected")
+        return None
+
+    # Calculate trade parameters
+    entry = last_close
+    sl = entry + h4_atr
+    risk = sl - entry
+    tp = entry - risk * TP_RR
+
+    logger.info(f"SHORT {signal_type}: Entry: {entry:.2f}, SL: {sl:.2f}, TP: {tp:.2f}")
+    logger.info(f"SHORT: Risk: {risk:.2f}, R:R: {TP_RR}")
+
+    # Generate signal
+    try:
+        signal = write_signal(
+            direction='SHORT',
+            entry=entry,
+            sl=sl,
+            tp=tp,
+            session=signal_type,
+            risk_usd=RISK_PER_TRADE
+        )
+
+        if signal:
+            logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT {signal_type} @ {entry:.2f}")
+
+            # Send to Signal Bot
+            telegram_service.send_session_breakout_signal(signal, test_mode=False)
+
+            # Send status to main bot
+            telegram_service.send_session_breakout_status({
+                'signal_generated': True,
+                'session': signal_type,
+                'direction': 'SHORT'
+            })
+
+            return {
+                "success": True,
+                "message": f"SHORT signal generated: {signal_type}",
+                "signal": signal
+            }
+        else:
+            logger.error(f"Failed to write SHORT signal")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error writing SHORT signal: {e}")
+        return None
 
 # ============================================================================
 # ENTRY POINT
