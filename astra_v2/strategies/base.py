@@ -21,6 +21,7 @@ StrategyId = Literal[
     "breakout_retest_v1",
     "smc_fvg_v1",
     "smc_ob_v1",
+    "short_reversal_v1",
 ]
 
 

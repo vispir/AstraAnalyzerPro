@@ -427,3 +427,9 @@ def validate():
     missing = [k for k, v in required.items() if not v]
     if missing:
         raise EnvironmentError(f"Missing required env vars: {', '.join(missing)}")
+
+
+# ── SHORT Strategy Control ─────────────────────────────────────────────────────
+# Enable/disable SHORT reversal strategy
+# Set to False to keep only LONG strategy active (default for safety)
+ENABLE_SHORT_STRATEGY = os.environ.get("ENABLE_SHORT_STRATEGY", "false").lower() == "true"
