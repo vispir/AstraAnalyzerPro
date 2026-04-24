@@ -297,23 +297,29 @@ def check_session_breakout():
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
         current_hour = datetime.now(timezone.utc).hour
 
-        # Определяем текущую сессию и причину
-        reason = ""
+        # Определяем текущую сессию и причину для LONG
+        long_reason = "Waiting for conditions"
+        short_reason = "Waiting for conditions"
+        short_ema_status = "N/A"
+
         if 0 <= current_hour < 7:
             current_session = "Asian Range"
+            long_reason = "Forming range (0-7h)"
         elif 7 <= current_hour < 10:
             current_session = "Asian Breakout"
-            reason = "Waiting for breakout conditions"
+            long_reason = "Checking breakout conditions"
         elif 10 <= current_hour < 13:
             current_session = "London Range"
+            long_reason = "Forming range (7-12h)"
         elif 13 <= current_hour < 16:
             current_session = "London Breakout"
-            reason = "Waiting for breakout conditions"
+            long_reason = "Checking breakout conditions"
         elif 16 <= current_hour < 18:
             current_session = "NY Range"
+            long_reason = "Forming range (13-17h)"
         elif 18 <= current_hour < 21:
             current_session = "NY Breakout"
-            # Проверяем почему нет сигнала
+            # Проверяем почему нет LONG сигнала
             if len(today_data) > 0:
                 ny_range = today_data[(today_data.index.hour >= 13) & (today_data.index.hour < 17)]
                 if len(ny_range) > 0:
@@ -322,20 +328,55 @@ def check_session_breakout():
                     if last_atr > 0:
                         range_atr = range_size / last_atr
                         if range_atr > 3.0:
-                            reason = f"Range too wide ({range_atr:.1f} ATR > 3.0 limit)"
+                            long_reason = f"Range too wide ({range_atr:.1f} ATR > 3.0)"
                         elif range_atr < 0.5:
-                            reason = f"Range too narrow ({range_atr:.1f} ATR < 0.5 limit)"
+                            long_reason = f"Range too narrow ({range_atr:.1f} ATR < 0.5)"
                         else:
-                            reason = "No breakout or H4 EMA filter"
+                            long_reason = "No breakout or H4 EMA filter failed"
         else:
-            current_session = "None"
+            current_session = "Closed"
+            long_reason = "Market closed (21-24h)"
+
+        # Проверяем SHORT условия для статуса
+        if 0 <= current_hour < 21 and len(today_data) > 0 and len(df_h4) > 0:
+            last_bar = today_data.iloc[-1]
+            current_h4 = df_h4.iloc[-1]
+            h4_ema20 = current_h4.get('ema20')
+
+            if pd.notna(h4_ema20):
+                if last_bar['close'] < h4_ema20:
+                    short_ema_status = f"Below ✓ ({last_bar['close']:.2f} < {h4_ema20:.2f})"
+                    # Проверяем почему нет SHORT сигнала
+                    if len(df_h4) >= SHORT_TYPE1_LOOKBACK:
+                        last_n_h4 = df_h4.tail(SHORT_TYPE1_LOOKBACK)
+                        if last_n_h4['close'].iloc[-1] >= last_n_h4['close'].iloc[-2]:
+                            short_reason = "Waiting for H4 close lower"
+                        else:
+                            short_reason = "Waiting for M15 break below low"
+                    else:
+                        short_reason = "Not enough H4 data"
+                else:
+                    short_ema_status = f"Above ✗ ({last_bar['close']:.2f} > {h4_ema20:.2f})"
+                    short_reason = "Price above H4 EMA20"
+            else:
+                short_ema_status = "Calculating..."
+                short_reason = "EMA20 not ready"
+        else:
+            if current_hour >= 21:
+                short_ema_status = "Market closed"
+                short_reason = "Outside active hours (0-21h)"
+            else:
+                short_ema_status = "N/A"
+                short_reason = "No data"
 
         telegram_service.send_session_breakout_status({
             'active_trade': False,
             'signal_generated': False,
             'current_price': f"{current_price:.2f}",
             'current_session': current_session,
-            'reason': reason
+            'long_reason': long_reason,
+            'short_reason': short_reason,
+            'short_ema_status': short_ema_status
         })
 
         return {

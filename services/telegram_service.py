@@ -1149,16 +1149,22 @@ class TelegramService:
                     f"Check Signal Bot for details"
                 )
             else:
-                # Добавляем причину если есть
-                reason = status_data.get('reason', '')
-                reason_text = f"\n📋 {reason}" if reason else ""
+                # Объединенный монитор LONG + SHORT
+                long_reason = status_data.get('long_reason', 'Checking conditions')
+                short_reason = status_data.get('short_reason', 'Checking conditions')
+                short_ema_status = status_data.get('short_ema_status', 'N/A')
 
                 message = (
-                    f"<b>📊 Session Breakout Monitor</b>\n"
-                    f"<i>{timestamp}</i>\n\n"
-                    f"💰 Price: ${current_price}\n"
-                    f"🕐 Session: {current_session.upper() if current_session != 'None' else 'Pause / No Active Session'}\n"
-                    f"⏳ No entry conditions met{reason_text}"
+                    f"<b>📊 Trading Monitor</b>\n"
+                    f"<i>{timestamp} | Price: ${current_price}</i>\n\n"
+                    f"<b>🟢 LONG (Session Breakout)</b>\n"
+                    f"Session: {current_session.upper() if current_session != 'None' else 'Pause'}\n"
+                    f"Status: ⏳ No entry\n"
+                    f"Reason: {long_reason}\n\n"
+                    f"<b>🔴 SHORT (Reversal)</b>\n"
+                    f"H4 EMA: {short_ema_status}\n"
+                    f"Status: ⏳ No entry\n"
+                    f"Reason: {short_reason}"
                 )
 
             # Отправляем всем админам
