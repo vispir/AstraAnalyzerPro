@@ -192,8 +192,11 @@ def init_mt5():
 
 def open_trade(signal):
     """Открыть сделку по сигналу"""
+    direction = signal['direction']
+    signal_type = signal.get('signal_type', 'session_breakout')
+
     if TEST_MODE:
-        logger.info(f"[TEST MODE] Would open trade: {signal['direction']} @ {signal['entry']}")
+        logger.info(f"[TEST MODE] Would open trade: {direction} @ {signal['entry']} | Type: {signal_type}")
         return 999999  # Fake ticket для теста
 
     if not MT5_AVAILABLE:
@@ -201,7 +204,6 @@ def open_trade(signal):
         return None
 
     try:
-        direction = signal['direction']
         entry = signal['entry']
         sl = signal['sl']
         tp = signal['tp']
@@ -230,8 +232,14 @@ def open_trade(signal):
         if lot > symbol_info.volume_max:
             lot = symbol_info.volume_max
 
-        logger.info(f"Opening {direction} trade:")
-        logger.info(f"  Entry: {entry}, SL: {sl}, TP: {tp}")
+        # Получаем текущую цену для входа
+        if order_type == mt5.ORDER_TYPE_BUY:
+            current_price = mt5.symbol_info_tick(SYMBOL).ask
+        else:
+            current_price = mt5.symbol_info_tick(SYMBOL).bid
+
+        logger.info(f"Opening {direction} trade ({signal_type}):")
+        logger.info(f"  Entry: {entry} (current: {current_price}), SL: {sl}, TP: {tp}")
         logger.info(f"  Lot: {lot}, Risk: ${risk_usd}")
 
         # Формируем запрос
@@ -240,12 +248,12 @@ def open_trade(signal):
             "symbol": SYMBOL,
             "volume": lot,
             "type": order_type,
-            "price": entry,
+            "price": current_price,  # Используем текущую цену вместо entry
             "sl": sl,
             "tp": tp,
             "deviation": DEVIATION,
             "magic": MAGIC_NUMBER,
-            "comment": f"SessionBreakout_{signal['session']}",
+            "comment": f"Astra_{direction}_{signal_type}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
