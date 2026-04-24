@@ -1149,12 +1149,16 @@ class TelegramService:
                     f"Check Signal Bot for details"
                 )
             else:
+                # Добавляем причину если есть
+                reason = status_data.get('reason', '')
+                reason_text = f"\n📋 {reason}" if reason else ""
+
                 message = (
                     f"<b>📊 Session Breakout Monitor</b>\n"
                     f"<i>{timestamp}</i>\n\n"
                     f"💰 Price: ${current_price}\n"
                     f"🕐 Session: {current_session.upper() if current_session != 'None' else 'Pause / No Active Session'}\n"
-                    f"⏳ No entry conditions met"
+                    f"⏳ No entry conditions met{reason_text}"
                 )
 
             # Отправляем всем админам

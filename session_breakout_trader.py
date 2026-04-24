@@ -297,19 +297,36 @@ def check_session_breakout():
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
         current_hour = datetime.now(timezone.utc).hour
 
-        # Определяем текущую сессию
+        # Определяем текущую сессию и причину
+        reason = ""
         if 0 <= current_hour < 7:
             current_session = "Asian Range"
         elif 7 <= current_hour < 10:
             current_session = "Asian Breakout"
+            reason = "Waiting for breakout conditions"
         elif 10 <= current_hour < 13:
             current_session = "London Range"
         elif 13 <= current_hour < 16:
             current_session = "London Breakout"
+            reason = "Waiting for breakout conditions"
         elif 16 <= current_hour < 18:
             current_session = "NY Range"
         elif 18 <= current_hour < 21:
             current_session = "NY Breakout"
+            # Проверяем почему нет сигнала
+            if len(today_data) > 0:
+                ny_range = today_data[(today_data.index.hour >= 13) & (today_data.index.hour < 17)]
+                if len(ny_range) > 0:
+                    range_size = ny_range['high'].max() - ny_range['low'].min()
+                    last_atr = today_data.iloc[-1].get('atr', 0)
+                    if last_atr > 0:
+                        range_atr = range_size / last_atr
+                        if range_atr > 3.0:
+                            reason = f"Range too wide ({range_atr:.1f} ATR > 3.0 limit)"
+                        elif range_atr < 0.5:
+                            reason = f"Range too narrow ({range_atr:.1f} ATR < 0.5 limit)"
+                        else:
+                            reason = "No breakout or H4 EMA filter"
         else:
             current_session = "None"
 
@@ -317,7 +334,8 @@ def check_session_breakout():
             'active_trade': False,
             'signal_generated': False,
             'current_price': f"{current_price:.2f}",
-            'current_session': current_session
+            'current_session': current_session,
+            'reason': reason
         })
 
         return {
