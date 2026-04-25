@@ -21,8 +21,8 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import from session_breakout_trader_v4
-from session_breakout_trader_v4 import (
+# Import from session_breakout_trader
+from session_breakout_trader import (
     RISK_PER_TRADE, TP_RR, ATR_PERIOD, ATR_BUFFER,
     USE_H4_EMA_FILTER, H4_EMA_PERIOD,
     LONG_SESSIONS,
