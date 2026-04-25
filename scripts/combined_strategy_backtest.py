@@ -220,7 +220,8 @@ def run_combined_backtest(df, df_h4):
                         'tp': active_long['tp'],
                         'pnl': pnl,
                         'exit_reason': 'sl',
-                        'direction': 'LONG'
+                        'direction': 'LONG',
+                        'session': active_long.get('session', 'unknown')
                     })
                     active_long = None
                 elif highs[i] >= active_long['tp']:
@@ -236,7 +237,8 @@ def run_combined_backtest(df, df_h4):
                         'tp': active_long['tp'],
                         'pnl': pnl,
                         'exit_reason': 'tp',
-                        'direction': 'LONG'
+                        'direction': 'LONG',
+                        'session': active_long.get('session', 'unknown')
                     })
                     active_long = None
 
@@ -615,6 +617,21 @@ def main():
     print(f"Trades per year:   {result['total_trades']/years:.1f}")
     print(f"  LONG:            {result['long_trades']/years:.1f}")
     print(f"  SHORT:           {result['short_trades']/years:.1f}")
+
+    # BY SESSION breakdown for LONG
+    print("\n" + "=" * 120)
+    print("BY SESSION (LONG)")
+    print("=" * 120)
+    trades_df = result['trades_df']
+    long_trades = trades_df[trades_df['direction'] == 'LONG']
+
+    for session in ['asian', 'london', 'ny']:
+        session_trades = long_trades[long_trades['session'] == session]
+        if len(session_trades) > 0:
+            session_wins = session_trades[session_trades['pnl'] > 0]
+            session_wr = len(session_wins) / len(session_trades) * 100
+            session_pnl = session_trades['pnl'].sum()
+            print(f"{session.upper()}: {len(session_trades)} trades, ${session_pnl:,.0f} PnL, WR {session_wr:.1f}%")
 
     print("\n" + "=" * 120)
     print("TARGET VALIDATION")
