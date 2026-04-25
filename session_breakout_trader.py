@@ -150,7 +150,7 @@ def save_short_state(type1_active, type1_h4_high, type2_active, type2_h4_high, l
         logger.error(f"Error saving SHORT state: {e}")
         return False
 
-def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=500):
+def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=2000):
     """Загрузить свечи из Supabase"""
     try:
         url = f"{SUPABASE_REST_URL}/mt5_candles?symbol=eq.{symbol}&timeframe=eq.{timeframe}&order=time.desc&limit={limit}"
