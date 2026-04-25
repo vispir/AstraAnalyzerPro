@@ -22,13 +22,25 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-def get_active_signal():
+def get_active_signal(session=None):
     """
     Check if there's already an active trade
+
+    Args:
+        session: Optional session filter ('asian', 'london', 'ny', 'short')
+                 If None, returns any active signal (backward compatible)
+                 If specified, returns active signal for that session only
+
     Returns: dict or None
     """
     try:
-        url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&select=*"
+        if session:
+            # v4.0: Check for active signal in specific session
+            url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&session=eq.{session}&select=*"
+        else:
+            # Backward compatible: check for any active signal
+            url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&select=*"
+
         response = requests.get(url, headers=HEADERS)
         response.raise_for_status()
 
@@ -40,7 +52,7 @@ def get_active_signal():
         print(f"Error checking active signal: {e}")
         return None
 
-def write_signal(direction, entry, sl, tp, session, risk_usd=165):
+def write_signal(direction, entry, sl, tp, session, risk_usd=120):
     """
     Write new trading signal to Supabase
 
@@ -49,16 +61,16 @@ def write_signal(direction, entry, sl, tp, session, risk_usd=165):
         entry: Entry price
         sl: Stop loss price
         tp: Take profit price
-        session: 'asian', 'london', or 'ny'
-        risk_usd: Risk amount in USD (default 165)
+        session: 'asian', 'london', 'ny', or 'short'
+        risk_usd: Risk amount in USD (default 120 for v4.0)
 
     Returns:
         dict: Created signal record or None if failed
     """
-    # Check if there's already an active signal
-    active = get_active_signal()
+    # v4.0: Check if there's already an active signal FOR THIS SESSION
+    active = get_active_signal(session=session)
     if active:
-        print(f"Active signal already exists (ID: {active['id']}), skipping new signal")
+        print(f"Active {session} signal already exists (ID: {active['id']}), skipping new signal")
         return None
 
     try:

@@ -1056,7 +1056,8 @@ class TelegramService:
 
     def send_session_breakout_signal(self, signal_data, test_mode=False):
         """
-        Отправка сигнала Session Breakout в Signal Bot
+        Отправка сигнала Session Breakout v4.0 в Signal Bot
+        Поддерживает множественные позиции
 
         Args:
             signal_data: dict с данными сигнала из Supabase
@@ -1067,6 +1068,8 @@ class TelegramService:
             return
 
         try:
+            from astra_v2.mt5.mt5_signal_writer import get_active_signal
+
             direction = signal_data.get('direction', 'LONG')
             entry = signal_data.get('entry', 0)
             sl = signal_data.get('sl', 0)
@@ -1085,6 +1088,19 @@ class TelegramService:
             # Метка тестового режима
             mode_label = "⚠️ [TEST MODE] " if test_mode else ""
 
+            # Проверяем все активные позиции
+            active_sessions = []
+            for sess in ['asian', 'london', 'ny', 'short']:
+                active = get_active_signal(session=sess)
+                if active:
+                    active_sessions.append(sess.upper())
+
+            # Формируем строку активных позиций
+            if len(active_sessions) > 0:
+                active_str = f"\n<b>Active:</b> {', '.join(active_sessions)}"
+            else:
+                active_str = ""
+
             message = (
                 f"{mode_label}<b>{dir_emoji} {direction} SIGNAL</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1093,13 +1109,12 @@ class TelegramService:
                 f"<b>Stop Loss:</b> {sl:.2f}\n"
                 f"<b>Take Profit:</b> {tp:.2f}\n"
                 f"<b>Risk:</b> ${risk_usd:.0f}\n"
-                f"<b>R:R:</b> 1:{rr_ratio:.1f}\n"
+                f"<b>R:R:</b> 1:{rr_ratio:.1f}{active_str}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Strategy: Session Range Breakout v2.1</i>"
+                f"<i>Strategy: Session Breakout v4.0 (Multiple Positions)</i>"
             )
 
-            # Отправляем всем кто нажал /start в Signal Bot
-            # Для простоты отправляем админам (можно расширить позже)
+            # Отправляем всем админам
             sent_count = 0
 
             for chat_id in self.admin_chat_ids:
@@ -1117,7 +1132,8 @@ class TelegramService:
 
     def send_session_breakout_status(self, status_data):
         """
-        Отправка статуса проверки Session Breakout в основной бот (каждые 15 мин)
+        Отправка единого статуса Session Breakout v4.0 (каждые 15 мин)
+        Показывает все активные позиции и текущий мониторинг
 
         Args:
             status_data: dict с информацией о проверке
@@ -1126,45 +1142,47 @@ class TelegramService:
             return
 
         try:
+            from astra_v2.mt5.mt5_signal_writer import get_active_signal
+
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
             current_price = status_data.get('current_price', 'N/A')
-            current_session = status_data.get('current_session', 'None')
+            current_session = status_data.get('current_session', 'Pause')
 
-            # Краткий статус
-            if status_data.get('active_trade'):
+            # Проверяем все активные позиции
+            active_positions = []
+            for sess in ['asian', 'london', 'ny', 'short']:
+                active = get_active_signal(session=sess)
+                if active:
+                    direction = active.get('direction', 'N/A')
+                    entry = active.get('entry', 0)
+                    active_positions.append(f"{sess.upper()} {direction} @ {entry:.2f}")
+
+            # Формируем сообщение
+            if len(active_positions) > 0:
+                # Есть активные позиции
+                positions_str = "\n".join([f"  • {pos}" for pos in active_positions])
                 message = (
-                    f"<b>📊 Session Breakout Status</b>\n"
-                    f"<i>{timestamp}</i>\n\n"
-                    f"✅ Active trade in progress\n"
-                    f"Session: {status_data.get('session', 'N/A').upper()}\n"
-                    f"Direction: {status_data.get('direction', 'N/A')}\n"
-                    f"Current Price: ${current_price}"
-                )
-            elif status_data.get('signal_generated'):
-                message = (
-                    f"<b>📊 Session Breakout Status</b>\n"
-                    f"<i>{timestamp}</i>\n\n"
-                    f"🎯 New signal generated!\n"
-                    f"Session: {status_data.get('session', 'N/A').upper()}\n"
-                    f"Check Signal Bot for details"
+                    f"<b>📊 Session Breakout v4.0</b>\n"
+                    f"<i>{timestamp} | ${current_price}</i>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<b>✅ Active Positions ({len(active_positions)}/4):</b>\n"
+                    f"{positions_str}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<b>Current Session:</b> {current_session}\n"
+                    f"<i>Monitoring for new entries...</i>"
                 )
             else:
-                # Объединенный монитор LONG + SHORT
-                long_reason = status_data.get('long_reason', 'Checking conditions')
-                short_reason = status_data.get('short_reason', 'Checking conditions')
-                short_ema_status = status_data.get('short_ema_status', 'N/A')
-
+                # Нет активных позиций - показываем мониторинг
                 message = (
-                    f"<b>📊 Trading Monitor</b>\n"
-                    f"<i>{timestamp} | Price: ${current_price}</i>\n\n"
-                    f"<b>🟢 LONG (Session Breakout)</b>\n"
-                    f"Session: {current_session.upper() if current_session != 'None' else 'Pause'}\n"
-                    f"Status: ⏳ No entry\n"
-                    f"Reason: {long_reason}\n\n"
-                    f"<b>🔴 SHORT (Reversal)</b>\n"
-                    f"H4 EMA: {short_ema_status}\n"
-                    f"Status: ⏳ No entry\n"
-                    f"Reason: {short_reason}"
+                    f"<b>📊 Session Breakout v4.0</b>\n"
+                    f"<i>{timestamp} | ${current_price}</i>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<b>⏳ No Active Positions (0/4)</b>\n\n"
+                    f"<b>Current Session:</b> {current_session}\n"
+                    f"<b>LONG:</b> Monitoring breakouts\n"
+                    f"<b>SHORT:</b> Monitoring reversals\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<i>Waiting for entry conditions...</i>"
                 )
 
             # Отправляем всем админам
