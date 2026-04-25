@@ -305,7 +305,7 @@ void CheckNewSignals()
 //+------------------------------------------------------------------+
 void SyncCandlesToFile()
 {
-   int barsToSync = 800;  // 800 bars = 50 H4 bars for EMA20 warmup
+   int barsToSync = 2000;  // 2000 bars = 125 H4 bars for EMA20 warmup
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);

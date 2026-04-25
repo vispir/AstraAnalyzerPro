@@ -506,7 +506,7 @@ def check_session_breakout():
             logger.info(f"Active sessions: {', '.join(active_sessions)}")
 
         # 2. Load M15 data
-        df = load_candles_from_supabase('XAUUSD', 'M15', limit=800)
+        df = load_candles_from_supabase('XAUUSD', 'M15', limit=2000)
         if df is None or len(df) == 0:
             logger.error("Failed to load M15 data")
             return {"success": False, "message": "No M15 data"}
