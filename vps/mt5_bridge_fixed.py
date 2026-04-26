@@ -40,12 +40,22 @@ HEADERS = {
 def get_new_signals():
     try:
         url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.new&select=*"
-        response = requests.get(url, headers=HEADERS)
+        response = requests.get(url, headers=HEADERS, timeout=(5, 10))
         response.raise_for_status()
         return response.json()
     except Exception as e:
         logger.error(f"Error getting signals: {e}")
         return []
+
+def mark_signal_active(signal_id):
+    """Mark signal as active after writing to file for MT5 EA"""
+    try:
+        url = f"{SUPABASE_REST_URL}/mt5_signals?id=eq.{signal_id}"
+        response = requests.patch(url, headers=HEADERS, json={'status': 'active'}, timeout=(5, 10))
+        response.raise_for_status()
+        logger.info(f"Signal {signal_id} marked as active")
+    except Exception as e:
+        logger.error(f"Error marking signal {signal_id} active: {e}")
 
 def write_signals_to_file(signals):
     try:
@@ -77,7 +87,7 @@ def sync_candles(candles):
         headers = HEADERS.copy()
         headers["Prefer"] = "resolution=merge-duplicates"
 
-        response = requests.post(url, headers=headers, json=candles)
+        response = requests.post(url, headers=headers, json=candles, timeout=(5, 30))
         response.raise_for_status()
         logger.info(f"Synced {len(candles)} candles")
         return True
@@ -167,7 +177,9 @@ def main():
             signals = get_new_signals()
             if signals:
                 logger.info(f"Found {len(signals)} new signals")
-                write_signals_to_file(signals)
+                if write_signals_to_file(signals):
+                    for s in signals:
+                        mark_signal_active(s['id'])
 
             time.sleep(CHECK_INTERVAL)
     except KeyboardInterrupt:

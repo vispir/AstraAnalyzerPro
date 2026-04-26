@@ -90,7 +90,7 @@ def get_short_state():
     """Загрузить SHORT state machine из Supabase"""
     try:
         url = f"{SUPABASE_REST_URL}/short_state?select=*&order=updated_at.desc&limit=1"
-        response = requests.get(url, headers=HEADERS)
+        response = requests.get(url, headers=HEADERS, timeout=(5, 30))
         response.raise_for_status()
 
         data = response.json()
@@ -126,6 +126,7 @@ def save_short_state(type1_active, type1_h4_high, type2_active, type2_h4_high, l
     """Сохранить SHORT state machine в Supabase"""
     try:
         state_data = {
+            'id': 1,  # singleton row for upsert
             'type1_active': type1_active,
             'type1_h4_high': float(type1_h4_high) if type1_h4_high is not None else None,
             'type2_active': type2_active,
@@ -134,14 +135,11 @@ def save_short_state(type1_active, type1_h4_high, type2_active, type2_h4_high, l
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
 
-        # Upsert: delete old and insert new (simple approach)
-        # First delete all old records
-        delete_url = f"{SUPABASE_REST_URL}/short_state"
-        requests.delete(delete_url, headers=HEADERS)
-
-        # Insert new state
-        insert_url = f"{SUPABASE_REST_URL}/short_state"
-        response = requests.post(insert_url, headers=HEADERS, json=state_data)
+        # Atomic upsert on id=1 (singleton row)
+        upsert_url = f"{SUPABASE_REST_URL}/short_state?on_conflict=id"
+        upsert_headers = HEADERS.copy()
+        upsert_headers['Prefer'] = 'resolution=merge-duplicates,return=representation'
+        response = requests.post(upsert_url, headers=upsert_headers, json=state_data, timeout=(5, 30))
         response.raise_for_status()
 
         logger.info(f"SHORT state saved: Type1={type1_active}, Type2={type2_active}")
@@ -160,7 +158,7 @@ def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=2000):
         headers['Range'] = f'0-{limit-1}'
         headers['Prefer'] = 'count=exact'
 
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=(5, 30))
         response.raise_for_status()
 
         data = response.json()
@@ -249,9 +247,13 @@ def check_long_session_breakout(today_data, df_h4, current_hour, current_time):
             continue
 
         # Check if active trade exists for this session
-        active = get_active_signal(session=session_name)
-        if active:
-            logger.info(f"{session_name}: Active trade exists, skipping")
+        try:
+            active = get_active_signal(session=session_name)
+            if active:
+                logger.info(f"{session_name}: Active trade exists, skipping")
+                continue
+        except Exception as e:
+            logger.error(f"{session_name}: Supabase error checking active signal, skipping session: {e}")
             continue
 
         entry_start = params['entry_start']
@@ -330,9 +332,13 @@ def check_short_reversal(today_data, df_h4, current_hour):
         return None
 
     # Check if SHORT trade already active
-    active = get_active_signal(session='short')
-    if active:
-        logger.info("SHORT: Active trade exists, skipping")
+    try:
+        active = get_active_signal(session='short')
+        if active:
+            logger.info("SHORT: Active trade exists, skipping")
+            return None
+    except Exception as e:
+        logger.error(f"SHORT: Supabase error checking active signal, skipping: {e}")
         return None
 
     if len(today_data) == 0:
@@ -503,10 +509,13 @@ def check_session_breakout():
         # 1. Check for active trades (может быть несколько)
         active_sessions = []
         for session in ['asian', 'london', 'ny', 'short']:
-            active = get_active_signal(session=session)
-            if active:
-                active_sessions.append(session)
-                logger.info(f"✓ Active {session} trade (ID: {active['id']})")
+            try:
+                active = get_active_signal(session=session)
+                if active:
+                    active_sessions.append(session)
+                    logger.info(f"✓ Active {session} trade (ID: {active['id']})")
+            except Exception as e:
+                logger.error(f"Supabase error checking {session}: {e}")
 
         if len(active_sessions) > 0:
             logger.info(f"Active sessions: {', '.join(active_sessions)}")

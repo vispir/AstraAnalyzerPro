@@ -30,3 +30,15 @@ logs/
 # Database
 *.db
 
+# Backtest results (regenerable)
+backtest_results/
+!backtest_results/.gitkeep
+
+# Data cache (large parquet files)
+data_cache/
+
+# Node modules
+node_modules/
+
+# Pytest
+.pytest_cache/

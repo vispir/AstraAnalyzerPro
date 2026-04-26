@@ -5,7 +5,7 @@ Uses direct HTTP requests to avoid supabase-py dependency issues
 """
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Supabase credentials (set as environment variables)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
@@ -35,13 +35,13 @@ def get_active_signal(session=None):
     """
     try:
         if session:
-            # v4.0: Check for active signal in specific session
-            url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&session=eq.{session}&select=*"
+            # v4.0: Check for active or new signal in specific session
+            url = f"{SUPABASE_REST_URL}/mt5_signals?status=in.(active,new)&session=eq.{session}&select=*"
         else:
-            # Backward compatible: check for any active signal
-            url = f"{SUPABASE_REST_URL}/mt5_signals?status=eq.active&select=*"
+            # Backward compatible: check for any active/new signal
+            url = f"{SUPABASE_REST_URL}/mt5_signals?status=in.(active,new)&select=*"
 
-        response = requests.get(url, headers=HEADERS)
+        response = requests.get(url, headers=HEADERS, timeout=(5, 30))
         response.raise_for_status()
 
         data = response.json()
@@ -50,7 +50,7 @@ def get_active_signal(session=None):
         return None
     except Exception as e:
         print(f"Error checking active signal: {e}")
-        return None
+        raise
 
 def write_signal(direction, entry, sl, tp, session, risk_usd=120):
     """
@@ -82,11 +82,11 @@ def write_signal(direction, entry, sl, tp, session, risk_usd=120):
             'session': session,
             'risk_usd': float(risk_usd),
             'status': 'new',
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat()
         }
 
         url = f"{SUPABASE_REST_URL}/mt5_signals"
-        response = requests.post(url, headers=HEADERS, json=signal_data)
+        response = requests.post(url, headers=HEADERS, json=signal_data, timeout=(5, 30))
         response.raise_for_status()
 
         data = response.json()
@@ -120,7 +120,7 @@ def update_signal_status(signal_id, status, exit_price=None, pnl=None):
             update_data['pnl'] = float(pnl)
 
         url = f"{SUPABASE_REST_URL}/mt5_signals?id=eq.{signal_id}"
-        response = requests.patch(url, headers=HEADERS, json=update_data)
+        response = requests.patch(url, headers=HEADERS, json=update_data, timeout=(5, 30))
         response.raise_for_status()
 
         print(f"Signal {signal_id} updated to status: {status}")
@@ -133,7 +133,7 @@ def get_recent_signals(limit=10):
     """Get recent signals for monitoring"""
     try:
         url = f"{SUPABASE_REST_URL}/mt5_signals?select=*&order=created_at.desc&limit={limit}"
-        response = requests.get(url, headers=HEADERS)
+        response = requests.get(url, headers=HEADERS, timeout=(5, 30))
         response.raise_for_status()
         return response.json()
     except Exception as e:
