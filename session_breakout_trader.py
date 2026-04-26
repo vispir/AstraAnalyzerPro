@@ -155,9 +155,10 @@ def load_candles_from_supabase(symbol='XAUUSD', timeframe='M15', limit=2000):
     try:
         url = f"{SUPABASE_REST_URL}/mt5_candles?symbol=eq.{symbol}&timeframe=eq.{timeframe}&order=time.desc&limit={limit}"
 
-        # Add Range header to bypass 1000 row limit
+        # Add headers to bypass 1000 row limit
         headers = HEADERS.copy()
         headers['Range'] = f'0-{limit-1}'
+        headers['Prefer'] = 'count=exact'
 
         response = requests.get(url, headers=headers)
         response.raise_for_status()
