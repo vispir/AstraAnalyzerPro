@@ -55,6 +55,7 @@ def write_signals_to_file(signals):
             data.append({
                 'id': s['id'],
                 'direction': s['direction'],
+                'session': s['session'],
                 'signal_type': s.get('signal_type', 'session_breakout'),
                 'entry': float(s['entry']),
                 'sl': float(s['sl']),

@@ -34,8 +34,15 @@ int OnInit()
    Print("Risk: $", RiskUSD, " | Magic: ", MagicNumber);
    Print("Trailing: ", EnableTrailing ? "Enabled" : "Disabled");
    Print("Test Mode: ", TestMode ? "ON (no real trades)" : "OFF (live trading)");
-   Print("Multiple Positions: Enabled (max 1 LONG + 1 SHORT)");
+   Print("Multiple Positions: Enabled (max 4: Asian+London+NY+SHORT)");
    Print("==========================================================");
+
+   // Set timer for 1 second interval (for candle sync without ticks)
+   EventSetTimer(1);
+
+   // Force sync candles on startup
+   Print("Force syncing candles on startup...");
+   SyncCandlesToFile();
 
    return(INIT_SUCCEEDED);
 }
@@ -45,6 +52,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    Print("EA stopped. Reason: ", reason);
 }
 
@@ -94,11 +102,33 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Check if position exists for direction                          |
+//| Timer function (works without ticks)                             |
 //+------------------------------------------------------------------+
-bool HasPositionForDirection(string direction)
+void OnTimer()
 {
-   ENUM_POSITION_TYPE targetType = (direction == "LONG") ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   // Debug: print current time every minute
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+
+   if(dt.sec == 0)
+   {
+      Print("Timer check: ", dt.hour, ":", dt.min, ":", dt.sec);
+   }
+
+   // Sync candles at 10 sec after M15 close (00/15/30/45)
+   if(ShouldSyncCandles())
+   {
+      Print("Syncing candles NOW...");
+      SyncCandlesToFile();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if position exists for session                            |
+//+------------------------------------------------------------------+
+bool HasPositionForSession(string session)
+{
+   string targetComment = "Astra_" + session;
 
    for(int i = 0; i < PositionsTotal(); i++)
    {
@@ -106,7 +136,7 @@ bool HasPositionForDirection(string direction)
       {
          if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
             PositionGetString(POSITION_SYMBOL) == _Symbol &&
-            PositionGetInteger(POSITION_TYPE) == targetType)
+            PositionGetString(POSITION_COMMENT) == targetComment)
          {
             return true;
          }
@@ -118,7 +148,7 @@ bool HasPositionForDirection(string direction)
 //+------------------------------------------------------------------+
 //| Parse JSON array and extract signals                            |
 //+------------------------------------------------------------------+
-int ParseSignals(string json, string &directions[], double &entries[], double &sls[], double &tps[], double &risks[])
+int ParseSignals(string json, string &directions[], double &entries[], double &sls[], double &tps[], double &risks[], string &sessions[])
 {
    // Remove whitespace and newlines
    StringReplace(json, " ", "");
@@ -156,6 +186,7 @@ int ParseSignals(string json, string &directions[], double &entries[], double &s
 
       // Parse object fields
       string direction = "";
+      string session = "";
       double entry = 0, sl = 0, tp = 0, risk = 0;
 
       // Extract direction
@@ -165,6 +196,15 @@ int ParseSignals(string json, string &directions[], double &entries[], double &s
          int dirStart = dirPos + 13;
          int dirEnd = StringFind(obj, "\"", dirStart);
          direction = StringSubstr(obj, dirStart, dirEnd - dirStart);
+      }
+
+      // Extract session
+      int sessPos = StringFind(obj, "\"session\":\"");
+      if(sessPos >= 0)
+      {
+         int sessStart = sessPos + 11;
+         int sessEnd = StringFind(obj, "\"", sessStart);
+         session = StringSubstr(obj, sessStart, sessEnd - sessStart);
       }
 
       // Extract entry
@@ -209,19 +249,21 @@ int ParseSignals(string json, string &directions[], double &entries[], double &s
       }
 
       // Validate and add
-      if(direction != "" && entry > 0 && sl > 0 && tp > 0 && risk > 0)
+      if(direction != "" && session != "" && entry > 0 && sl > 0 && tp > 0 && risk > 0)
       {
          ArrayResize(directions, count + 1);
          ArrayResize(entries, count + 1);
          ArrayResize(sls, count + 1);
          ArrayResize(tps, count + 1);
          ArrayResize(risks, count + 1);
+         ArrayResize(sessions, count + 1);
 
          directions[count] = direction;
          entries[count] = entry;
          sls[count] = sl;
          tps[count] = tp;
          risks[count] = risk;
+         sessions[count] = session;
 
          count++;
       }
@@ -271,9 +313,10 @@ void CheckNewSignals()
 
    // Parse JSON array
    string directions[];
+   string sessions[];
    double entries[], sls[], tps[], risks[];
 
-   int signalCount = ParseSignals(jsonContent, directions, entries, sls, tps, risks);
+   int signalCount = ParseSignals(jsonContent, directions, entries, sls, tps, risks, sessions);
 
    if(signalCount == 0)
    {
@@ -288,9 +331,9 @@ void CheckNewSignals()
    int opened = 0;
    for(int i = 0; i < signalCount; i++)
    {
-      Print("Signal ", i + 1, ": ", directions[i], " @ ", entries[i], " SL:", sls[i], " TP:", tps[i]);
+      Print("Signal ", i + 1, ": ", directions[i], " ", sessions[i], " @ ", entries[i], " SL:", sls[i], " TP:", tps[i]);
 
-      if(OpenTrade(directions[i], entries[i], sls[i], tps[i], risks[i]))
+      if(OpenTrade(directions[i], entries[i], sls[i], tps[i], risks[i], sessions[i]))
       {
          opened++;
       }
@@ -446,13 +489,13 @@ void UpdateTrailingStops()
 //+------------------------------------------------------------------+
 //| Open trade from signal                                           |
 //+------------------------------------------------------------------+
-bool OpenTrade(string direction, double entry, double sl, double tp, double riskUSD)
+bool OpenTrade(string direction, double entry, double sl, double tp, double riskUSD, string session)
 {
-   // v4.0: Check if we already have a position in THIS direction
-   // Allow 1 LONG + 1 SHORT simultaneously (max 2 positions)
-   if(HasPositionForDirection(direction))
+   // v4.0: Check if we already have a position for THIS SESSION
+   // Allow multiple positions: Asian + London + NY + SHORT simultaneously
+   if(HasPositionForSession(session))
    {
-      Print("Position already open for ", direction, " - skipping signal");
+      Print("Position already open for session ", session, " - skipping signal");
       return false;
    }
 
@@ -460,6 +503,7 @@ bool OpenTrade(string direction, double entry, double sl, double tp, double risk
    {
       Print("=== TEST MODE SIGNAL ===");
       Print("Direction: ", direction);
+      Print("Session: ", session);
       Print("Entry: ", entry, " | SL: ", sl, " | TP: ", tp);
       Print("Risk: $", riskUSD);
       Print("========================");
@@ -506,12 +550,13 @@ bool OpenTrade(string direction, double entry, double sl, double tp, double risk
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = Slippage;
    request.magic = MagicNumber;
-   request.comment = "Astra_" + direction;
+   request.comment = "Astra_" + session;
 
    if(OrderSend(request, result))
    {
       Print("=== TRADE OPENED ===");
       Print("Direction: ", direction);
+      Print("Session: ", session);
       Print("Entry: ", request.price, " | SL: ", sl, " | TP: ", tp);
       Print("Lot: ", lot, " | Risk: $", riskUSD);
       Print("Ticket: ", result.order);
