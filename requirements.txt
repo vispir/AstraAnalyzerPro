@@ -27,6 +27,7 @@ pytest-cov>=5.0.0
 # ── Legacy v1 deps (kept for existing code, remove when v1 retired) ───────────
 Flask>=3.0.0
 flask-cors>=4.0.0
+gunicorn>=21.2.0
 gnews>=0.3.7
 beautifulsoup4>=4.12.0
 curl_cffi>=0.6.0
