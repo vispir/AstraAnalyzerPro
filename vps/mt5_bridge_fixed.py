@@ -139,13 +139,13 @@ def read_candles_from_file():
         return None
 
 def should_sync_candles():
-    """Check if current time is 15 seconds after M15 candle close (00/15/30/45)"""
+    """Check if current time is within sync window after M15 candle close (00/15/30/45)"""
     now = datetime.utcnow()
     minute = now.minute
     second = now.second
 
-    # Sync at 15 seconds after each M15 close (00:15, 15:15, 30:15, 45:15)
-    if minute % 15 == 0 and 15 <= second <= 20:
+    # Wide window (10-55s) so the 5s sleep loop never misses it
+    if minute % 15 == 0 and 10 <= second <= 55:
         return True
     return False
 
