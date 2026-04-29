@@ -1147,6 +1147,7 @@ class TelegramService:
             session_lows = status_data.get('session_lows', {})
             current_hour = status_data.get('current_hour', 0)
             next_cron = status_data.get('next_cron', '')
+            current_session = status_data.get('current_session', 'Pause')
 
             # H4 trend line
             if h4_trend:
@@ -1155,6 +1156,15 @@ class TelegramService:
                 trend_line = f"H4 Trend: {trend_emoji} {h4_trend['trend']} ({h4_trend['close']:.0f} {cmp} EMA20 {h4_trend['ema20']:.0f})"
             else:
                 trend_line = "H4 Trend: нет данных"
+
+            # Current phase line
+            if 'Pause' in current_session:
+                phase_emoji = '⏸'
+            elif 'Range' in current_session:
+                phase_emoji = '📐'
+            else:
+                phase_emoji = '🎯'
+            phase_line = f"Фаза: {phase_emoji} {current_session}"
 
             # Session ranges
             session_cfg = [
@@ -1207,7 +1217,8 @@ class TelegramService:
                 f"<b>📊 Session Breakout v4.0</b>\n"
                 f"<i>{timestamp} | ${current_price}</i>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{trend_line}\n\n"
+                f"{trend_line}\n"
+                f"{phase_line}\n\n"
                 f"{ranges_block}\n\n"
                 f"{positions_block}\n"
                 f"  <b>LONG:</b> {long_status}\n"
