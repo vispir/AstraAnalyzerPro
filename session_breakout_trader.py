@@ -210,7 +210,7 @@ def check_long_session_breakout(today_data, df_h4, current_hour, current_time):
     STATELESS: Recalculates session ranges from today's data each run
     """
     if len(today_data) == 0:
-        return []
+        return [], {}, {}
 
     # Recalculate session highs/lows from ALL today's bars
     session_highs = {}
@@ -307,7 +307,7 @@ def check_long_session_breakout(today_data, df_h4, current_hour, current_time):
             except Exception as e:
                 logger.error(f"Error writing LONG {session_name} signal: {e}")
 
-    return signals
+    return signals, session_highs, session_lows
 
 # ============================================================================
 # SHORT STRATEGY (VALIDATED LOGIC WITH STATE MACHINE)
@@ -559,6 +559,7 @@ def check_session_breakout():
         logger.info(f"✓ Today's data: {len(today_data)} bars")
 
         # Log H4 EMA20 status
+        h4_trend_data = None
         if df_h4 is not None and len(df_h4) > 0:
             h4_bars = df_h4[df_h4.index <= now_utc]
             if len(h4_bars) > 0:
@@ -566,10 +567,15 @@ def check_session_breakout():
                 if not pd.isna(current_h4['ema20']):
                     trend = "UP" if current_h4['close'] > current_h4['ema20'] else "DOWN"
                     logger.info(f"H4 close: {current_h4['close']:.2f}, EMA20: {current_h4['ema20']:.2f}, Trend: {trend}")
+                    h4_trend_data = {
+                        'close': current_h4['close'],
+                        'ema20': current_h4['ema20'],
+                        'trend': trend
+                    }
 
         # 6. Check LONG conditions (Asian + London + NY)
         logger.info("Checking LONG session breakouts (Asian + London + NY)...")
-        long_signals = check_long_session_breakout(today_data, df_h4, current_hour, now_utc)
+        long_signals, session_highs, session_lows = check_long_session_breakout(today_data, df_h4, current_hour, now_utc)
 
         # 7. Check SHORT conditions
         logger.info("Checking SHORT reversal conditions...")
@@ -605,12 +611,25 @@ def check_session_breakout():
         else:
             current_session = "Pause"
 
+        # Compute next cron time (runs at 01/16/31/46)
+        cron_minutes = [1, 16, 31, 46]
+        next_cron_min = next((m for m in cron_minutes if m > now_utc.minute), None)
+        if next_cron_min is not None:
+            next_cron_str = now_utc.replace(minute=next_cron_min, second=0, microsecond=0).strftime('%H:%M UTC')
+        else:
+            next_cron_str = (now_utc + timedelta(hours=1)).replace(minute=1, second=0, microsecond=0).strftime('%H:%M UTC')
+
         telegram_service.send_session_breakout_status({
             'active_trade': len(active_sessions) > 0,
             'active_sessions': active_sessions,
             'signal_generated': False,
             'current_price': f"{current_price:.2f}",
-            'current_session': current_session
+            'current_session': current_session,
+            'h4_trend': h4_trend_data,
+            'session_highs': session_highs,
+            'session_lows': session_lows,
+            'current_hour': current_hour,
+            'next_cron': next_cron_str,
         })
 
         return {"success": True, "message": "No entry conditions met", "active_sessions": active_sessions}

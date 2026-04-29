@@ -7,6 +7,7 @@ import json
 import logging
 import requests
 from pathlib import Path
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -125,7 +126,7 @@ def read_candles_from_file():
             candles_data.append({
                 'symbol': 'XAUUSD',
                 'timeframe': 'M15',
-                'time': candle['time'].replace('.', '-').replace(' ', 'T') + ':00Z',
+                'time': (datetime.strptime(candle['time'], '%Y.%m.%d %H:%M') - timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S') + 'Z',
                 'open': float(candle['open']),
                 'high': float(candle['high']),
                 'low': float(candle['low']),
@@ -139,7 +140,6 @@ def read_candles_from_file():
 
 def should_sync_candles():
     """Check if current time is 15 seconds after M15 candle close (00/15/30/45)"""
-    from datetime import datetime
     now = datetime.utcnow()
     minute = now.minute
     second = now.second
@@ -160,7 +160,6 @@ def main():
 
     try:
         while True:
-            from datetime import datetime
             now = datetime.utcnow()
             current_minute = now.minute
 

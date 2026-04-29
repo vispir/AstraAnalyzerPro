@@ -1133,10 +1133,6 @@ class TelegramService:
     def send_session_breakout_status(self, status_data):
         """
         Отправка единого статуса Session Breakout v4.0 (каждые 15 мин)
-        Показывает все активные позиции и текущий мониторинг
-
-        Args:
-            status_data: dict с информацией о проверке
         """
         if not self.bot or not self.admin_chat_ids:
             return
@@ -1146,46 +1142,80 @@ class TelegramService:
 
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
             current_price = status_data.get('current_price', 'N/A')
-            current_session = status_data.get('current_session', 'Pause')
+            h4_trend = status_data.get('h4_trend')
+            session_highs = status_data.get('session_highs', {})
+            session_lows = status_data.get('session_lows', {})
+            current_hour = status_data.get('current_hour', 0)
+            next_cron = status_data.get('next_cron', '')
 
-            # Проверяем все активные позиции
+            # H4 trend line
+            if h4_trend:
+                trend_emoji = '🟢' if h4_trend['trend'] == 'UP' else '🔴'
+                cmp = '>' if h4_trend['trend'] == 'UP' else '<'
+                trend_line = f"H4 Trend: {trend_emoji} {h4_trend['trend']} ({h4_trend['close']:.0f} {cmp} EMA20 {h4_trend['ema20']:.0f})"
+            else:
+                trend_line = "H4 Trend: нет данных"
+
+            # Session ranges
+            session_cfg = [
+                ('asian',  'Asian (7-10)',   7,  10),
+                ('london', 'London (13-16)', 13, 16),
+                ('ny',     'NY (13-17)',     13, 17),
+            ]
+            ranges_lines = []
+            for sess_name, label, start_h, end_h in session_cfg:
+                if sess_name in session_highs:
+                    h = session_highs[sess_name]
+                    l = session_lows[sess_name]
+                    suffix = ' 🔄' if start_h <= current_hour < end_h else ''
+                    ranges_lines.append(f"  {label}: High {h:.0f} | Low {l:.0f}{suffix}")
+                else:
+                    if current_hour < start_h:
+                        ranges_lines.append(f"  {label}: ещё не начался")
+                    elif start_h <= current_hour < end_h:
+                        ranges_lines.append(f"  {label}: формируется...")
+                    else:
+                        ranges_lines.append(f"  {label}: нет данных")
+
+            ranges_block = "📐 Ranges today:\n" + "\n".join(ranges_lines)
+
+            # Active positions
             active_positions = []
             for sess in ['asian', 'london', 'ny', 'short']:
                 active = get_active_signal(session=sess)
                 if active:
                     direction = active.get('direction', 'N/A')
                     entry = active.get('entry', 0)
-                    active_positions.append(f"{sess.upper()} {direction} @ {entry:.2f}")
+                    active_positions.append(f"  • {sess.upper()} {direction} @ {entry:.2f}")
 
-            # Формируем сообщение
-            if len(active_positions) > 0:
-                # Есть активные позиции
-                positions_str = "\n".join([f"  • {pos}" for pos in active_positions])
-                message = (
-                    f"<b>📊 Session Breakout v4.0</b>\n"
-                    f"<i>{timestamp} | ${current_price}</i>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<b>✅ Active Positions ({len(active_positions)}/4):</b>\n"
-                    f"{positions_str}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<b>Current Session:</b> {current_session}\n"
-                    f"<i>Monitoring for new entries...</i>"
-                )
+            n = len(active_positions)
+            if n > 0:
+                positions_block = f"✅ Active Positions ({n}/4):\n" + "\n".join(active_positions)
             else:
-                # Нет активных позиций - показываем мониторинг
-                message = (
-                    f"<b>📊 Session Breakout v4.0</b>\n"
-                    f"<i>{timestamp} | ${current_price}</i>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<b>⏳ No Active Positions (0/4)</b>\n\n"
-                    f"<b>Current Session:</b> {current_session}\n"
-                    f"<b>LONG:</b> Monitoring breakouts\n"
-                    f"<b>SHORT:</b> Monitoring reversals\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<i>Waiting for entry conditions...</i>"
-                )
+                positions_block = "⏳ No Active Positions (0/4)"
 
-            # Отправляем всем админам
+            # LONG/SHORT status
+            if h4_trend and h4_trend['trend'] == 'DOWN':
+                long_status = "заблокирован (тренд DOWN)"
+            elif h4_trend and h4_trend['trend'] == 'UP':
+                long_status = "мониторинг пробоя"
+            else:
+                long_status = "мониторинг"
+            short_status = "ждёт паттерн разворота H4"
+
+            message = (
+                f"<b>📊 Session Breakout v4.0</b>\n"
+                f"<i>{timestamp} | ${current_price}</i>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{trend_line}\n\n"
+                f"{ranges_block}\n\n"
+                f"{positions_block}\n"
+                f"  <b>LONG:</b> {long_status}\n"
+                f"  <b>SHORT:</b> {short_status}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Следующий крон: {next_cron}"
+            )
+
             for chat_id in self.admin_chat_ids:
                 if chat_id:
                     try:
