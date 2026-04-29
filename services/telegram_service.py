@@ -1152,7 +1152,7 @@ class TelegramService:
             # H4 trend line
             if h4_trend:
                 trend_emoji = '🟢' if h4_trend['trend'] == 'UP' else '🔴'
-                cmp = '>' if h4_trend['trend'] == 'UP' else '<'
+                cmp = '&gt;' if h4_trend['trend'] == 'UP' else '&lt;'
                 trend_line = f"H4 Trend: {trend_emoji} {h4_trend['trend']} ({h4_trend['close']:.0f} {cmp} EMA20 {h4_trend['ema20']:.0f})"
             else:
                 trend_line = "H4 Trend: нет данных"
