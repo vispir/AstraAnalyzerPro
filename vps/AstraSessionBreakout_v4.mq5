@@ -353,7 +353,7 @@ void SyncCandlesToFile()
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
 
-   int copied = CopyRates(_Symbol, PERIOD_M15, 0, barsToSync, rates);
+   int copied = CopyRates(_Symbol, PERIOD_M15, 1, barsToSync, rates);
 
    if(copied <= 0)
    {
