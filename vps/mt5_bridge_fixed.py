@@ -144,8 +144,8 @@ def should_sync_candles():
     minute = now.minute
     second = now.second
 
-    # Wide window (10-55s) so the 5s sleep loop never misses it
-    if minute % 15 == 0 and 10 <= second <= 55:
+    # Start at 25s to give EA ~15s to finish writing 2000 bars (takes ~6-7s from sec=10)
+    if minute % 15 == 0 and 25 <= second <= 55:
         return True
     return False
 
