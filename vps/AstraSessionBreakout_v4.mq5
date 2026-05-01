@@ -41,11 +41,12 @@ datetime g_lastM15Time = 0;
 int g_lastSyncMinute = -1;
 
 //--- GlobalVariable names — SHORT state machine (persist across EA restarts)
-#define GV_T1_ACTIVE  "Astra_T1_Active"
-#define GV_T1_H4HIGH  "Astra_T1_H4High"
-#define GV_T2_ACTIVE  "Astra_T2_Active"
-#define GV_T2_H4HIGH  "Astra_T2_H4High"
-#define GV_LAST_H4    "Astra_LastH4Time"
+#define GV_T1_ACTIVE      "Astra_T1_Active"
+#define GV_T1_H4HIGH      "Astra_T1_H4High"
+#define GV_T2_ACTIVE      "Astra_T2_Active"
+#define GV_T2_H4HIGH      "Astra_T2_H4High"
+#define GV_LAST_H4        "Astra_LastH4Time"
+#define GV_SHORT_WAS_OPEN "Astra_Short_WasOpen"  // M15-bar SHORT close detector
 
 //--- GlobalVariable names — TEST_MODE simulated open tracking
 #define GV_SIM_ASIAN  "Astra_Sim_Asian"
@@ -220,6 +221,10 @@ void OnNewM15Bar()
     // --- In TEST_MODE, check simulated SL/TP against the bar that just closed
     if(TestMode)
         CheckSimulatedSLTP(m15Low, m15High);
+
+    // --- Detect SHORT position close (broker may overwrite comment on SL/TP hit)
+    // Check BEFORE CheckShortEntries so T1/T2 are cleared before new entry is evaluated
+    DetectShortClose();
 
     // --- LONG entries
     double sessionRanges[][2]; // dynamic — required for passing to function by ref
@@ -408,6 +413,25 @@ void CheckShortEntries(double m15Close, double prevM15Low, double m15ATR)
             }
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| Detect SHORT close between M15 bars (broker overwrites comment   |
+//| on SL/TP hit, so OnTradeTransaction can't rely on it)            |
+//+------------------------------------------------------------------+
+void DetectShortClose()
+{
+    bool wasOpen = GlobalVariableCheck(GV_SHORT_WAS_OPEN) && GlobalVariableGet(GV_SHORT_WAS_OPEN) > 0.5;
+    bool isOpen  = HasPosition("short");
+
+    if(wasOpen && !isOpen)
+    {
+        GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
+        GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+        Print("SHORT closed — T1/T2 state reset (M15 detector)");
+    }
+
+    GlobalVariableSet(GV_SHORT_WAS_OPEN, isOpen ? 1.0 : 0.0);
 }
 
 //+------------------------------------------------------------------+
