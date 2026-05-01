@@ -5,7 +5,7 @@
 //| LONG: Asian/London/NY  |  SHORT: Type1/Type2 Reversal           |
 //+------------------------------------------------------------------+
 #property copyright "Astra Analyzer Pro"
-#property version   "4.10"
+#property version   "4.11"
 
 //--- Inputs
 input double RiskUSD          = 120.0;  // Risk per trade in USD
@@ -31,8 +31,6 @@ string CandlesFile = "astra_candles.json";
 
 //--- Indicator handles
 int g_m15ATR = INVALID_HANDLE;
-int g_h4ATR  = INVALID_HANDLE;
-int g_h4EMA  = INVALID_HANDLE;
 
 //--- Bar tracking
 datetime g_lastM15Time = 0;
@@ -109,22 +107,101 @@ string SimTPGV(string session)
 }
 
 //+------------------------------------------------------------------+
+//| UTC H4 bar — built from M15 data, aligned to UTC 4h boundaries  |
+//| bars[0] = forming, bars[1] = last completed, bars[n] = n ago    |
+//+------------------------------------------------------------------+
+struct UTC4HBar {
+    datetime startUTC;
+    double   open, high, low, close;
+    bool     valid;
+};
+
+int BuildUTCH4Bars(UTC4HBar &bars[], int histCount)
+{
+    int      m15Count = (histCount + 2) * 16 + 10;
+    MqlRates rates[];
+    ArraySetAsSeries(rates, false); // oldest first
+    int copied = CopyRates(_Symbol, PERIOD_M15, 0, m15Count, rates);
+    if(copied <= 0) return 0;
+
+    datetime nowUTC     = BarToUTC(TimeCurrent());
+    datetime h4StartUTC = (nowUTC / 14400) * 14400; // floor to UTC 4h boundary
+
+    ArrayResize(bars, histCount + 1);
+    for(int b = 0; b <= histCount; b++)
+    {
+        bars[b].startUTC = h4StartUTC - (datetime)(b * 14400);
+        bars[b].open  = 0;  bars[b].high  = 0;
+        bars[b].low   = DBL_MAX; bars[b].close = 0; bars[b].valid = false;
+    }
+
+    for(int i = 0; i < copied; i++)
+    {
+        datetime barUTC     = BarToUTC(rates[i].time);
+        datetime barH4Start = (barUTC / 14400) * 14400;
+        int      b          = (int)((h4StartUTC - barH4Start) / 14400);
+        if(b < 0 || b > histCount) continue;
+        if(!bars[b].valid) { bars[b].open = rates[i].open; bars[b].valid = true; }
+        bars[b].high  = MathMax(bars[b].high, rates[i].high);
+        bars[b].low   = MathMin(bars[b].low,  rates[i].low);
+        bars[b].close = rates[i].close; // oldest→newest: last assigned = most recent M15 close
+    }
+    for(int b = 0; b <= histCount; b++) if(!bars[b].valid) bars[b].low = 0;
+    return histCount + 1;
+}
+
+double CalcUTCH4EMA(UTC4HBar &bars[], int histCount, int period)
+{
+    int start = histCount;
+    while(start > 0 && !bars[start].valid) start--;
+    if(!bars[start].valid) return 0;
+    double k   = 2.0 / (period + 1.0);
+    double ema = bars[start].close;
+    for(int b = start - 1; b >= 0; b--)
+    {
+        if(!bars[b].valid) continue;
+        ema = bars[b].close * k + ema * (1.0 - k);
+    }
+    return ema;
+}
+
+double CalcUTCH4ATR(UTC4HBar &bars[], int histCount, int period)
+{
+    if(histCount < period + 1) return 0;
+    double trs[];
+    int    trCount = 0;
+    ArrayResize(trs, histCount + 1);
+    for(int b = histCount - 1; b >= 0; b--)
+    {
+        if(!bars[b].valid || !bars[b + 1].valid) continue;
+        double prevClose = bars[b + 1].close;
+        double tr = MathMax(bars[b].high - bars[b].low,
+                   MathMax(MathAbs(bars[b].high - prevClose),
+                           MathAbs(bars[b].low  - prevClose)));
+        trs[trCount++] = tr;
+    }
+    if(trCount < period) return 0;
+    double atr = 0;
+    for(int i = 0; i < period; i++) atr += trs[i];
+    atr /= period;
+    for(int i = period; i < trCount; i++) atr = (atr * (period - 1) + trs[i]) / period;
+    return atr;
+}
+
+//+------------------------------------------------------------------+
 //| Init / Deinit                                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
     Print("====================================================");
-    Print("Astra Session Breakout EA v4.10 — Full Logic in EA");
+    Print("Astra Session Breakout EA v4.11 — UTC H4 alignment");
     Print("TestMode=", TestMode, "  Risk=$", RiskUSD, "  GMTOffset=", ServerGMTOffset);
     Print("====================================================");
 
     g_m15ATR = iATR(_Symbol, PERIOD_M15, ATR_PERIOD);
-    g_h4ATR  = iATR(_Symbol, PERIOD_H4,  ATR_PERIOD);
-    g_h4EMA  = iMA (_Symbol, PERIOD_H4,  H4_EMA_PERIOD, 0, MODE_EMA, PRICE_CLOSE);
-
-    if(g_m15ATR == INVALID_HANDLE || g_h4ATR == INVALID_HANDLE || g_h4EMA == INVALID_HANDLE)
+    if(g_m15ATR == INVALID_HANDLE)
     {
-        Print("ERROR: indicator handle creation failed");
+        Print("ERROR: M15 ATR handle creation failed");
         return INIT_FAILED;
     }
 
@@ -137,8 +214,6 @@ void OnDeinit(const int reason)
 {
     EventKillTimer();
     IndicatorRelease(g_m15ATR);
-    IndicatorRelease(g_h4ATR);
-    IndicatorRelease(g_h4EMA);
 }
 
 //+------------------------------------------------------------------+
@@ -180,21 +255,12 @@ void OnNewM15Bar()
     double m15ATR = m15ATRbuf[0];
     if(m15ATR <= 0) return;
 
-    // --- H4 EMA20 at index 0 (forming bar — matches Python partial-H4 behavior)
-    double h4EMAbuf[];
-    ArraySetAsSeries(h4EMAbuf, true);
-    if(CopyBuffer(g_h4EMA, 0, 0, 1, h4EMAbuf) < 1) return;
-    double h4EMA20 = h4EMAbuf[0];
-
-    // --- H4 ATR at index 0 (forming bar)
-    double h4ATRbuf[];
-    ArraySetAsSeries(h4ATRbuf, true);
-    if(CopyBuffer(g_h4ATR, 0, 0, 1, h4ATRbuf) < 1) return;
-    double h4ATR = h4ATRbuf[0];
-
-    // H4 current (forming) and prev (closed) closes
-    double h4CloseCurr = iClose(_Symbol, PERIOD_H4, 0);
-    double h4ClosePrev = iClose(_Symbol, PERIOD_H4, 1);
+    // --- Build UTC-aligned H4 bars from M15 data (matches Python backtest resample('4h'))
+    UTC4HBar h4bars[];
+    if(BuildUTCH4Bars(h4bars, 25) <= 0) return;
+    double h4EMA20     = CalcUTCH4EMA(h4bars, 25, H4_EMA_PERIOD);
+    double h4ATR       = CalcUTCH4ATR(h4bars, 25, ATR_PERIOD);
+    double h4CloseCurr = h4bars[0].valid ? h4bars[0].close : 0;
 
     // --- Last closed M15 bar data
     datetime barServerTime = iTime(_Symbol, PERIOD_M15, 1);
@@ -208,14 +274,14 @@ void OnNewM15Bar()
     double m15Low     = iLow  (_Symbol, PERIOD_M15, 1);
     double prevM15Low = iLow  (_Symbol, PERIOD_M15, 2);
 
-    // --- Detect new H4 bar (H4[0] time changes = new H4 boundary crossed)
-    datetime h4Time0 = iTime(_Symbol, PERIOD_H4, 0);
-    datetime savedH4 = GlobalVariableCheck(GV_LAST_H4) ? (datetime)GlobalVariableGet(GV_LAST_H4) : 0;
-    if(h4Time0 != savedH4)
+    // --- Detect new UTC H4 bar → UpdateShortStateMachine
+    datetime utcH4Start0 = h4bars[0].startUTC;
+    datetime savedH4     = GlobalVariableCheck(GV_LAST_H4) ? (datetime)GlobalVariableGet(GV_LAST_H4) : 0;
+    if(utcH4Start0 != savedH4)
     {
-        Print("New H4 bar: ", TimeToString(BarToUTC(h4Time0)));
-        GlobalVariableSet(GV_LAST_H4, (double)h4Time0);
-        UpdateShortStateMachine(h4EMA20, h4CloseCurr, h4ClosePrev, h4ATR);
+        Print("New UTC H4 bar: ", TimeToString(utcH4Start0));
+        GlobalVariableSet(GV_LAST_H4, (double)utcH4Start0);
+        UpdateShortStateMachine(h4bars, h4EMA20, h4ATR);
     }
 
     // --- In TEST_MODE, check simulated SL/TP against the bar that just closed
@@ -276,8 +342,11 @@ bool RangeValid(double &ranges[][2], int idx) { return ranges[idx][1] < DBL_MAX;
 //+------------------------------------------------------------------+
 //| SHORT state machine — called on each new H4 bar                  |
 //+------------------------------------------------------------------+
-void UpdateShortStateMachine(double h4EMA20, double h4CloseCurr, double h4ClosePrev, double h4ATR)
+void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
 {
+    double h4CloseCurr = h4bars[0].valid ? h4bars[0].close : 0;
+    double h4ClosePrev = h4bars[1].valid ? h4bars[1].close : 0;
+
     // EMA20 filter: SHORT only when H4 close BELOW EMA20
     if(h4EMA20 <= 0 || h4CloseCurr >= h4EMA20)
     {
@@ -287,7 +356,7 @@ void UpdateShortStateMachine(double h4EMA20, double h4CloseCurr, double h4CloseP
         return;
     }
 
-    double h4HighCurr = iHigh(_Symbol, PERIOD_H4, 0); // forming H4 bar high
+    double h4HighCurr = h4bars[0].valid ? h4bars[0].high : 0;
     bool   bearish    = (h4CloseCurr < h4ClosePrev);
 
     bool t1Active = GlobalVariableCheck(GV_T1_ACTIVE) && GlobalVariableGet(GV_T1_ACTIVE) > 0.5;
@@ -298,7 +367,7 @@ void UpdateShortStateMachine(double h4EMA20, double h4CloseCurr, double h4CloseP
     {
         double maxPrev = 0;
         for(int i = 1; i <= TYPE1_LOOKBACK; i++)
-            maxPrev = MathMax(maxPrev, iHigh(_Symbol, PERIOD_H4, i));
+            if(i <= 25 && h4bars[i].valid) maxPrev = MathMax(maxPrev, h4bars[i].high);
 
         if(h4HighCurr > maxPrev && bearish)
         {
@@ -313,7 +382,7 @@ void UpdateShortStateMachine(double h4EMA20, double h4CloseCurr, double h4CloseP
     {
         double minLow = DBL_MAX;
         for(int i = 1; i <= TYPE2_LOOKBACK; i++)
-            minLow = MathMin(minLow, iLow(_Symbol, PERIOD_H4, i));
+            if(i <= 25 && h4bars[i].valid) minLow = MathMin(minLow, h4bars[i].low);
 
         double move = h4HighCurr - minLow;
         if(move >= TYPE2_ATR_MULT * h4ATR && bearish)
