@@ -1,572 +1,750 @@
 //+------------------------------------------------------------------+
-//|                                      AstraSessionBreakout.mq5    |
-//|                                   Session Breakout Strategy v4.0 |
-//|                                   Multiple Positions Support     |
+//| AstraSessionBreakout_v4.mq5                                      |
+//| Session Breakout Strategy v4.10                                   |
+//| Full strategy logic in EA — no Python signal delay               |
+//| LONG: Asian/London/NY  |  SHORT: Type1/Type2 Reversal           |
 //+------------------------------------------------------------------+
 #property copyright "Astra Analyzer Pro"
-#property version   "4.00"
-#property strict
+#property version   "4.10"
 
-//--- Input parameters
-input double RiskUSD = 120.0;           // Risk per trade in USD (fixed)
-input int MagicNumber = 20241121;       // Magic number
-input int Slippage = 20;                // Slippage in points
-input bool EnableTrailing = true;       // Enable step trailing stop
-input int CheckInterval = 5;            // Check signals every N seconds
-input bool TestMode = true;             // Test mode (no real trades)
+//--- Inputs
+input double RiskUSD          = 120.0;  // Risk per trade in USD
+input int    MagicNumber      = 20241121;
+input int    Slippage         = 20;
+input bool   EnableTrailing   = true;
+input bool   TestMode         = true;   // No real trades
+input int    ServerGMTOffset  = 3;      // Server time = UTC + N (e.g. 3 for UTC+3)
+input string SupabaseURL      = "";     // e.g. https://xxx.supabase.co
+input string SupabaseKey      = "";     // anon key
 
-//--- File paths
-string SignalsFile = "astra_signals.json";
+//--- Strategy constants (match Python v4.0)
+#define ATR_PERIOD      14
+#define ATR_BUFFER_VAL  0.5
+#define TP_RR_VAL       5.5
+#define H4_EMA_PERIOD   20
+#define TYPE1_LOOKBACK  5
+#define TYPE2_LOOKBACK  3
+#define TYPE2_ATR_MULT  2.0
+
+//--- Files (for Python bridge candle sync)
 string CandlesFile = "astra_candles.json";
-string TradesFile = "astra_trades.json";
 
-//--- Global variables
-datetime lastCheckTime = 0;
-int lastSyncMinute = -1;
+//--- Indicator handles
+int g_m15ATR = INVALID_HANDLE;
+int g_h4ATR  = INVALID_HANDLE;
+int g_h4EMA  = INVALID_HANDLE;
+
+//--- Bar tracking
+datetime g_lastM15Time = 0;
+
+//--- Candle sync tracking
+int g_lastSyncMinute = -1;
+
+//--- GlobalVariable names — SHORT state machine (persist across EA restarts)
+#define GV_T1_ACTIVE  "Astra_T1_Active"
+#define GV_T1_H4HIGH  "Astra_T1_H4High"
+#define GV_T2_ACTIVE  "Astra_T2_Active"
+#define GV_T2_H4HIGH  "Astra_T2_H4High"
+#define GV_LAST_H4    "Astra_LastH4Time"
+
+//--- GlobalVariable names — TEST_MODE simulated open tracking
+#define GV_SIM_ASIAN  "Astra_Sim_Asian"
+#define GV_SIM_LONDON "Astra_Sim_London"
+#define GV_SIM_NY     "Astra_Sim_NY"
+#define GV_SIM_SHORT  "Astra_Sim_Short"
+
+//--- GlobalVariable names — TEST_MODE simulated SL/TP (EA-internal simulation, no Supabase poll)
+#define GV_SIM_ASIAN_SL   "Astra_Sim_Asian_SL"
+#define GV_SIM_ASIAN_TP   "Astra_Sim_Asian_TP"
+#define GV_SIM_LONDON_SL  "Astra_Sim_London_SL"
+#define GV_SIM_LONDON_TP  "Astra_Sim_London_TP"
+#define GV_SIM_NY_SL      "Astra_Sim_NY_SL"
+#define GV_SIM_NY_TP      "Astra_Sim_NY_TP"
+#define GV_SIM_SHORT_SL   "Astra_Sim_Short_SL"
+#define GV_SIM_SHORT_TP   "Astra_Sim_Short_TP"
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                   |
+//| Helpers                                                           |
+//+------------------------------------------------------------------+
+datetime BarToUTC(datetime serverTime)
+{
+    return serverTime - (datetime)(ServerGMTOffset * 3600);
+}
+
+bool ShouldSyncCandles()
+{
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    if(dt.min % 15 == 0 && dt.sec >= 10 && dt.sec <= 15 && dt.min != g_lastSyncMinute)
+    {
+        g_lastSyncMinute = dt.min;
+        return true;
+    }
+    return false;
+}
+
+string SimGV(string session)
+{
+    if(session == "asian")  return GV_SIM_ASIAN;
+    if(session == "london") return GV_SIM_LONDON;
+    if(session == "ny")     return GV_SIM_NY;
+    return GV_SIM_SHORT;
+}
+
+string SimSLGV(string session)
+{
+    if(session == "asian")  return GV_SIM_ASIAN_SL;
+    if(session == "london") return GV_SIM_LONDON_SL;
+    if(session == "ny")     return GV_SIM_NY_SL;
+    return GV_SIM_SHORT_SL;
+}
+
+string SimTPGV(string session)
+{
+    if(session == "asian")  return GV_SIM_ASIAN_TP;
+    if(session == "london") return GV_SIM_LONDON_TP;
+    if(session == "ny")     return GV_SIM_NY_TP;
+    return GV_SIM_SHORT_TP;
+}
+
+//+------------------------------------------------------------------+
+//| Init / Deinit                                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("==========================================================");
-   Print("Astra Session Breakout EA v4.0 - Starting");
-   Print("Risk: $", RiskUSD, " | Magic: ", MagicNumber);
-   Print("Trailing: ", EnableTrailing ? "Enabled" : "Disabled");
-   Print("Test Mode: ", TestMode ? "ON (no real trades)" : "OFF (live trading)");
-   Print("Multiple Positions: Enabled (max 4: Asian+London+NY+SHORT)");
-   Print("==========================================================");
+    Print("====================================================");
+    Print("Astra Session Breakout EA v4.10 — Full Logic in EA");
+    Print("TestMode=", TestMode, "  Risk=$", RiskUSD, "  GMTOffset=", ServerGMTOffset);
+    Print("====================================================");
 
-   // Set timer for 1 second interval (for candle sync without ticks)
-   EventSetTimer(1);
+    g_m15ATR = iATR(_Symbol, PERIOD_M15, ATR_PERIOD);
+    g_h4ATR  = iATR(_Symbol, PERIOD_H4,  ATR_PERIOD);
+    g_h4EMA  = iMA (_Symbol, PERIOD_H4,  H4_EMA_PERIOD, 0, MODE_EMA, PRICE_CLOSE);
 
-   // Force sync candles on startup
-   Print("Force syncing candles on startup...");
-   SyncCandlesToFile();
+    if(g_m15ATR == INVALID_HANDLE || g_h4ATR == INVALID_HANDLE || g_h4EMA == INVALID_HANDLE)
+    {
+        Print("ERROR: indicator handle creation failed");
+        return INIT_FAILED;
+    }
 
-   return(INIT_SUCCEEDED);
+    EventSetTimer(1);
+    SyncCandlesToFile();
+    return INIT_SUCCEEDED;
 }
 
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   EventKillTimer();
-   Print("EA stopped. Reason: ", reason);
+    EventKillTimer();
+    IndicatorRelease(g_m15ATR);
+    IndicatorRelease(g_h4ATR);
+    IndicatorRelease(g_h4EMA);
 }
 
 //+------------------------------------------------------------------+
-//| Check if should sync candles (10 sec after M15 close)           |
-//+------------------------------------------------------------------+
-bool ShouldSyncCandles()
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-
-   // Sync at 10 seconds after M15 close (00:10, 15:10, 30:10, 45:10)
-   if(dt.min % 15 == 0 && dt.sec >= 10 && dt.sec <= 15)
-   {
-      if(dt.min != lastSyncMinute)
-      {
-         lastSyncMinute = dt.min;
-         return true;
-      }
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick function                                             |
+//| Tick / Timer                                                      |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check signals every N seconds
-   if(TimeCurrent() - lastCheckTime >= CheckInterval)
-   {
-      CheckNewSignals();
-      lastCheckTime = TimeCurrent();
-   }
+    datetime m15Time = iTime(_Symbol, PERIOD_M15, 0);
+    if(g_lastM15Time == 0)
+        g_lastM15Time = m15Time;
+    else if(m15Time != g_lastM15Time)
+    {
+        g_lastM15Time = m15Time;
+        OnNewM15Bar();
+    }
 
-   // Sync candles at 10 sec after M15 close (00/15/30/45)
-   if(ShouldSyncCandles())
-   {
-      SyncCandlesToFile();
-   }
+    if(EnableTrailing)
+        UpdateTrailingStops();
 
-   // Update trailing stops
-   if(EnableTrailing)
-   {
-      UpdateTrailingStops();
-   }
+    if(ShouldSyncCandles())
+        SyncCandlesToFile();
 }
 
-//+------------------------------------------------------------------+
-//| Timer function (works without ticks)                             |
-//+------------------------------------------------------------------+
 void OnTimer()
 {
-   // Debug: print current time every minute
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-
-   if(dt.sec == 0)
-   {
-      Print("Timer check: ", dt.hour, ":", dt.min, ":", dt.sec);
-   }
-
-   // Sync candles at 10 sec after M15 close (00/15/30/45)
-   if(ShouldSyncCandles())
-   {
-      Print("Syncing candles NOW...");
-      SyncCandlesToFile();
-   }
+    if(ShouldSyncCandles())
+        SyncCandlesToFile();
 }
 
 //+------------------------------------------------------------------+
-//| Check if position exists for session                            |
+//| Main strategy — called on each new M15 bar                       |
 //+------------------------------------------------------------------+
-bool HasPositionForSession(string session)
+void OnNewM15Bar()
 {
-   string targetComment = "Astra_" + session;
+    // --- ATR (last closed M15 bar, index 1)
+    double m15ATRbuf[];
+    ArraySetAsSeries(m15ATRbuf, true);
+    if(CopyBuffer(g_m15ATR, 0, 1, 1, m15ATRbuf) < 1) return;
+    double m15ATR = m15ATRbuf[0];
+    if(m15ATR <= 0) return;
 
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(PositionGetTicket(i) > 0)
-      {
-         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
-            PositionGetString(POSITION_SYMBOL) == _Symbol &&
-            PositionGetString(POSITION_COMMENT) == targetComment)
-         {
+    // --- H4 EMA20 at index 0 (forming bar — matches Python partial-H4 behavior)
+    double h4EMAbuf[];
+    ArraySetAsSeries(h4EMAbuf, true);
+    if(CopyBuffer(g_h4EMA, 0, 0, 1, h4EMAbuf) < 1) return;
+    double h4EMA20 = h4EMAbuf[0];
+
+    // --- H4 ATR at index 0 (forming bar)
+    double h4ATRbuf[];
+    ArraySetAsSeries(h4ATRbuf, true);
+    if(CopyBuffer(g_h4ATR, 0, 0, 1, h4ATRbuf) < 1) return;
+    double h4ATR = h4ATRbuf[0];
+
+    // H4 current (forming) and prev (closed) closes
+    double h4CloseCurr = iClose(_Symbol, PERIOD_H4, 0);
+    double h4ClosePrev = iClose(_Symbol, PERIOD_H4, 1);
+
+    // --- Last closed M15 bar data
+    datetime barServerTime = iTime(_Symbol, PERIOD_M15, 1);
+    datetime barUTC        = BarToUTC(barServerTime);
+    MqlDateTime barDT;
+    TimeToStruct(barUTC, barDT);
+    int utcHour = barDT.hour;
+
+    double m15Close   = iClose(_Symbol, PERIOD_M15, 1);
+    double m15High    = iHigh (_Symbol, PERIOD_M15, 1);
+    double m15Low     = iLow  (_Symbol, PERIOD_M15, 1);
+    double prevM15Low = iLow  (_Symbol, PERIOD_M15, 2);
+
+    // --- Detect new H4 bar (H4[0] time changes = new H4 boundary crossed)
+    datetime h4Time0 = iTime(_Symbol, PERIOD_H4, 0);
+    datetime savedH4 = GlobalVariableCheck(GV_LAST_H4) ? (datetime)GlobalVariableGet(GV_LAST_H4) : 0;
+    if(h4Time0 != savedH4)
+    {
+        Print("New H4 bar: ", TimeToString(BarToUTC(h4Time0)));
+        GlobalVariableSet(GV_LAST_H4, (double)h4Time0);
+        UpdateShortStateMachine(h4EMA20, h4CloseCurr, h4ClosePrev, h4ATR);
+    }
+
+    // --- In TEST_MODE, check simulated SL/TP against the bar that just closed
+    if(TestMode)
+        CheckSimulatedSLTP(m15Low, m15High);
+
+    // --- LONG entries
+    double sessionRanges[][2]; // dynamic — required for passing to function by ref
+    CalculateSessionRanges(sessionRanges);
+    CheckLongEntries(m15Close, m15ATR, h4CloseCurr, h4EMA20, utcHour, sessionRanges);
+
+    // --- SHORT entries (active 0-21 UTC)
+    if(utcHour < 21)
+        CheckShortEntries(m15Close, prevM15Low, m15ATR);
+}
+
+//+------------------------------------------------------------------+
+//| Session ranges — scan today's M15 bars (UTC date)               |
+//| ranges[0] = Asian, [1] = London, [2] = NY                       |
+//| Each: [0] = high, [1] = low (low=DBL_MAX means no bars yet)     |
+//+------------------------------------------------------------------+
+void CalculateSessionRanges(double &ranges[][2])
+{
+    ArrayResize(ranges, 3);
+    for(int s = 0; s < 3; s++) { ranges[s][0] = 0; ranges[s][1] = DBL_MAX; }
+
+    datetime utcNow = BarToUTC(TimeCurrent());
+    MqlDateTime todayDT;
+    TimeToStruct(utcNow, todayDT);
+
+    for(int i = 1; i < 250; i++)
+    {
+        datetime barServer = iTime(_Symbol, PERIOD_M15, i);
+        if(barServer == 0) break;
+
+        MqlDateTime barDT;
+        TimeToStruct(BarToUTC(barServer), barDT);
+
+        if(barDT.year != todayDT.year || barDT.mon != todayDT.mon || barDT.day != todayDT.day)
+            break; // past today
+
+        int    h  = barDT.hour;
+        double hi = iHigh(_Symbol, PERIOD_M15, i);
+        double lo = iLow (_Symbol, PERIOD_M15, i);
+
+        if(h >= 7  && h < 10) { ranges[0][0] = MathMax(ranges[0][0], hi); ranges[0][1] = MathMin(ranges[0][1], lo); } // Asian
+        if(h >= 13 && h < 16) { ranges[1][0] = MathMax(ranges[1][0], hi); ranges[1][1] = MathMin(ranges[1][1], lo); } // London
+        if(h >= 13 && h < 17) { ranges[2][0] = MathMax(ranges[2][0], hi); ranges[2][1] = MathMin(ranges[2][1], lo); } // NY
+    }
+}
+
+bool RangeValid(double &ranges[][2], int idx) { return ranges[idx][1] < DBL_MAX; }
+
+//+------------------------------------------------------------------+
+//| SHORT state machine — called on each new H4 bar                  |
+//+------------------------------------------------------------------+
+void UpdateShortStateMachine(double h4EMA20, double h4CloseCurr, double h4ClosePrev, double h4ATR)
+{
+    // EMA20 filter: SHORT only when H4 close BELOW EMA20
+    if(h4EMA20 <= 0 || h4CloseCurr >= h4EMA20)
+    {
+        GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
+        GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+        Print("SHORT state reset: H4 close ", h4CloseCurr, " >= EMA20 ", h4EMA20);
+        return;
+    }
+
+    double h4HighCurr = iHigh(_Symbol, PERIOD_H4, 0); // forming H4 bar high
+    bool   bearish    = (h4CloseCurr < h4ClosePrev);
+
+    bool t1Active = GlobalVariableCheck(GV_T1_ACTIVE) && GlobalVariableGet(GV_T1_ACTIVE) > 0.5;
+    bool t2Active = GlobalVariableCheck(GV_T2_ACTIVE) && GlobalVariableGet(GV_T2_ACTIVE) > 0.5;
+
+    // TYPE 1: new H4 high > max of prev 5 H4 highs + bearish close
+    if(!t1Active)
+    {
+        double maxPrev = 0;
+        for(int i = 1; i <= TYPE1_LOOKBACK; i++)
+            maxPrev = MathMax(maxPrev, iHigh(_Symbol, PERIOD_H4, i));
+
+        if(h4HighCurr > maxPrev && bearish)
+        {
+            GlobalVariableSet(GV_T1_ACTIVE, 1);
+            GlobalVariableSet(GV_T1_H4HIGH, h4HighCurr);
+            Print("SHORT Type1 ACTIVE: H4high=", h4HighCurr, " > maxPrev5=", maxPrev);
+        }
+    }
+
+    // TYPE 2: price move >= 2*H4ATR from min of prev 3 H4 lows + bearish close
+    if(!t2Active && h4ATR > 0)
+    {
+        double minLow = DBL_MAX;
+        for(int i = 1; i <= TYPE2_LOOKBACK; i++)
+            minLow = MathMin(minLow, iLow(_Symbol, PERIOD_H4, i));
+
+        double move = h4HighCurr - minLow;
+        if(move >= TYPE2_ATR_MULT * h4ATR && bearish)
+        {
+            GlobalVariableSet(GV_T2_ACTIVE, 1);
+            GlobalVariableSet(GV_T2_H4HIGH, h4HighCurr);
+            Print("SHORT Type2 ACTIVE: move=", move, " >= 2*ATR=", 2*h4ATR);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| LONG entries — 3 sessions                                         |
+//+------------------------------------------------------------------+
+void CheckLongEntries(double m15Close, double m15ATR, double h4Close, double h4EMA20,
+                      int utcHour, double &ranges[][2])
+{
+    // H4 EMA20 filter: price must be ABOVE EMA20 for LONG
+    if(h4EMA20 <= 0 || h4Close <= h4EMA20) return;
+
+    // session 0 = Asian  (range 7-10, entry 10+)
+    // session 1 = London (range 13-16, entry 16+)
+    // session 2 = NY     (range 13-17, entry 18-21)
+    string names[3] = {"asian", "london", "ny"};
+    int    entryFrom[3] = {10, 16, 18};
+    int    entryTo[3]   = {24, 24, 21};
+
+    for(int s = 0; s < 3; s++)
+    {
+        if(utcHour < entryFrom[s] || utcHour >= entryTo[s]) continue;
+        if(!RangeValid(ranges, s)) continue;
+        if(HasPosition(names[s])) continue;
+
+        double sessionHigh = ranges[s][0];
+        double sessionLow  = ranges[s][1];
+
+        if(m15Close > sessionHigh)
+        {
+            double sl   = sessionLow - ATR_BUFFER_VAL * m15ATR;
+            double risk = m15Close - sl;
+            if(risk <= 0) continue;
+            double tp = m15Close + risk * TP_RR_VAL;
+
+            string sessUp = names[s];
+            StringToUpper(sessUp);
+            Print("LONG ", sessUp, " @ ", m15Close, " SL=", sl, " TP=", tp);
+            OpenTrade("LONG", m15Close, sl, tp, names[s]);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| SHORT entries                                                      |
+//+------------------------------------------------------------------+
+void CheckShortEntries(double m15Close, double prevM15Low, double m15ATR)
+{
+    // EMA filter is applied only in UpdateShortStateMachine (on new H4 bar)
+    // to match backtest behavior — no re-check here
+    if(HasPosition("short")) return;
+    if(m15Close >= prevM15Low) return; // entry: M15 close breaks prev M15 low
+
+    bool   t1Active = GlobalVariableCheck(GV_T1_ACTIVE) && GlobalVariableGet(GV_T1_ACTIVE) > 0.5;
+    bool   t2Active = GlobalVariableCheck(GV_T2_ACTIVE) && GlobalVariableGet(GV_T2_ACTIVE) > 0.5;
+    double t1H4High = GlobalVariableCheck(GV_T1_H4HIGH) ? GlobalVariableGet(GV_T1_H4HIGH) : 0;
+    double t2H4High = GlobalVariableCheck(GV_T2_H4HIGH) ? GlobalVariableGet(GV_T2_H4HIGH) : 0;
+
+    // Type 1 priority
+    if(t1Active && t1H4High > 0)
+    {
+        double sl   = t1H4High + ATR_BUFFER_VAL * m15ATR;
+        double risk = sl - m15Close;
+        if(risk > 0)
+        {
+            double tp = m15Close - risk * TP_RR_VAL;
+            Print("SHORT Type1 @ ", m15Close, " SL=", sl, " TP=", tp);
+            if(OpenTrade("SHORT", m15Close, sl, tp, "short"))
+            {
+                GlobalVariableSet(GV_T1_ACTIVE, 0);
+                GlobalVariableSet(GV_T1_H4HIGH, 0);
+            }
+        }
+        return;
+    }
+
+    if(t2Active && t2H4High > 0)
+    {
+        double sl   = t2H4High + ATR_BUFFER_VAL * m15ATR;
+        double risk = sl - m15Close;
+        if(risk > 0)
+        {
+            double tp = m15Close - risk * TP_RR_VAL;
+            Print("SHORT Type2 @ ", m15Close, " SL=", sl, " TP=", tp);
+            if(OpenTrade("SHORT", m15Close, sl, tp, "short"))
+            {
+                GlobalVariableSet(GV_T2_ACTIVE, 0);
+                GlobalVariableSet(GV_T2_H4HIGH, 0);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Position check                                                    |
+//+------------------------------------------------------------------+
+bool HasPosition(string session)
+{
+    if(TestMode)
+    {
+        string gv = SimGV(session);
+        return GlobalVariableCheck(gv) && GlobalVariableGet(gv) > 0.5;
+    }
+
+    string comment = "Astra_" + session;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetTicket(i) > 0 &&
+           PositionGetInteger(POSITION_MAGIC)  == MagicNumber &&
+           PositionGetString(POSITION_SYMBOL)  == _Symbol &&
+           PositionGetString(POSITION_COMMENT) == comment)
             return true;
-         }
-      }
-   }
-   return false;
+    }
+    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Parse JSON array and extract signals                            |
+//| TEST_MODE: check simulated SL/TP against the last closed M15 bar |
+//| No Supabase poll — avoids false "closed" on network/RLS errors   |
 //+------------------------------------------------------------------+
-int ParseSignals(string json, string &directions[], double &entries[], double &sls[], double &tps[], double &risks[], string &sessions[])
+void CheckSimulatedSLTP(double m15Low, double m15High)
 {
-   // Remove whitespace and newlines
-   StringReplace(json, " ", "");
-   StringReplace(json, "\n", "");
-   StringReplace(json, "\r", "");
+    string sessions[4] = {"asian", "london", "ny", "short"};
+    bool   isShort[4]  = {false,   false,    false, true};
 
-   // Check if it's an array
-   if(StringFind(json, "[") != 0 || StringFind(json, "]") != StringLen(json) - 1)
-   {
-      Print("Invalid JSON format - not an array");
-      return 0;
-   }
+    for(int i = 0; i < 4; i++)
+    {
+        string gv = SimGV(sessions[i]);
+        if(!GlobalVariableCheck(gv) || GlobalVariableGet(gv) < 0.5) continue;
 
-   // Remove brackets
-   json = StringSubstr(json, 1, StringLen(json) - 2);
+        double sl = GlobalVariableCheck(SimSLGV(sessions[i])) ? GlobalVariableGet(SimSLGV(sessions[i])) : 0;
+        double tp = GlobalVariableCheck(SimTPGV(sessions[i])) ? GlobalVariableGet(SimTPGV(sessions[i])) : 0;
 
-   if(StringLen(json) == 0)
-   {
-      return 0;
-   }
+        // Legacy position (opened before fix, no SL/TP stored):
+        // use simple Supabase poll — only clears GV if signal is truly gone
+        if(sl <= 0 || tp <= 0)
+        {
+            if(StringLen(SupabaseURL) > 0 && !SupabaseSignalIsActive(sessions[i]))
+            {
+                GlobalVariableSet(gv, 0);
+                Print("[TEST] ", sessions[i], " legacy position no longer active — state cleared");
+                if(sessions[i] == "short")
+                {
+                    GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
+                    GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+                }
+            }
+            continue;
+        }
 
-   // Split by objects
-   int count = 0;
-   int pos = 0;
+        bool   slHit     = isShort[i] ? (m15High >= sl) : (m15Low <= sl);
+        bool   tpHit     = isShort[i] ? (m15Low  <= tp) : (m15High >= tp);
+        double exitPrice = slHit ? sl : tp;
+        double pnl       = slHit ? -RiskUSD : RiskUSD * TP_RR_VAL;
 
-   while(pos < StringLen(json) && count < 10)
-   {
-      int objStart = StringFind(json, "{", pos);
-      if(objStart < 0) break;
+        if(slHit || tpHit)
+        {
+            Print("[TEST] ", sessions[i], " simulated ", (slHit ? "SL" : "TP"), " hit @ ",
+                  exitPrice, "  PnL=", pnl);
+            GlobalVariableSet(gv, 0);
+            GlobalVariableSet(SimSLGV(sessions[i]), 0);
+            GlobalVariableSet(SimTPGV(sessions[i]), 0);
+            CloseSignalInSupabase(sessions[i], exitPrice, pnl);
 
-      int objEnd = StringFind(json, "}", objStart);
-      if(objEnd < 0) break;
-
-      string obj = StringSubstr(json, objStart + 1, objEnd - objStart - 1);
-
-      // Parse object fields
-      string direction = "";
-      string session = "";
-      double entry = 0, sl = 0, tp = 0, risk = 0;
-
-      // Extract direction
-      int dirPos = StringFind(obj, "\"direction\":\"");
-      if(dirPos >= 0)
-      {
-         int dirStart = dirPos + 13;
-         int dirEnd = StringFind(obj, "\"", dirStart);
-         direction = StringSubstr(obj, dirStart, dirEnd - dirStart);
-      }
-
-      // Extract session
-      int sessPos = StringFind(obj, "\"session\":\"");
-      if(sessPos >= 0)
-      {
-         int sessStart = sessPos + 11;
-         int sessEnd = StringFind(obj, "\"", sessStart);
-         session = StringSubstr(obj, sessStart, sessEnd - sessStart);
-      }
-
-      // Extract entry
-      int entryPos = StringFind(obj, "\"entry\":");
-      if(entryPos >= 0)
-      {
-         int entryStart = entryPos + 8;
-         int entryEnd = StringFind(obj, ",", entryStart);
-         if(entryEnd < 0) entryEnd = StringLen(obj);
-         entry = StringToDouble(StringSubstr(obj, entryStart, entryEnd - entryStart));
-      }
-
-      // Extract sl
-      int slPos = StringFind(obj, "\"sl\":");
-      if(slPos >= 0)
-      {
-         int slStart = slPos + 5;
-         int slEnd = StringFind(obj, ",", slStart);
-         if(slEnd < 0) slEnd = StringLen(obj);
-         sl = StringToDouble(StringSubstr(obj, slStart, slEnd - slStart));
-      }
-
-      // Extract tp
-      int tpPos = StringFind(obj, "\"tp\":");
-      if(tpPos >= 0)
-      {
-         int tpStart = tpPos + 5;
-         int tpEnd = StringFind(obj, ",", tpStart);
-         if(tpEnd < 0) tpEnd = StringLen(obj);
-         tp = StringToDouble(StringSubstr(obj, tpStart, tpEnd - tpStart));
-      }
-
-      // Extract risk_usd
-      int riskPos = StringFind(obj, "\"risk_usd\":");
-      if(riskPos >= 0)
-      {
-         int riskStart = riskPos + 11;
-         int riskEnd = StringFind(obj, ",", riskStart);
-         if(riskEnd < 0) riskEnd = StringFind(obj, "}", riskStart);
-         if(riskEnd < 0) riskEnd = StringLen(obj);
-         risk = StringToDouble(StringSubstr(obj, riskStart, riskEnd - riskStart));
-      }
-
-      // Validate and add
-      if(direction != "" && session != "" && entry > 0 && sl > 0 && tp > 0 && risk > 0)
-      {
-         ArrayResize(directions, count + 1);
-         ArrayResize(entries, count + 1);
-         ArrayResize(sls, count + 1);
-         ArrayResize(tps, count + 1);
-         ArrayResize(risks, count + 1);
-         ArrayResize(sessions, count + 1);
-
-         directions[count] = direction;
-         entries[count] = entry;
-         sls[count] = sl;
-         tps[count] = tp;
-         risks[count] = risk;
-         sessions[count] = session;
-
-         count++;
-      }
-
-      pos = objEnd + 1;
-   }
-
-   return count;
+            if(sessions[i] == "short")
+            {
+                GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
+                GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+                Print("SHORT state reset after simulated close");
+            }
+        }
+    }
 }
 
-//+------------------------------------------------------------------+
-//| Check for new signals from Python bridge                        |
-//+------------------------------------------------------------------+
-void CheckNewSignals()
+// Simple active-signal check — uses status=eq.active only (avoids in.() encoding issues)
+bool SupabaseSignalIsActive(string session)
 {
-   if(TestMode)
-   {
-      // Test mode: simulate signal processing
-      Print("TEST MODE: Checking for signals...");
-      return;
-   }
-
-   int fileHandle = FileOpen(SignalsFile, FILE_READ|FILE_TXT|FILE_COMMON);
-
-   if(fileHandle == INVALID_HANDLE)
-   {
-      return;
-   }
-
-   string jsonContent = "";
-   while(!FileIsEnding(fileHandle))
-   {
-      jsonContent += FileReadString(fileHandle);
-   }
-   FileClose(fileHandle);
-
-   if(StringLen(jsonContent) == 0)
-   {
-      return;
-   }
-
-   // Delete file immediately after reading
-   FileDelete(SignalsFile, FILE_COMMON);
-
-   Print("==========================================================");
-   Print("New signals file detected - processing...");
-
-   // Parse JSON array
-   string directions[];
-   string sessions[];
-   double entries[], sls[], tps[], risks[];
-
-   int signalCount = ParseSignals(jsonContent, directions, entries, sls, tps, risks, sessions);
-
-   if(signalCount == 0)
-   {
-      Print("No valid signals found in JSON");
-      Print("==========================================================");
-      return;
-   }
-
-   Print("Found ", signalCount, " signal(s) in file");
-
-   // Process each signal
-   int opened = 0;
-   for(int i = 0; i < signalCount; i++)
-   {
-      Print("Signal ", i + 1, ": ", directions[i], " ", sessions[i], " @ ", entries[i], " SL:", sls[i], " TP:", tps[i]);
-
-      if(OpenTrade(directions[i], entries[i], sls[i], tps[i], risks[i], sessions[i]))
-      {
-         opened++;
-      }
-   }
-
-   Print("Processed ", signalCount, " signals, opened ", opened, " trades");
-   Print("==========================================================");
+    string url = SupabaseURL + "/rest/v1/mt5_signals?status=eq.active&session=eq." + session + "&select=id&limit=1";
+    string headers = "apikey: " + SupabaseKey + "\r\n" +
+                     "Authorization: Bearer " + SupabaseKey + "\r\n";
+    char   data[], result[];
+    string resHeaders;
+    int rc = WebRequest("GET", url, headers, 5000, data, result, resHeaders);
+    if(rc == -1) return true; // network error → assume still active (safe default)
+    string body = CharArrayToString(result);
+    return (StringLen(body) > 2); // "[]" = not active
 }
 
 //+------------------------------------------------------------------+
-//| Sync M15 candles to file for Python bridge                      |
+//| Open trade + log to Supabase                                     |
 //+------------------------------------------------------------------+
-void SyncCandlesToFile()
+bool OpenTrade(string direction, double entry, double sl, double tp, string session)
 {
-   int barsToSync = 2000;  // 2000 bars = 125 H4 bars for EMA20 warmup
+    // Write signal to Supabase (both modes)
+    WriteSignalToSupabase(direction, entry, sl, tp, session);
 
-   MqlRates rates[];
-   ArraySetAsSeries(rates, true);
+    if(TestMode)
+    {
+        Print("[TEST] Signal logged. No real trade.");
+        GlobalVariableSet(SimGV(session),   1);
+        GlobalVariableSet(SimSLGV(session), sl);
+        GlobalVariableSet(SimTPGV(session), tp);
+        return true;
+    }
 
-   int copied = CopyRates(_Symbol, PERIOD_M15, 1, barsToSync, rates);
+    ENUM_ORDER_TYPE orderType = (direction == "LONG") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
-   if(copied <= 0)
-   {
-      Print("Error copying rates: ", GetLastError());
-      return;
-   }
+    double riskPts = MathAbs(entry - sl);
+    if(riskPts <= 0) return false;
 
-   string json = "[\n";
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    if(tickValue <= 0 || tickSize <= 0) return false;
 
-   for(int i = 0; i < copied; i++)
-   {
-      if(i > 0) json += ",\n";
+    double lot     = RiskUSD / ((riskPts / tickSize) * tickValue);
+    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    lot = MathMax(minLot, MathMin(maxLot, MathRound(lot / lotStep) * lotStep));
 
-      json += "  {\n";
-      json += "    \"time\": \"" + TimeToString(rates[i].time, TIME_DATE|TIME_MINUTES) + "\",\n";
-      json += "    \"open\": " + DoubleToString(rates[i].open, _Digits) + ",\n";
-      json += "    \"high\": " + DoubleToString(rates[i].high, _Digits) + ",\n";
-      json += "    \"low\": " + DoubleToString(rates[i].low, _Digits) + ",\n";
-      json += "    \"close\": " + DoubleToString(rates[i].close, _Digits) + ",\n";
-      json += "    \"volume\": " + IntegerToString(rates[i].tick_volume) + "\n";
-      json += "  }";
-   }
+    MqlTradeRequest req = {};
+    MqlTradeResult  res = {};
+    req.action    = TRADE_ACTION_DEAL;
+    req.symbol    = _Symbol;
+    req.volume    = lot;
+    req.type      = orderType;
+    req.price     = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                                   : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    req.sl        = NormalizeDouble(sl, _Digits);
+    req.tp        = NormalizeDouble(tp, _Digits);
+    req.deviation = Slippage;
+    req.magic     = MagicNumber;
+    req.comment   = "Astra_" + session;
 
-   json += "\n]";
+    if(OrderSend(req, res))
+    {
+        Print("TRADE OPENED: ", direction, " ", session, " lot=", lot, " ticket=", res.order);
+        return true;
+    }
 
-   int fileHandle = FileOpen(CandlesFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
-
-   if(fileHandle == INVALID_HANDLE)
-   {
-      Print("Error opening candles file: ", GetLastError());
-      return;
-   }
-
-   FileWriteString(fileHandle, json);
-   FileClose(fileHandle);
-
-   Print("Synced ", copied, " M15 candles to file");
+    Print("ERROR OrderSend: ", GetLastError(), " retcode=", res.retcode);
+    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Update trailing stops for active positions                      |
+//| Supabase: write new signal                                        |
+//+------------------------------------------------------------------+
+void WriteSignalToSupabase(string direction, double entry, double sl, double tp, string session)
+{
+    if(StringLen(SupabaseURL) == 0 || StringLen(SupabaseKey) == 0)
+    {
+        Print("Supabase not configured — signal not logged");
+        return;
+    }
+
+    string url = SupabaseURL + "/rest/v1/mt5_signals";
+    string headers = "apikey: "       + SupabaseKey + "\r\n" +
+                     "Authorization: Bearer " + SupabaseKey + "\r\n" +
+                     "Content-Type: application/json\r\n" +
+                     "Prefer: return=minimal\r\n";
+
+    string body = StringFormat(
+        "{\"direction\":\"%s\",\"entry\":%.2f,\"sl\":%.2f,\"tp\":%.2f,"
+        "\"session\":\"%s\",\"risk_usd\":%.2f,\"status\":\"active\","
+        "\"signal_type\":\"session_breakout\"}",
+        direction, entry, sl, tp, session, RiskUSD);
+
+    char data[], result[];
+    StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1); // strip null terminator
+
+    string resHeaders;
+    int rc = WebRequest("POST", url, headers, 5000, data, result, resHeaders);
+    if(rc == -1)
+        Print("WriteSignal WebRequest error: ", GetLastError(), " (whitelist URL in MT5 settings)");
+    else
+        Print("Signal logged to Supabase: ", direction, " ", session, " @ ", entry);
+}
+
+//+------------------------------------------------------------------+
+//| Supabase: mark position closed (called from OnTradeTransaction)  |
+//+------------------------------------------------------------------+
+void CloseSignalInSupabase(string session, double exitPrice, double profit)
+{
+    if(StringLen(SupabaseURL) == 0) return;
+
+    string url = SupabaseURL + "/rest/v1/mt5_signals?status=eq.active&session=eq." + session;
+    string headers = "apikey: "       + SupabaseKey + "\r\n" +
+                     "Authorization: Bearer " + SupabaseKey + "\r\n" +
+                     "Content-Type: application/json\r\n";
+
+    string body = StringFormat("{\"status\":\"closed\",\"exit_price\":%.2f,\"pnl\":%.2f}",
+                               exitPrice, profit);
+
+    char data[], result[];
+    StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1);
+
+    string resHeaders;
+    int rc = WebRequest("PATCH", url, headers, 5000, data, result, resHeaders);
+    if(rc == -1)
+        Print("CloseSignal WebRequest error: ", GetLastError());
+    else
+        Print("Signal closed in Supabase: ", session, " @ ", exitPrice, " PnL=", profit);
+}
+
+//+------------------------------------------------------------------+
+//| Detect closed positions → update Supabase                        |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest     &request,
+                        const MqlTradeResult      &result)
+{
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+    if(!HistoryDealSelect(trans.deal)) return;
+    if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != MagicNumber) return;
+
+    ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+    if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
+
+    string comment   = HistoryDealGetString(trans.deal, DEAL_COMMENT);
+    double exitPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+    double profit    = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+
+    // comment = "Astra_asian" → session = "asian"
+    string session = StringSubstr(comment, 6);
+    Print("Position closed: ", session, " @ ", exitPrice, " PnL=", profit);
+    CloseSignalInSupabase(session, exitPrice, profit);
+
+    // Reset SHORT state on close — matches backtest behavior
+    if(session == "short")
+    {
+        GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
+        GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+        Print("SHORT state reset after position close");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Step trailing stop                                                |
 //+------------------------------------------------------------------+
 void UpdateTrailingStops()
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+        double posEntry = PositionGetDouble(POSITION_PRICE_OPEN);
+        double curSL    = PositionGetDouble(POSITION_SL);
+        double curTP    = PositionGetDouble(POSITION_TP);
+        double curPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+        ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
-      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
-      double currentSL = PositionGetDouble(POSITION_SL);
-      double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        double risk = 0, newSL = curSL, profitR = 0;
 
-      if(posType == POSITION_TYPE_BUY)
-      {
-         // LONG: SL below entry, profit when price goes UP
-         double risk = entry - currentSL;
-         if(risk <= 0) continue;
+        if(posType == POSITION_TYPE_BUY)
+        {
+            risk = posEntry - curSL;
+            if(risk <= 0) continue;
+            profitR = (curPrice - posEntry) / risk;
+            if(profitR >= 5.0) newSL = MathMax(newSL, posEntry + 4.0 * risk);
+            else if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * risk);
+            else if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * risk);
+            else if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * risk);
 
-         double profitR = (currentPrice - entry) / risk;
-         double newSL = currentSL;
-
-         // Step trailing: 2R->1R, 3R->2R, 4R->3R, 5R->4R
-         if(profitR >= 5.0)
-            newSL = MathMax(newSL, entry + 4.0 * risk);
-         else if(profitR >= 4.0)
-            newSL = MathMax(newSL, entry + 3.0 * risk);
-         else if(profitR >= 3.0)
-            newSL = MathMax(newSL, entry + 2.0 * risk);
-         else if(profitR >= 2.0)
-            newSL = MathMax(newSL, entry + 1.0 * risk);
-
-         if(newSL > currentSL + _Point * 10)
-         {
-            MqlTradeRequest request = {};
-            MqlTradeResult result = {};
-
-            request.action = TRADE_ACTION_SLTP;
-            request.position = ticket;
-            request.symbol = _Symbol;
-            request.sl = NormalizeDouble(newSL, _Digits);
-            request.tp = PositionGetDouble(POSITION_TP);
-
-            if(OrderSend(request, result))
+            if(newSL > curSL + _Point * 10)
             {
-               Print("LONG Trailing stop updated: ", ticket, " New SL: ", newSL, " (", DoubleToString(profitR, 2), "R)");
+                MqlTradeRequest req = {}; MqlTradeResult res = {};
+                req.action = TRADE_ACTION_SLTP; req.position = ticket;
+                req.symbol = _Symbol;
+                req.sl = NormalizeDouble(newSL, _Digits); req.tp = curTP;
+                if(OrderSend(req, res))
+                    Print("Trail BUY  ", ticket, " SL=", newSL, " (", profitR, "R)");
             }
-         }
-      }
-      else if(posType == POSITION_TYPE_SELL)
-      {
-         // SHORT: SL above entry, profit when price goes DOWN
-         double risk = currentSL - entry;
-         if(risk <= 0) continue;
+        }
+        else if(posType == POSITION_TYPE_SELL)
+        {
+            risk = curSL - posEntry;
+            if(risk <= 0) continue;
+            profitR = (posEntry - curPrice) / risk;
+            if(profitR >= 5.0) newSL = MathMin(newSL, posEntry - 4.0 * risk);
+            else if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * risk);
+            else if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * risk);
+            else if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * risk);
 
-         double profitR = (entry - currentPrice) / risk;
-         double newSL = currentSL;
-
-         // Step trailing: 2R->1R, 3R->2R, 4R->3R, 5R->4R (inverse)
-         if(profitR >= 5.0)
-            newSL = MathMin(newSL, entry - 4.0 * risk);
-         else if(profitR >= 4.0)
-            newSL = MathMin(newSL, entry - 3.0 * risk);
-         else if(profitR >= 3.0)
-            newSL = MathMin(newSL, entry - 2.0 * risk);
-         else if(profitR >= 2.0)
-            newSL = MathMin(newSL, entry - 1.0 * risk);
-
-         if(newSL < currentSL - _Point * 10)
-         {
-            MqlTradeRequest request = {};
-            MqlTradeResult result = {};
-
-            request.action = TRADE_ACTION_SLTP;
-            request.position = ticket;
-            request.symbol = _Symbol;
-            request.sl = NormalizeDouble(newSL, _Digits);
-            request.tp = PositionGetDouble(POSITION_TP);
-
-            if(OrderSend(request, result))
+            if(newSL < curSL - _Point * 10)
             {
-               Print("SHORT Trailing stop updated: ", ticket, " New SL: ", newSL, " (", DoubleToString(profitR, 2), "R)");
+                MqlTradeRequest req = {}; MqlTradeResult res = {};
+                req.action = TRADE_ACTION_SLTP; req.position = ticket;
+                req.symbol = _Symbol;
+                req.sl = NormalizeDouble(newSL, _Digits); req.tp = curTP;
+                if(OrderSend(req, res))
+                    Print("Trail SELL ", ticket, " SL=", newSL, " (", profitR, "R)");
             }
-         }
-      }
-   }
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Open trade from signal                                           |
+//| Sync 2000 M15 candles to file for Python bridge                  |
 //+------------------------------------------------------------------+
-bool OpenTrade(string direction, double entry, double sl, double tp, double riskUSD, string session)
+void SyncCandlesToFile()
 {
-   // v4.0: Check if we already have a position for THIS SESSION
-   // Allow multiple positions: Asian + London + NY + SHORT simultaneously
-   if(HasPositionForSession(session))
-   {
-      Print("Position already open for session ", session, " - skipping signal");
-      return false;
-   }
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    int copied = CopyRates(_Symbol, PERIOD_M15, 1, 2000, rates);
+    if(copied <= 0) { Print("SyncCandles: no data (", GetLastError(), ")"); return; }
 
-   if(TestMode)
-   {
-      Print("=== TEST MODE SIGNAL ===");
-      Print("Direction: ", direction);
-      Print("Session: ", session);
-      Print("Entry: ", entry, " | SL: ", sl, " | TP: ", tp);
-      Print("Risk: $", riskUSD);
-      Print("========================");
-      return true;
-   }
+    string json = "[\n";
+    for(int i = 0; i < copied; i++)
+    {
+        if(i > 0) json += ",\n";
+        json += "  {\"time\":\""  + TimeToString(rates[i].time, TIME_DATE|TIME_MINUTES) + "\","
+              + "\"open\":"        + DoubleToString(rates[i].open,  _Digits) + ","
+              + "\"high\":"        + DoubleToString(rates[i].high,  _Digits) + ","
+              + "\"low\":"         + DoubleToString(rates[i].low,   _Digits) + ","
+              + "\"close\":"       + DoubleToString(rates[i].close, _Digits) + ","
+              + "\"volume\":"      + IntegerToString(rates[i].tick_volume)   + "}";
+    }
+    json += "\n]";
 
-   ENUM_ORDER_TYPE orderType = (direction == "LONG") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-
-   double risk = MathAbs(entry - sl);
-   if(risk <= 0)
-   {
-      Print("ERROR: Invalid risk calculation (entry=", entry, ", sl=", sl, ")");
-      return false;
-   }
-
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-
-   if(tickValue <= 0 || tickSize <= 0)
-   {
-      Print("ERROR: Invalid tick value or size");
-      return false;
-   }
-
-   // Calculate lot size based on risk
-   double riskInTicks = risk / tickSize;
-   double lot = riskUSD / (riskInTicks * tickValue);
-
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-
-   lot = MathMax(minLot, MathMin(maxLot, MathRound(lot / lotStep) * lotStep));
-
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-
-   request.action = TRADE_ACTION_DEAL;
-   request.symbol = _Symbol;
-   request.volume = lot;
-   request.type = orderType;
-   request.price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   request.sl = NormalizeDouble(sl, _Digits);
-   request.tp = NormalizeDouble(tp, _Digits);
-   request.deviation = Slippage;
-   request.magic = MagicNumber;
-   request.comment = "Astra_" + session;
-
-   if(OrderSend(request, result))
-   {
-      Print("=== TRADE OPENED ===");
-      Print("Direction: ", direction);
-      Print("Session: ", session);
-      Print("Entry: ", request.price, " | SL: ", sl, " | TP: ", tp);
-      Print("Lot: ", lot, " | Risk: $", riskUSD);
-      Print("Ticket: ", result.order);
-      Print("====================");
-      return true;
-   }
-   else
-   {
-      Print("ERROR opening trade: ", GetLastError(), " | RetCode: ", result.retcode);
-      return false;
-   }
+    int fh = FileOpen(CandlesFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
+    if(fh == INVALID_HANDLE) { Print("SyncCandles: can't open file (", GetLastError(), ")"); return; }
+    FileWriteString(fh, json);
+    FileClose(fh);
+    Print("Synced ", copied, " M15 candles");
 }
 //+------------------------------------------------------------------+
