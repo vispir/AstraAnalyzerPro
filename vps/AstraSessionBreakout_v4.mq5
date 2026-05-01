@@ -757,9 +757,10 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 //+------------------------------------------------------------------+
 void UpdateTrailingStops()
 {
-    // Use last closed M15 bar close — matches bar-based backtest trailing logic
-    double m15Close = iClose(_Symbol, PERIOD_M15, 1);
-    if(m15Close <= 0) return;
+    // Backtest uses bar HIGH for LONG profit_r, bar LOW for SHORT — match exactly
+    double m15High = iHigh(_Symbol, PERIOD_M15, 1);
+    double m15Low  = iLow (_Symbol, PERIOD_M15, 1);
+    if(m15High <= 0 || m15Low <= 0) return;
 
     for(int i = PositionsTotal() - 1; i >= 0; i--)
     {
@@ -779,11 +780,11 @@ void UpdateTrailingStops()
         {
             risk = posEntry - curSL;
             if(risk <= 0) continue;
-            profitR = (m15Close - posEntry) / risk;
+            profitR = (m15High - posEntry) / risk; // backtest: highs[i]
+            if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * risk);
+            if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * risk);
+            if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * risk);
             if(profitR >= 5.0) newSL = MathMax(newSL, posEntry + 4.0 * risk);
-            else if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * risk);
-            else if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * risk);
-            else if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * risk);
 
             if(newSL > curSL + _Point * 10)
             {
@@ -799,11 +800,11 @@ void UpdateTrailingStops()
         {
             risk = curSL - posEntry;
             if(risk <= 0) continue;
-            profitR = (posEntry - m15Close) / risk;
+            profitR = (posEntry - m15Low) / risk; // backtest: lows[i]
+            if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * risk);
+            if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * risk);
+            if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * risk);
             if(profitR >= 5.0) newSL = MathMin(newSL, posEntry - 4.0 * risk);
-            else if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * risk);
-            else if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * risk);
-            else if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * risk);
 
             if(newSL < curSL - _Point * 10)
             {
