@@ -82,6 +82,7 @@ LONG_SESSIONS = {
 }
 
 TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"
+EA_MODE   = os.getenv("EA_MODE",   "true").lower() == "true"  # EA generates signals, Python only monitors
 
 # SHORT: Reversal parameters
 SHORT_TYPE1_LOOKBACK_H4_BARS = 5
@@ -677,24 +678,23 @@ def check_session_breakout():
                         'trend': trend
                     }
 
-        # 6. Check LONG conditions (Asian + London + NY)
-        logger.info("Checking LONG session breakouts (Asian + London + NY)...")
-        long_signals, session_highs, session_lows = check_long_session_breakout(today_data, df_h4, current_hour, now_utc)
+        # 6 & 7. Signal generation — skipped in EA_MODE (EA handles this directly in MT5)
+        session_highs = {}
+        session_lows  = {}
+        if EA_MODE:
+            logger.info("EA_MODE=true — skipping signal generation (EA generates signals)")
+        else:
+            # Legacy Python signal generation (only when EA_MODE=false)
+            logger.info("Checking LONG session breakouts (Asian + London + NY)...")
+            long_signals, session_highs, session_lows = check_long_session_breakout(today_data, df_h4, current_hour, now_utc)
 
-        # 7. Check SHORT conditions
-        logger.info("Checking SHORT reversal conditions...")
-        short_signal = check_short_reversal(today_data, df_h4, current_hour)
+            logger.info("Checking SHORT reversal conditions...")
+            short_signal = check_short_reversal(today_data, df_h4, current_hour)
 
-        # Collect all signals
-        all_signals = []
-        all_signals.extend(long_signals)
-        if short_signal:
-            all_signals.append(short_signal)
-
-        # Return if any signals generated
-        if len(all_signals) > 0:
-            logger.info(f"✓ {len(all_signals)} signal(s) generated (LONG: {len(long_signals)}, SHORT: {1 if short_signal else 0})")
-            return {"success": True, "message": f"{len(all_signals)} signals generated", "signals": all_signals}
+            all_signals = list(long_signals) + ([short_signal] if short_signal else [])
+            if all_signals:
+                logger.info(f"✓ {len(all_signals)} signal(s) generated")
+                return {"success": True, "message": f"{len(all_signals)} signals generated", "signals": all_signals}
 
         logger.info("✓ No new entry conditions met")
 
