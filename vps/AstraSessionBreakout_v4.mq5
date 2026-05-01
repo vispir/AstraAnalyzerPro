@@ -230,9 +230,6 @@ void OnTick()
         OnNewM15Bar();
     }
 
-    if(EnableTrailing)
-        UpdateTrailingStops();
-
     // Detect SHORT close every tick so T1/T2 reset within seconds (not next M15 bar)
     DetectShortClose();
 
@@ -251,6 +248,10 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnNewM15Bar()
 {
+    // --- Step trailing: bar-based to match backtest (uses closed bar close, not tick)
+    if(EnableTrailing)
+        UpdateTrailingStops();
+
     // --- ATR (last closed M15 bar, index 1)
     double m15ATRbuf[];
     ArraySetAsSeries(m15ATRbuf, true);
@@ -756,6 +757,10 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 //+------------------------------------------------------------------+
 void UpdateTrailingStops()
 {
+    // Use last closed M15 bar close — matches bar-based backtest trailing logic
+    double m15Close = iClose(_Symbol, PERIOD_M15, 1);
+    if(m15Close <= 0) return;
+
     for(int i = PositionsTotal() - 1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -766,7 +771,6 @@ void UpdateTrailingStops()
         double posEntry = PositionGetDouble(POSITION_PRICE_OPEN);
         double curSL    = PositionGetDouble(POSITION_SL);
         double curTP    = PositionGetDouble(POSITION_TP);
-        double curPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
         double risk = 0, newSL = curSL, profitR = 0;
@@ -775,7 +779,7 @@ void UpdateTrailingStops()
         {
             risk = posEntry - curSL;
             if(risk <= 0) continue;
-            profitR = (curPrice - posEntry) / risk;
+            profitR = (m15Close - posEntry) / risk;
             if(profitR >= 5.0) newSL = MathMax(newSL, posEntry + 4.0 * risk);
             else if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * risk);
             else if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * risk);
@@ -795,7 +799,7 @@ void UpdateTrailingStops()
         {
             risk = curSL - posEntry;
             if(risk <= 0) continue;
-            profitR = (posEntry - curPrice) / risk;
+            profitR = (posEntry - m15Close) / risk;
             if(profitR >= 5.0) newSL = MathMin(newSL, posEntry - 4.0 * risk);
             else if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * risk);
             else if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * risk);
