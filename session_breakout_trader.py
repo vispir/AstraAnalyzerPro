@@ -683,6 +683,18 @@ def check_session_breakout():
         session_lows  = {}
         if EA_MODE:
             logger.info("EA_MODE=true — skipping signal generation (EA generates signals)")
+            # Still calculate session ranges for TG status display
+            for idx, row in today_data.iterrows():
+                bar_hour = idx.hour
+                for session_name, params in LONG_SESSIONS.items():
+                    start_hour, end_hour = params['range_hours']
+                    if start_hour <= bar_hour < end_hour:
+                        if session_name not in session_highs:
+                            session_highs[session_name] = row['high']
+                            session_lows[session_name]  = row['low']
+                        else:
+                            session_highs[session_name] = max(session_highs[session_name], row['high'])
+                            session_lows[session_name]  = min(session_lows[session_name],  row['low'])
         else:
             # Legacy Python signal generation (only when EA_MODE=false)
             logger.info("Checking LONG session breakouts (Asian + London + NY)...")
