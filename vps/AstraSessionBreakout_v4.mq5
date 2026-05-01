@@ -774,17 +774,21 @@ void UpdateTrailingStops()
         double curTP    = PositionGetDouble(POSITION_TP);
         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
-        double risk = 0, newSL = curSL, profitR = 0;
+        double newSL = curSL, profitR = 0, initialRisk = 0;
 
         if(posType == POSITION_TYPE_BUY)
         {
-            risk = posEntry - curSL;
-            if(risk <= 0) continue;
-            profitR = (m15High - posEntry) / risk; // backtest: highs[i]
-            if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * risk);
-            if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * risk);
-            if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * risk);
-            if(profitR >= 5.0) newSL = MathMax(newSL, posEntry + 4.0 * risk);
+            // Recover initial risk from TP (TP never changes, curSL does after trailing)
+            // Matches backtest: risk = trade['entry'] - trade['initial_sl']
+            if(curTP <= posEntry) continue;
+            initialRisk = (curTP - posEntry) / TP_RR_VAL;
+            if(initialRisk <= 0) continue;
+
+            profitR = (m15High - posEntry) / initialRisk; // backtest: highs[i]
+            if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * initialRisk);
+            if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * initialRisk);
+            if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * initialRisk);
+            if(profitR >= 5.0) newSL = MathMax(newSL, posEntry + 4.0 * initialRisk);
 
             if(newSL > curSL + _Point * 10)
             {
@@ -798,13 +802,16 @@ void UpdateTrailingStops()
         }
         else if(posType == POSITION_TYPE_SELL)
         {
-            risk = curSL - posEntry;
-            if(risk <= 0) continue;
-            profitR = (posEntry - m15Low) / risk; // backtest: lows[i]
-            if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * risk);
-            if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * risk);
-            if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * risk);
-            if(profitR >= 5.0) newSL = MathMin(newSL, posEntry - 4.0 * risk);
+            // Recover initial risk from TP
+            if(curTP >= posEntry) continue;
+            initialRisk = (posEntry - curTP) / TP_RR_VAL;
+            if(initialRisk <= 0) continue;
+
+            profitR = (posEntry - m15Low) / initialRisk; // backtest: lows[i]
+            if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * initialRisk);
+            if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * initialRisk);
+            if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * initialRisk);
+            if(profitR >= 5.0) newSL = MathMin(newSL, posEntry - 4.0 * initialRisk);
 
             if(newSL < curSL - _Point * 10)
             {
