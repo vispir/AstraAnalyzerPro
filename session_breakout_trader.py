@@ -28,7 +28,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from astra_v2.data.dukascopy import load_timeframe
-from astra_v2.mt5.mt5_signal_writer import write_signal, get_active_signal
+from astra_v2.mt5.mt5_signal_writer import write_signal, get_active_signal, update_signal_status
 from services.telegram_service import telegram_service
 import requests
 
@@ -73,6 +73,8 @@ LONG_SESSIONS = {
         'entry_end': 21
     }
 }
+
+TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"
 
 # SHORT: Reversal parameters
 SHORT_TYPE1_LOOKBACK_H4_BARS = 5
@@ -198,6 +200,73 @@ def calculate_atr(df, period=14):
 def calculate_ema(df, period):
     """Calculate EMA"""
     return df['close'].ewm(span=period, adjust=False).mean()
+
+# ============================================================================
+# TEST MODE: SL/TP SIMULATION
+# ============================================================================
+
+def simulate_test_closures(df, active_signals_data):
+    """TEST_MODE: check if active signals have hit SL or TP using candle data.
+    Returns list of session names that were closed."""
+    closed_sessions = []
+
+    for signal in active_signals_data:
+        signal_id = signal['id']
+        direction = signal['direction']
+        sl = float(signal['sl'])
+        tp = float(signal['tp'])
+        session = signal['session']
+        risk_usd = float(signal['risk_usd'])
+
+        try:
+            created_ts = pd.Timestamp(signal['created_at'])
+            if created_ts.tzinfo is None:
+                created_ts = created_ts.tz_localize('UTC')
+            else:
+                created_ts = created_ts.tz_convert('UTC')
+        except Exception:
+            logger.error(f"[TEST] Could not parse created_at for signal {signal_id}")
+            continue
+
+        # Only check candles written AFTER the signal was placed
+        df_idx = df.index
+        if df_idx.tzinfo is None:
+            df_idx = df_idx.tz_localize('UTC')
+        candles_after = df[df_idx > created_ts]
+
+        if len(candles_after) == 0:
+            continue
+
+        for idx, candle in candles_after.iterrows():
+            if direction == 'LONG':
+                if candle['low'] <= sl:
+                    pnl = -risk_usd
+                    update_signal_status(signal_id, 'closed', exit_price=sl, pnl=pnl)
+                    logger.info(f"[TEST] {session.upper()} LONG SL hit @ {sl:.2f}, PnL: ${pnl:.0f}")
+                    closed_sessions.append(session)
+                    break
+                elif candle['high'] >= tp:
+                    pnl = risk_usd * TP_RR
+                    update_signal_status(signal_id, 'closed', exit_price=tp, pnl=pnl)
+                    logger.info(f"[TEST] {session.upper()} LONG TP hit @ {tp:.2f}, PnL: ${pnl:.0f}")
+                    closed_sessions.append(session)
+                    break
+            elif direction == 'SHORT':
+                if candle['high'] >= sl:
+                    pnl = -risk_usd
+                    update_signal_status(signal_id, 'closed', exit_price=sl, pnl=pnl)
+                    logger.info(f"[TEST] {session.upper()} SHORT SL hit @ {sl:.2f}, PnL: ${pnl:.0f}")
+                    closed_sessions.append(session)
+                    break
+                elif candle['low'] <= tp:
+                    pnl = risk_usd * TP_RR
+                    update_signal_status(signal_id, 'closed', exit_price=tp, pnl=pnl)
+                    logger.info(f"[TEST] {session.upper()} SHORT TP hit @ {tp:.2f}, PnL: ${pnl:.0f}")
+                    closed_sessions.append(session)
+                    break
+
+    return closed_sessions
+
 
 # ============================================================================
 # LONG STRATEGY - MULTIPLE SESSIONS (Asian + London + NY)
@@ -508,11 +577,13 @@ def check_session_breakout():
 
         # 1. Check for active trades (может быть несколько)
         active_sessions = []
+        active_signals_data = []
         for session in ['asian', 'london', 'ny', 'short']:
             try:
                 active = get_active_signal(session=session)
                 if active:
                     active_sessions.append(session)
+                    active_signals_data.append(active)
                     logger.info(f"✓ Active {session} trade (ID: {active['id']})")
             except Exception as e:
                 logger.error(f"Supabase error checking {session}: {e}")
@@ -557,6 +628,22 @@ def check_session_breakout():
         logger.info(f"Current UTC time: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Current UTC hour: {current_hour}")
         logger.info(f"✓ Today's data: {len(today_data)} bars")
+
+        # 5.5 TEST_MODE: simulate SL/TP closures for active positions
+        if TEST_MODE and active_signals_data:
+            logger.info("[TEST] Checking SL/TP for active positions...")
+            closed = simulate_test_closures(df, active_signals_data)
+            if closed:
+                logger.info(f"[TEST] Closed sessions: {closed}")
+                # Refresh active_sessions after simulation
+                active_sessions = []
+                for session in ['asian', 'london', 'ny', 'short']:
+                    try:
+                        active = get_active_signal(session=session)
+                        if active:
+                            active_sessions.append(session)
+                    except Exception:
+                        pass
 
         # Log H4 EMA20 status
         h4_trend_data = None
