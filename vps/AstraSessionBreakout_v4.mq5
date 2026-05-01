@@ -233,6 +233,9 @@ void OnTick()
     if(EnableTrailing)
         UpdateTrailingStops();
 
+    // Detect SHORT close every tick so T1/T2 reset within seconds (not next M15 bar)
+    DetectShortClose();
+
     if(ShouldSyncCandles())
         SyncCandlesToFile();
 }
