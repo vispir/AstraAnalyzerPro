@@ -44,6 +44,13 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+def mark_signal_tg_sent(signal_id):
+    try:
+        url = f"{SUPABASE_REST_URL}/mt5_signals?id=eq.{signal_id}"
+        requests.patch(url, headers=HEADERS, json={"tg_sent": True}, timeout=(5, 10))
+    except Exception as e:
+        logger.error(f"mark_signal_tg_sent error: {e}")
+
 # ============================================================================
 # v4.0 PARAMETERS - MULTIPLE POSITIONS
 # ============================================================================
@@ -371,6 +378,7 @@ def check_long_session_breakout(today_data, df_h4, current_hour, current_time):
                 if signal:
                     logger.info(f"✓✓✓ SIGNAL WRITTEN: LONG {session_name.upper()} @ {entry:.2f}")
                     telegram_service.send_session_breakout_signal(signal, test_mode=False)
+                    mark_signal_tg_sent(signal['id'])
                     signals.append(signal)
 
             except Exception as e:
@@ -521,6 +529,7 @@ def check_short_reversal(today_data, df_h4, current_hour):
                     if signal:
                         logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT Type1 @ {entry:.2f}")
                         telegram_service.send_session_breakout_signal(signal, test_mode=False)
+                        mark_signal_tg_sent(signal['id'])
                         # Reset state after entry
                         save_short_state(False, None, short_type2_reversal_active, short_type2_reversal_h4_high, current_h4_index)
                         return signal
@@ -552,6 +561,7 @@ def check_short_reversal(today_data, df_h4, current_hour):
                     if signal:
                         logger.info(f"✓✓✓ SIGNAL WRITTEN: SHORT Type2 @ {entry:.2f}")
                         telegram_service.send_session_breakout_signal(signal, test_mode=False)
+                        mark_signal_tg_sent(signal['id'])
                         # Reset state after entry
                         save_short_state(short_type1_reversal_active, short_type1_reversal_h4_high, False, None, current_h4_index)
                         return signal
@@ -590,6 +600,13 @@ def check_session_breakout():
 
         if len(active_sessions) > 0:
             logger.info(f"Active sessions: {', '.join(active_sessions)}")
+
+        # 1.5 Notify TG for signals written by EA (tg_sent=false means not yet notified)
+        for signal in active_signals_data:
+            if not signal.get('tg_sent', True):
+                logger.info(f"Sending TG notification for EA signal: {signal['session']} #{signal['id']}")
+                telegram_service.send_session_breakout_signal(signal, test_mode=TEST_MODE)
+                mark_signal_tg_sent(signal['id'])
 
         # 2. Load M15 data
         df = load_candles_from_supabase('XAUUSD', 'M15', limit=2000)
