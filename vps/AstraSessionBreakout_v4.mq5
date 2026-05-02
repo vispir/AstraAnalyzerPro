@@ -507,7 +507,10 @@ void DetectShortClose()
     {
         GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
         GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
-        Print("SHORT closed — T1/T2 state reset (M15 detector)");
+        // Reset H4 tracking so state machine re-evaluates current H4 bar on next M15
+        // Backtest: last_h4_index not updated while short active → re-checks immediately on close
+        GlobalVariableSet(GV_LAST_H4, 0);
+        Print("SHORT closed — T1/T2 + H4 state reset, re-evaluation forced next bar");
     }
 
     GlobalVariableSet(GV_SHORT_WAS_OPEN, isOpen ? 1.0 : 0.0);
@@ -754,6 +757,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
     {
         GlobalVariableSet(GV_T1_ACTIVE, 0); GlobalVariableSet(GV_T1_H4HIGH, 0);
         GlobalVariableSet(GV_T2_ACTIVE, 0); GlobalVariableSet(GV_T2_H4HIGH, 0);
+        GlobalVariableSet(GV_LAST_H4, 0);  // force H4 re-eval on next bar (match backtest)
         Print("SHORT state reset after position close");
     }
 }
