@@ -260,10 +260,11 @@ void OnNewM15Bar()
     if(m15ATR <= 0) return;
 
     // --- Build UTC-aligned H4 bars from M15 data (matches Python backtest resample('4h'))
+    // 100 bars = ~16 days history → EMA20 fully converged (seed weight < 0.001%)
     UTC4HBar h4bars[];
-    if(BuildUTCH4Bars(h4bars, 25) <= 0) return;
-    double h4EMA20     = CalcUTCH4EMA(h4bars, 25, H4_EMA_PERIOD);
-    double h4ATR       = CalcUTCH4ATR(h4bars, 25, ATR_PERIOD);
+    if(BuildUTCH4Bars(h4bars, 100) <= 0) return;
+    double h4EMA20     = CalcUTCH4EMA(h4bars, 100, H4_EMA_PERIOD);
+    double h4ATR       = CalcUTCH4ATR(h4bars, 100, ATR_PERIOD);
     double h4CloseCurr = h4bars[0].valid ? h4bars[0].close : 0;
 
     // --- Last closed M15 bar data
@@ -371,7 +372,7 @@ void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
     {
         double maxPrev = 0;
         for(int i = 1; i <= TYPE1_LOOKBACK; i++)
-            if(i <= 25 && h4bars[i].valid) maxPrev = MathMax(maxPrev, h4bars[i].high);
+            if(h4bars[i].valid) maxPrev = MathMax(maxPrev, h4bars[i].high);
 
         if(h4HighCurr > maxPrev && bearish)
         {
@@ -386,7 +387,7 @@ void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
     {
         double minLow = DBL_MAX;
         for(int i = 1; i <= TYPE2_LOOKBACK; i++)
-            if(i <= 25 && h4bars[i].valid) minLow = MathMin(minLow, h4bars[i].low);
+            if(h4bars[i].valid) minLow = MathMin(minLow, h4bars[i].low);
 
         double move = h4HighCurr - minLow;
         if(move >= TYPE2_ATR_MULT * h4ATR && bearish)
