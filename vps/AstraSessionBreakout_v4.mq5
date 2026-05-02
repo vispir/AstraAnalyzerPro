@@ -260,11 +260,11 @@ void OnNewM15Bar()
     if(m15ATR <= 0) return;
 
     // --- Build UTC-aligned H4 bars from M15 data (matches Python backtest resample('4h'))
-    // 100 bars = ~16 days history → EMA20 fully converged (seed weight < 0.001%)
+    // 124 H4 bars ≈ 2000 M15 bars — same history as old Render Python system
     UTC4HBar h4bars[];
-    if(BuildUTCH4Bars(h4bars, 100) <= 0) return;
-    double h4EMA20     = CalcUTCH4EMA(h4bars, 100, H4_EMA_PERIOD);
-    double h4ATR       = CalcUTCH4ATR(h4bars, 100, ATR_PERIOD);
+    if(BuildUTCH4Bars(h4bars, 124) <= 0) return;
+    double h4EMA20     = CalcUTCH4EMA(h4bars, 124, H4_EMA_PERIOD);
+    double h4ATR       = CalcUTCH4ATR(h4bars, 124, ATR_PERIOD);
     double h4CloseCurr = h4bars[0].valid ? h4bars[0].close : 0;
 
     // --- Last closed M15 bar data
