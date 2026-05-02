@@ -758,7 +758,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 //+------------------------------------------------------------------+
 void UpdateTrailingStops()
 {
-    // Backtest uses bar HIGH for LONG profit_r, bar LOW for SHORT — match exactly
+    // Backtest: LONG uses bar LOW, SHORT uses bar HIGH (most conservative side)
     double m15High = iHigh(_Symbol, PERIOD_M15, 1);
     double m15Low  = iLow (_Symbol, PERIOD_M15, 1);
     if(m15High <= 0 || m15Low <= 0) return;
@@ -785,7 +785,9 @@ void UpdateTrailingStops()
             initialRisk = (curTP - posEntry) / TP_RR_VAL;
             if(initialRisk <= 0) continue;
 
-            profitR = (m15High - posEntry) / initialRisk; // backtest: highs[i]
+            // Backtest: profit_in_r = (current_low - entry) / risk
+            // Trail only when even the BAR LOW cleared the threshold (conservative)
+            profitR = (m15Low - posEntry) / initialRisk;
             if(profitR >= 2.0) newSL = MathMax(newSL, posEntry + 1.0 * initialRisk);
             if(profitR >= 3.0) newSL = MathMax(newSL, posEntry + 2.0 * initialRisk);
             if(profitR >= 4.0) newSL = MathMax(newSL, posEntry + 3.0 * initialRisk);
@@ -808,7 +810,9 @@ void UpdateTrailingStops()
             initialRisk = (posEntry - curTP) / TP_RR_VAL;
             if(initialRisk <= 0) continue;
 
-            profitR = (posEntry - m15Low) / initialRisk; // backtest: lows[i]
+            // Backtest: profit_in_r = (entry - current_high) / risk
+            // Trail only when even the BAR HIGH cleared the threshold (conservative)
+            profitR = (posEntry - m15High) / initialRisk;
             if(profitR >= 2.0) newSL = MathMin(newSL, posEntry - 1.0 * initialRisk);
             if(profitR >= 3.0) newSL = MathMin(newSL, posEntry - 2.0 * initialRisk);
             if(profitR >= 4.0) newSL = MathMin(newSL, posEntry - 3.0 * initialRisk);
