@@ -349,8 +349,11 @@ bool RangeValid(double &ranges[][2], int idx) { return ranges[idx][1] < DBL_MAX;
 //+------------------------------------------------------------------+
 void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
 {
-    double h4CloseCurr = h4bars[0].valid ? h4bars[0].close : 0;
-    double h4ClosePrev = h4bars[1].valid ? h4bars[1].close : 0;
+    // Use just-completed H4 bar (h4bars[1]) as "current", h4bars[2] as "previous"
+    // h4bars[0] = forming (only 1 M15 bar) — wrong to use for pattern evaluation
+    // Backtest evaluates the completed bar's full high/close at period end
+    double h4CloseCurr = h4bars[1].valid ? h4bars[1].close : 0;
+    double h4ClosePrev = h4bars[2].valid ? h4bars[2].close : 0;
 
     // EMA20 filter: SHORT only when H4 close BELOW EMA20
     if(h4EMA20 <= 0 || h4CloseCurr >= h4EMA20)
@@ -361,17 +364,18 @@ void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
         return;
     }
 
-    double h4HighCurr = h4bars[0].valid ? h4bars[0].high : 0;
+    double h4HighCurr = h4bars[1].valid ? h4bars[1].high : 0;
     bool   bearish    = (h4CloseCurr < h4ClosePrev);
 
     bool t1Active = GlobalVariableCheck(GV_T1_ACTIVE) && GlobalVariableGet(GV_T1_ACTIVE) > 0.5;
     bool t2Active = GlobalVariableCheck(GV_T2_ACTIVE) && GlobalVariableGet(GV_T2_ACTIVE) > 0.5;
 
-    // TYPE 1: new H4 high > max of prev 5 H4 highs + bearish close
+    // TYPE 1: completed H4 high > max of prev 5 H4 highs + bearish close
+    // Lookback: h4bars[2..6] = 5 bars before the just-completed bar (matches backtest iloc[-6:-1])
     if(!t1Active)
     {
         double maxPrev = 0;
-        for(int i = 1; i <= TYPE1_LOOKBACK; i++)
+        for(int i = 2; i <= TYPE1_LOOKBACK + 1; i++)
             if(h4bars[i].valid) maxPrev = MathMax(maxPrev, h4bars[i].high);
 
         if(h4HighCurr > maxPrev && bearish)
@@ -383,10 +387,11 @@ void UpdateShortStateMachine(UTC4HBar &h4bars[], double h4EMA20, double h4ATR)
     }
 
     // TYPE 2: price move >= 2*H4ATR from min of prev 3 H4 lows + bearish close
+    // Lookback: h4bars[2..4] = 3 bars before the just-completed bar (matches backtest iloc[-4:-1])
     if(!t2Active && h4ATR > 0)
     {
         double minLow = DBL_MAX;
-        for(int i = 1; i <= TYPE2_LOOKBACK; i++)
+        for(int i = 2; i <= TYPE2_LOOKBACK + 1; i++)
             if(h4bars[i].valid) minLow = MathMin(minLow, h4bars[i].low);
 
         double move = h4HighCurr - minLow;
