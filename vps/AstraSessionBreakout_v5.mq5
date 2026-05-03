@@ -194,12 +194,7 @@ void UpdateH4State(datetime bar1UTC, double m15Close)
     }
 }
 
-//-------------------------------------------------------------------
-// Recover SHORT initial SL after MT5 restart
-// GlobalVariables survive EA restart but are lost when MT5 closes.
-// Recovery uses: initial_sl = entry + (entry - tp) / tpRR
-// (derivable because tp = entry - tpRR * (initial_sl - entry))
-//-------------------------------------------------------------------
+/*  SHORT DISABLED — RecoverShortSL
 void RecoverShortSL()
 {
     if(TestMode) return;
@@ -210,7 +205,7 @@ void RecoverShortSL()
         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL) continue;
-        if(GlobalVariableCheck(InitSLGV(ticket))) continue;  // already set
+        if(GlobalVariableCheck(InitSLGV(ticket))) continue;
 
         string comment = PositionGetString(POSITION_COMMENT);
         double tpRR    = (comment == "Astra_short_ldn") ? TP_RR_LDN_FB : TP_RR_NY_FB;
@@ -220,13 +215,13 @@ void RecoverShortSL()
         if(entry <= 0 || tp <= 0 || tp >= entry)
         { Print("RecoverShortSL: bad data for ticket ", ticket); continue; }
 
-        // Derive: rsk = (entry - tp) / tpRR; initial_sl = entry + rsk
         double rsk    = (entry - tp) / tpRR;
         double initSL = entry + rsk;
         GlobalVariableSet(InitSLGV(ticket), initSL);
         Print("Recovered SHORT InitSL ticket=", ticket, " initSL=", initSL);
     }
 }
+*/
 
 //-------------------------------------------------------------------
 // Init / Deinit
@@ -236,7 +231,7 @@ int OnInit()
     Print("===== AstraSessionBreakout v5.01 =====");
     Print("TestMode=", TestMode, "  Risk=$", RiskUSD, "  GMT+", ServerGMTOffset);
     Print("LONG: Asian(3-6)/London(8-11)/NY(15-18)  TP=12R  ATRbuf=0.5  Slope=5");
-    Print("SHORT: london_fb(6-9) TP=3R | ny_fb(12-15) TP=10R  ATRbuf=0.3  nc=4");
+    Print("SHORT: DISABLED");
     Print("H4 EMA: UTC-aligned (no broker shift)");
     Print("==========================================");
 
@@ -247,7 +242,7 @@ int OnInit()
     if(!InitH4EMA())
     { Print("ERROR: H4 EMA initialization failed (not enough history)"); return INIT_FAILED; }
 
-    RecoverShortSL();
+    //RecoverShortSL();  // SHORT DISABLED
 
     EventSetTimer(1);
     SyncCandlesToFile();
@@ -347,7 +342,7 @@ void OnNewM15Bar()
         if(EnableTrailing)
         {
             UpdateLongTrailing(m15Low);
-            UpdateShortTrailing(m15High);
+            //UpdateShortTrailing(m15High);  // SHORT DISABLED
         }
     }
 
@@ -355,8 +350,8 @@ void OnNewM15Bar()
     double sHigh[3], sLow[3];
     CalcLongRanges(sHigh, sLow, barDT);
 
-    // --- FB SHORT: bar-by-bar state machine + entries
-    UpdateFBState(m15Close, m15High, m15Low, atr, hour);
+    // --- FB SHORT: DISABLED
+    //UpdateFBState(m15Close, m15High, m15Low, atr, hour);
 
     // --- LONG entries (only when H4 filter passes)
     if(h4FilterOK)
@@ -424,106 +419,57 @@ void CheckLongEntries(double close, double atr, int hour,
     }
 }
 
-//-------------------------------------------------------------------
-// FB SHORT state machine — bar-by-bar, exact match to Python backtest
-//
-// Python logic (per FB session):
-//   range window:  sh = max(sh, high)                        [build range]
-//   after window:  if !ok:  close > sh → bars_above++, peak=max(peak,high)
-//                           bars_above >= nc → ok=True
-//                  if ok:   peak = max(peak, high)
-//                           close < sh → SHORT entry
-//-------------------------------------------------------------------
+/*  SHORT DISABLED — UpdateFBState
 void UpdateFBState(double close, double high, double low, double atr, int hour)
 {
-    // --- london_fb: range 6-9, TP=3R ---
+    // london_fb: range 6-9, TP=3R
     {
         int rs = 6, re = 9;
         if(hour >= rs && hour < re)
-        {
             GlobalVariableSet(GV_LDN_SH, MathMax(GVGet(GV_LDN_SH), high));
-        }
-        else if(hour >= re
-                && GVGet(GV_LDN_SH) > 0
-                && !GVTrue(GV_LDN_DONE)
-                && !HasPosition("short_ldn"))
+        else if(hour >= re && GVGet(GV_LDN_SH) > 0 && !GVTrue(GV_LDN_DONE) && !HasPosition("short_ldn"))
         {
             double sh = GVGet(GV_LDN_SH);
-            if(!GVTrue(GV_LDN_OK))
-            {
-                if(close > sh)
-                {
-                    GlobalVariableSet(GV_LDN_BA,   GVGet(GV_LDN_BA) + 1);
+            if(!GVTrue(GV_LDN_OK)) {
+                if(close > sh) {
+                    GlobalVariableSet(GV_LDN_BA, GVGet(GV_LDN_BA)+1);
                     GlobalVariableSet(GV_LDN_PEAK, MathMax(GVGet(GV_LDN_PEAK), high));
-                    if((int)GVGet(GV_LDN_BA) >= N_CONFIRM_FB)
-                        GlobalVariableSet(GV_LDN_OK, 1);
+                    if((int)GVGet(GV_LDN_BA) >= N_CONFIRM_FB) GlobalVariableSet(GV_LDN_OK, 1);
                 }
-            }
-            else
-            {
+            } else {
                 GlobalVariableSet(GV_LDN_PEAK, MathMax(GVGet(GV_LDN_PEAK), high));
-                if(close < sh)
-                {
-                    double peak = GVGet(GV_LDN_PEAK);
-                    double sl_s = peak + ATR_BUF_FB * atr;
-                    double rsk  = sl_s - close;
-                    if(rsk > 0)
-                    {
-                        double tp_s = close - TP_RR_LDN_FB * rsk;
-                        Print("SHORT london_fb @ ", close,
-                              " SL=", sl_s, " TP=", tp_s, " peak=", peak);
-                        OpenTrade("SHORT", close, sl_s, tp_s, "short_ldn", TP_RR_LDN_FB);
-                        GlobalVariableSet(GV_LDN_DONE, 1);
-                    }
+                if(close < sh) {
+                    double peak=GVGet(GV_LDN_PEAK), sl_s=peak+ATR_BUF_FB*atr, rsk=sl_s-close;
+                    if(rsk > 0) { OpenTrade("SHORT",close,sl_s,close-TP_RR_LDN_FB*rsk,"short_ldn",TP_RR_LDN_FB); GlobalVariableSet(GV_LDN_DONE,1); }
                 }
             }
         }
     }
-
-    // --- ny_fb: range 12-15, TP=10R ---
+    // ny_fb: range 12-15, TP=10R
     {
         int rs = 12, re = 15;
         if(hour >= rs && hour < re)
-        {
             GlobalVariableSet(GV_NY_SH, MathMax(GVGet(GV_NY_SH), high));
-        }
-        else if(hour >= re
-                && GVGet(GV_NY_SH) > 0
-                && !GVTrue(GV_NY_DONE)
-                && !HasPosition("short_ny"))
+        else if(hour >= re && GVGet(GV_NY_SH) > 0 && !GVTrue(GV_NY_DONE) && !HasPosition("short_ny"))
         {
             double sh = GVGet(GV_NY_SH);
-            if(!GVTrue(GV_NY_OK))
-            {
-                if(close > sh)
-                {
-                    GlobalVariableSet(GV_NY_BA,   GVGet(GV_NY_BA) + 1);
+            if(!GVTrue(GV_NY_OK)) {
+                if(close > sh) {
+                    GlobalVariableSet(GV_NY_BA, GVGet(GV_NY_BA)+1);
                     GlobalVariableSet(GV_NY_PEAK, MathMax(GVGet(GV_NY_PEAK), high));
-                    if((int)GVGet(GV_NY_BA) >= N_CONFIRM_FB)
-                        GlobalVariableSet(GV_NY_OK, 1);
+                    if((int)GVGet(GV_NY_BA) >= N_CONFIRM_FB) GlobalVariableSet(GV_NY_OK, 1);
                 }
-            }
-            else
-            {
+            } else {
                 GlobalVariableSet(GV_NY_PEAK, MathMax(GVGet(GV_NY_PEAK), high));
-                if(close < sh)
-                {
-                    double peak = GVGet(GV_NY_PEAK);
-                    double sl_s = peak + ATR_BUF_FB * atr;
-                    double rsk  = sl_s - close;
-                    if(rsk > 0)
-                    {
-                        double tp_s = close - TP_RR_NY_FB * rsk;
-                        Print("SHORT ny_fb @ ", close,
-                              " SL=", sl_s, " TP=", tp_s, " peak=", peak);
-                        OpenTrade("SHORT", close, sl_s, tp_s, "short_ny", TP_RR_NY_FB);
-                        GlobalVariableSet(GV_NY_DONE, 1);
-                    }
+                if(close < sh) {
+                    double peak=GVGet(GV_NY_PEAK), sl_s=peak+ATR_BUF_FB*atr, rsk=sl_s-close;
+                    if(rsk > 0) { OpenTrade("SHORT",close,sl_s,close-TP_RR_NY_FB*rsk,"short_ny",TP_RR_NY_FB); GlobalVariableSet(GV_NY_DONE,1); }
                 }
             }
         }
     }
 }
+*/
 
 //-------------------------------------------------------------------
 // Trailing helpers — exact match to Python _trail / _trail_short
@@ -599,6 +545,7 @@ void UpdateLongTrailing(double m15Low)
     }
 }
 
+/*  SHORT DISABLED — UpdateShortTrailing
 void UpdateShortTrailing(double m15High)
 {
     for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -631,6 +578,7 @@ void UpdateShortTrailing(double m15High)
         }
     }
 }
+*/
 
 //-------------------------------------------------------------------
 // TestMode: simulated trailing
