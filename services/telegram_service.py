@@ -1237,6 +1237,57 @@ class TelegramService:
         except Exception as e:
             logger.error(f"Ошибка send_session_breakout_status: {e}")
 
+    def send_session_breakout_close(self, signal_data, test_mode=False):
+        """
+        Уведомление о закрытии сделки по SL или TP в Astra Signal Bot.
+        Вызывается из session_breakout_trader.py когда EA закрывает позицию.
+
+        Args:
+            signal_data: dict из Supabase mt5_signals (status=closed, exit_price, pnl заполнены EA)
+            test_mode: bool
+        """
+        if not self.bot_signals:
+            logger.warning("Signal Bot не инициализирован — close notification не отправлено")
+            return
+
+        try:
+            direction  = signal_data.get('direction', 'LONG')
+            session    = signal_data.get('session', 'unknown').upper()
+            entry      = float(signal_data.get('entry', 0))
+            exit_price = float(signal_data.get('exit_price', 0))
+            pnl        = float(signal_data.get('pnl', 0))
+
+            pnl_emoji  = "💰" if pnl > 0 else "❌"
+            dir_emoji  = "🟢" if direction == "LONG" else "🔴"
+            close_type = "TP HIT ✅" if pnl > 0 else "SL HIT ❌"
+            pnl_sign   = "+" if pnl >= 0 else ""
+            mode_label = "⚠️ [TEST MODE] " if test_mode else ""
+
+            message = (
+                f"{mode_label}<b>{pnl_emoji} CLOSED — {close_type}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>Session:</b> {session} {dir_emoji} {direction}\n"
+                f"<b>Entry:</b>  {entry:.2f}\n"
+                f"<b>Exit:</b>   {exit_price:.2f}\n"
+                f"<b>PnL:</b>    {pnl_sign}{pnl:.0f}$\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Session Breakout v5.0</i>"
+            )
+
+            sent_count = 0
+            for chat_id in self.admin_chat_ids:
+                if chat_id:
+                    try:
+                        self.bot_signals.send_message(chat_id, message, parse_mode='HTML')
+                        sent_count += 1
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки close в {chat_id}: {e}")
+
+            logger.info(f"Close notification sent to {sent_count} admin(s) — {session} PnL={pnl_sign}{pnl:.0f}$")
+
+        except Exception as e:
+            logger.error(f"Ошибка send_session_breakout_close: {e}")
+
     def send_trade_update(self, trade_data, test_mode=False):
         """
         Отправка обновления по сделке (открытие, закрытие, trailing)

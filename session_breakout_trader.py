@@ -53,6 +53,13 @@ def mark_signal_tg_sent(signal_id):
     except Exception as e:
         logger.error(f"mark_signal_tg_sent error: {e}")
 
+def mark_close_tg_sent(signal_id):
+    try:
+        url = f"{SUPABASE_REST_URL}/mt5_signals?id=eq.{signal_id}"
+        requests.patch(url, headers=HEADERS, json={"close_tg_sent": True}, timeout=(5, 10))
+    except Exception as e:
+        logger.error(f"mark_close_tg_sent error: {e}")
+
 # ============================================================================
 # v4.0 PARAMETERS - MULTIPLE POSITIONS
 # ============================================================================
@@ -616,6 +623,19 @@ def check_session_breakout():
                 logger.info(f"Sending TG notification for EA signal: {signal['session']} #{signal['id']}")
                 telegram_service.send_session_breakout_signal(signal, test_mode=TEST_MODE)
                 mark_signal_tg_sent(signal['id'])
+
+        # 1.6 Notify TG for closed signals not yet notified (close_tg_sent=false)
+        try:
+            close_url = (f"{SUPABASE_REST_URL}/mt5_signals"
+                         f"?status=eq.closed&close_tg_sent=eq.false&select=*")
+            close_resp = requests.get(close_url, headers=HEADERS, timeout=(5, 10))
+            close_resp.raise_for_status()
+            for sig in close_resp.json():
+                logger.info(f"Sending close TG for #{sig['id']} {sig['session']} {sig['direction']}")
+                telegram_service.send_session_breakout_close(sig, test_mode=TEST_MODE)
+                mark_close_tg_sent(sig['id'])
+        except Exception as e:
+            logger.error(f"Error sending close TG notifications: {e}")
 
         # 2. Load M15 data
         df = load_candles_from_supabase('XAUUSD', 'M15', limit=2000)
