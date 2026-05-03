@@ -1,20 +1,22 @@
 """
-Session Breakout Live Trader v4.0 - MULTIPLE POSITIONS
-=======================================================
-LONG: Asian (7-10) + London (13-16) + NY (13-17, entry 18-21)
-SHORT: Type1 + Type2 Reversal
-MULTIPLE POSITIONS: До 4 одновременно (Asian + London + NY + SHORT)
+Session Breakout Live Trader v5.0 — TG Notifications Only (EA_MODE)
+======================================================================
+EA AstraSessionBreakout_v5.mq5 — торгует самостоятельно.
+Этот скрипт: мониторинг активных сигналов + TG уведомления.
+
+LONG : Asian (3-6 UTC) + London (8-11 UTC) + NY (15-18 UTC)
+SHORT: Failed Breakout — london_fb (6-9 UTC) + ny_fb (12-15 UTC)
+До 5 позиций одновременно (Asian + London + NY + short_ldn + short_ny)
 
 Параметры:
-- Risk: $120 (консервативный для баланса $9,950)
-- TP: 5.5R
-- ATR: 14 (unified)
-- Step Trailing: Управляется MT5 EA
-- H4 EMA20 filter: Enabled
+- Risk: $100 per trade
+- TP: LONG 12R | london_fb 3R | ny_fb 10R
+- ATR: 14  |  H4 EMA20 slope filter (LONG only)
+- Step Trailing: управляется EA
 
-Validated: $80,501 PnL, 881 trades, DD 6.99%, Daily DD 3.28%
+Validated: $50,620 PnL, 1336 trades, MaxDD 9.16%, DlyDD 2.72%, AllYrs YES
 
-Вызывается через Render Cron каждые 15 минут
+Вызывается через Render Cron каждые 15 минут (1/16/31/46)
 """
 
 import os
@@ -55,30 +57,36 @@ def mark_signal_tg_sent(signal_id):
 # v4.0 PARAMETERS - MULTIPLE POSITIONS
 # ============================================================================
 
-RISK_PER_TRADE = 120  # Консервативный риск для баланса $9,950
-TP_RR = 5.5
+RISK_PER_TRADE = 100  # Risk per trade (EA v5.0)
+TP_RR = 12.0          # LONG TP (for display/legacy sim only)
 USE_H4_EMA_FILTER = True
 H4_EMA_PERIOD = 20
 ATR_PERIOD = 14
 ATR_BUFFER = 0.5
 
-# LONG: 3 сессии с независимыми окнами
+# LONG: 3 сессии — точные UTC окна (v5.0)
 LONG_SESSIONS = {
     'asian': {
-        'range_hours': (7, 10),
-        'entry_start': 10,
+        'range_hours': (3, 6),
+        'entry_start': 6,
         'entry_end': 24
     },
     'london': {
-        'range_hours': (13, 16),
-        'entry_start': 16,
+        'range_hours': (8, 11),
+        'entry_start': 11,
         'entry_end': 24
     },
     'ny': {
-        'range_hours': (13, 17),
+        'range_hours': (15, 18),
         'entry_start': 18,
-        'entry_end': 21
+        'entry_end': 24
     }
+}
+
+# SHORT Failed Breakout sessions (display only — EA handles logic)
+FB_SESSIONS_DISPLAY = {
+    'short_ldn': {'range_hours': (6,  9),  'tp': 3,  'label': 'London FB (6-9)'},
+    'short_ny':  {'range_hours': (12, 15), 'tp': 10, 'label': 'NY FB (12-15)'},
 }
 
 TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"
@@ -589,7 +597,7 @@ def check_session_breakout():
         # 1. Check for active trades (может быть несколько)
         active_sessions = []
         active_signals_data = []
-        for session in ['asian', 'london', 'ny', 'short']:
+        for session in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
             try:
                 active = get_active_signal(session=session)
                 if active:
@@ -655,7 +663,7 @@ def check_session_breakout():
                 logger.info(f"[TEST] Closed sessions: {closed}")
                 # Refresh active_sessions after simulation
                 active_sessions = []
-                for session in ['asian', 'london', 'ny', 'short']:
+                for session in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
                     try:
                         active = get_active_signal(session=session)
                         if active:
@@ -713,19 +721,25 @@ def check_session_breakout():
         # Send status to Telegram
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
 
-        # Determine current session
-        if 7 <= current_hour < 10:
-            current_session = "Asian (7-10 UTC)"
-        elif 10 <= current_hour < 13:
-            current_session = "Asian Breakout"
-        elif 13 <= current_hour < 16:
-            current_session = "London (13-16 UTC)"
-        elif 16 <= current_hour < 18:
+        # Determine current session (UTC windows, v5.0)
+        if 3 <= current_hour < 6:
+            current_session = "Asian Range (3-6 UTC)"
+        elif 6 <= current_hour < 8:
+            current_session = "Asian Breakout | London FB Range (6-9)"
+        elif 8 <= current_hour < 9:
+            current_session = "London Range (8-11) | London FB Range (6-9)"
+        elif 9 <= current_hour < 11:
+            current_session = "London Range (8-11 UTC)"
+        elif 11 <= current_hour < 12:
             current_session = "London Breakout"
-        elif 18 <= current_hour < 21:
-            current_session = "NY (18-21 UTC)"
+        elif 12 <= current_hour < 15:
+            current_session = "London Breakout | NY FB Range (12-15)"
+        elif 15 <= current_hour < 18:
+            current_session = "NY Range (15-18 UTC)"
+        elif 18 <= current_hour < 24:
+            current_session = "NY Breakout"
         else:
-            current_session = "Pause"
+            current_session = "Pause (0-3 UTC)"
 
         # Compute next cron time (runs at 01/16/31/46)
         cron_minutes = [1, 16, 31, 46]

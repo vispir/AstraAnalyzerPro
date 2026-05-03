@@ -1090,7 +1090,7 @@ class TelegramService:
 
             # Проверяем все активные позиции
             active_sessions = []
-            for sess in ['asian', 'london', 'ny', 'short']:
+            for sess in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
                 active = get_active_signal(session=sess)
                 if active:
                     active_sessions.append(sess.upper())
@@ -1111,7 +1111,7 @@ class TelegramService:
                 f"<b>Risk:</b> ${risk_usd:.0f}\n"
                 f"<b>R:R:</b> 1:{rr_ratio:.1f}{active_str}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Strategy: Session Breakout v4.0 (Multiple Positions)</i>"
+                f"<i>Strategy: Session Breakout v5.0 (LONG+FB Short, 5 sessions)</i>"
             )
 
             # Отправляем всем админам
@@ -1166,11 +1166,11 @@ class TelegramService:
                 phase_emoji = '🎯'
             phase_line = f"Фаза: {phase_emoji} {current_session}"
 
-            # Session ranges
+            # Session ranges (UTC windows v5.0)
             session_cfg = [
-                ('asian',  'Asian (7-10)',   7,  10),
-                ('london', 'London (13-16)', 13, 16),
-                ('ny',     'NY (13-17)',     13, 17),
+                ('asian',  'Asian (3-6)',    3,  6),
+                ('london', 'London (8-11)',  8, 11),
+                ('ny',     'NY (15-18)',    15, 18),
             ]
             ranges_lines = []
             for sess_name, label, start_h, end_h in session_cfg:
@@ -1191,7 +1191,7 @@ class TelegramService:
 
             # Active positions
             active_positions = []
-            for sess in ['asian', 'london', 'ny', 'short']:
+            for sess in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
                 active = get_active_signal(session=sess)
                 if active:
                     direction = active.get('direction', 'N/A')
@@ -1200,21 +1200,21 @@ class TelegramService:
 
             n = len(active_positions)
             if n > 0:
-                positions_block = f"✅ Active Positions ({n}/4):\n" + "\n".join(active_positions)
+                positions_block = f"✅ Active Positions ({n}/5):\n" + "\n".join(active_positions)
             else:
-                positions_block = "⏳ No Active Positions (0/4)"
+                positions_block = "⏳ No Active Positions (0/5)"
 
             # LONG/SHORT status
             if h4_trend and h4_trend['trend'] == 'DOWN':
-                long_status = "заблокирован (тренд DOWN)"
+                long_status = "заблокирован (H4 slope DOWN)"
             elif h4_trend and h4_trend['trend'] == 'UP':
-                long_status = "мониторинг пробоя"
+                long_status = "мониторинг пробоя (H4 UP)"
             else:
                 long_status = "мониторинг"
-            short_status = "ждёт паттерн разворота H4"
+            short_status = "FB Short: london_fb (6-9) TP3R | ny_fb (12-15) TP10R"
 
             message = (
-                f"<b>📊 Session Breakout v4.0</b>\n"
+                f"<b>📊 Session Breakout v5.0</b>\n"
                 f"<i>{timestamp} | ${current_price}</i>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"{trend_line}\n"
