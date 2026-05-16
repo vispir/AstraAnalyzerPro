@@ -1,20 +1,17 @@
 """
-Session Breakout Live Trader v5.0 — TG Notifications Only (EA_MODE)
+AstraH4Trend v1.0 — TG Notifications Only (EA_MODE)
 ======================================================================
-EA AstraSessionBreakout_v5.mq5 — торгует самостоятельно.
+EA AstraH4Trend_v1.mq5 — торгует самостоятельно.
 Этот скрипт: мониторинг активных сигналов + TG уведомления.
 
-LONG : Asian (3-6 UTC) + London (8-11 UTC) + NY (15-18 UTC)
-SHORT: Failed Breakout — london_fb (6-9 UTC) + ny_fb (12-15 UTC)
-До 5 позиций одновременно (Asian + London + NY + short_ldn + short_ny)
+LONG : H4up (close > EMA20 и slope3 > 0), часы 05-09 + 13-16 UTC, max 1/day
+SHORT: H4dn (close < EMA20 и slope3 < 0), часы 08-09 + 13-16 UTC, max 1/day
 
 Параметры:
-- Risk: $100 per trade
-- TP: LONG 12R | london_fb 3R | ny_fb 10R
-- ATR: 14  |  H4 EMA20 slope filter (LONG only)
-- Step Trailing: управляется EA
+- Risk: $10/сделку (текущий акк $9,067 | buffer $67 | стандарт $120 на $10k)
+- TP: 4R | SL: 1.2×ATR | Trail: старт 0.8R, шаг 0.3R | Max bars: 400 M15
 
-Validated: $50,620 PnL, 1336 trades, MaxDD 9.16%, DlyDD 2.72%, AllYrs YES
+Validated: $33,927 PnL, 1,360 trades, MaxDD 4.8%, WR 59.3%, AllYrs YES (2020-2026)
 
 Вызывается через Render Cron каждые 15 минут (1/16/31/46)
 """
@@ -591,6 +588,22 @@ def check_short_reversal(today_data, df_h4, current_hour):
 # MAIN LOGIC
 # ============================================================================
 
+def get_today_done_sessions():
+    """Проверить, были ли LONG и/или SHORT сделки сегодня (активные или закрытые)."""
+    try:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        url = f"{SUPABASE_REST_URL}/mt5_signals?created_at=gte.{today_start}&select=session,status"
+        resp = requests.get(url, headers=HEADERS, timeout=(5, 10))
+        resp.raise_for_status()
+        data = resp.json()
+        long_done  = any(d.get('session') == 'long'  for d in data)
+        short_done = any(d.get('session') == 'short' for d in data)
+        return long_done, short_done
+    except Exception as e:
+        logger.error(f"get_today_done_sessions error: {e}")
+        return False, False
+
+
 def check_session_breakout():
     """
     Main entry point - вызывается каждые 15 минут через Render Cron
@@ -604,7 +617,7 @@ def check_session_breakout():
         # 1. Check for active trades (может быть несколько)
         active_sessions = []
         active_signals_data = []
-        for session in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
+        for session in ['long', 'short']:
             try:
                 active = get_active_signal(session=session)
                 if active:
@@ -613,6 +626,9 @@ def check_session_breakout():
                     logger.info(f"✓ Active {session} trade (ID: {active['id']})")
             except Exception as e:
                 logger.error(f"Supabase error checking {session}: {e}")
+
+        active_long  = next((s for s in active_signals_data if s.get('session') == 'long'),  None)
+        active_short = next((s for s in active_signals_data if s.get('session') == 'short'), None)
 
         if len(active_sessions) > 0:
             logger.info(f"Active sessions: {', '.join(active_sessions)}")
@@ -683,46 +699,45 @@ def check_session_breakout():
                 logger.info(f"[TEST] Closed sessions: {closed}")
                 # Refresh active_sessions after simulation
                 active_sessions = []
-                for session in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
+                active_signals_data = []
+                for session in ['long', 'short']:
                     try:
                         active = get_active_signal(session=session)
                         if active:
                             active_sessions.append(session)
+                            active_signals_data.append(active)
                     except Exception:
                         pass
+                active_long  = next((s for s in active_signals_data if s.get('session') == 'long'),  None)
+                active_short = next((s for s in active_signals_data if s.get('session') == 'short'), None)
 
         # Log H4 EMA20 status
         h4_trend_data = None
         if df_h4 is not None and len(df_h4) > 0:
             h4_bars = df_h4[df_h4.index <= now_utc]
-            if len(h4_bars) > 0:
+            if len(h4_bars) >= 4:
                 current_h4 = h4_bars.iloc[-1]
                 if not pd.isna(current_h4['ema20']):
-                    trend = "UP" if current_h4['close'] > current_h4['ema20'] else "DOWN"
-                    logger.info(f"H4 close: {current_h4['close']:.2f}, EMA20: {current_h4['ema20']:.2f}, Trend: {trend}")
+                    slope3 = current_h4['ema20'] - h4_bars.iloc[-4]['ema20']
+                    h4_up = (current_h4['close'] > current_h4['ema20']) and (slope3 > 0)
+                    h4_dn = (current_h4['close'] < current_h4['ema20']) and (slope3 < 0)
+                    if h4_up:
+                        trend = "UP"
+                    elif h4_dn:
+                        trend = "DN"
+                    else:
+                        trend = "FLAT"
+                    logger.info(f"H4 close: {current_h4['close']:.2f}, EMA20: {current_h4['ema20']:.2f}, slope3: {slope3:.2f}, Trend: {trend}")
                     h4_trend_data = {
                         'close': current_h4['close'],
                         'ema20': current_h4['ema20'],
+                        'slope3': slope3,
                         'trend': trend
                     }
 
-        # 6 & 7. Signal generation — skipped in EA_MODE (EA handles this directly in MT5)
-        session_highs = {}
-        session_lows  = {}
+        # 6 & 7. Signal generation — skipped in EA_MODE (AstraH4Trend_v1.mq5 trades directly)
         if EA_MODE:
             logger.info("EA_MODE=true — skipping signal generation (EA generates signals)")
-            # Still calculate session ranges for TG status display
-            for idx, row in today_data.iterrows():
-                bar_hour = idx.hour
-                for session_name, params in LONG_SESSIONS.items():
-                    start_hour, end_hour = params['range_hours']
-                    if start_hour <= bar_hour < end_hour:
-                        if session_name not in session_highs:
-                            session_highs[session_name] = row['high']
-                            session_lows[session_name]  = row['low']
-                        else:
-                            session_highs[session_name] = max(session_highs[session_name], row['high'])
-                            session_lows[session_name]  = min(session_lows[session_name],  row['low'])
         else:
             # Legacy Python signal generation (only when EA_MODE=false)
             logger.info("Checking LONG session breakouts (Asian + London + NY)...")
@@ -741,27 +756,15 @@ def check_session_breakout():
         # Send status to Telegram
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
 
-        # Determine current session (UTC windows, v5.0)
-        if 3 <= current_hour < 6:
-            current_session = "Asian Range (3-6 UTC)"
-        elif 6 <= current_hour < 8:
-            current_session = "Asian Breakout | London FB Range (6-9)"
-        elif 8 <= current_hour < 9:
-            current_session = "London Range (8-11) | London FB Range (6-9)"
-        elif 9 <= current_hour < 11:
-            current_session = "London Range (8-11 UTC)"
-        elif 11 <= current_hour < 12:
-            current_session = "London Breakout"
-        elif 12 <= current_hour < 15:
-            current_session = "London Breakout | NY FB Range (12-15)"
-        elif 15 <= current_hour < 18:
-            current_session = "NY Range (15-18 UTC)"
-        elif 18 <= current_hour < 24:
-            current_session = "NY Breakout"
-        else:
-            current_session = "Pause (0-3 UTC)"
+        # Check today's done sessions (any signal for 'long'/'short' created today)
+        long_done, short_done = get_today_done_sessions()
+        # Active signal counts as "done" even if not yet in Supabase history
+        if active_long:
+            long_done = True
+        if active_short:
+            short_done = True
 
-        # Compute next cron time (runs at 01/16/31/46)
+        # Next cron time (runs at 01/16/31/46)
         cron_minutes = [1, 16, 31, 46]
         next_cron_min = next((m for m in cron_minutes if m > now_utc.minute), None)
         if next_cron_min is not None:
@@ -770,15 +773,13 @@ def check_session_breakout():
             next_cron_str = (now_utc + timedelta(hours=1)).replace(minute=1, second=0, microsecond=0).strftime('%H:%M UTC')
 
         telegram_service.send_session_breakout_status({
-            'active_trade': len(active_sessions) > 0,
-            'active_sessions': active_sessions,
-            'signal_generated': False,
             'current_price': f"{current_price:.2f}",
-            'current_session': current_session,
             'h4_trend': h4_trend_data,
-            'session_highs': session_highs,
-            'session_lows': session_lows,
             'current_hour': current_hour,
+            'long_done': long_done,
+            'short_done': short_done,
+            'active_long': active_long,
+            'active_short': active_short,
             'next_cron': next_cron_str,
         })
 

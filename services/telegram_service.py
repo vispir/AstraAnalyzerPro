@@ -1056,11 +1056,10 @@ class TelegramService:
 
     def send_session_breakout_signal(self, signal_data, test_mode=False):
         """
-        Отправка сигнала Session Breakout v4.0 в Signal Bot
-        Поддерживает множественные позиции
+        Отправка сигнала AstraH4Trend v1.0 в Astra Signal Bot (при открытии позиции EA)
 
         Args:
-            signal_data: dict с данными сигнала из Supabase
+            signal_data: dict из Supabase mt5_signals (direction, entry, sl, tp, risk_usd)
             test_mode: bool - если True, добавляет метку [TEST MODE]
         """
         if not self.bot_signals:
@@ -1068,55 +1067,34 @@ class TelegramService:
             return
 
         try:
-            from astra_v2.mt5.mt5_signal_writer import get_active_signal
-
             direction = signal_data.get('direction', 'LONG')
-            entry = signal_data.get('entry', 0)
-            sl = signal_data.get('sl', 0)
-            tp = signal_data.get('tp', 0)
-            session = signal_data.get('session', 'unknown').upper()
-            risk_usd = signal_data.get('risk_usd', 0)
+            entry     = float(signal_data.get('entry', 0))
+            sl        = float(signal_data.get('sl', 0))
+            tp        = float(signal_data.get('tp', 0))
+            risk_usd  = float(signal_data.get('risk_usd', 0))
 
-            # Рассчитываем R:R
-            risk_points = abs(entry - sl)
-            reward_points = abs(tp - entry)
-            rr_ratio = reward_points / risk_points if risk_points > 0 else 0
+            risk_pts   = abs(entry - sl)
+            reward_pts = abs(tp - entry)
+            rr_ratio   = reward_pts / risk_pts if risk_pts > 0 else 0
 
-            # Эмодзи для направления
-            dir_emoji = "🟢" if direction == "LONG" else "🔴"
-
-            # Метка тестового режима
+            dir_emoji  = "🟢" if direction == "LONG" else "🔴"
+            trend_txt  = "🟢 UP (H4 slope ↑)" if direction == "LONG" else "🔴 DN (H4 slope ↓)"
             mode_label = "⚠️ [TEST MODE] " if test_mode else ""
 
-            # Проверяем все активные позиции
-            active_sessions = []
-            for sess in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
-                active = get_active_signal(session=sess)
-                if active:
-                    active_sessions.append(sess.upper())
-
-            # Формируем строку активных позиций
-            if len(active_sessions) > 0:
-                active_str = f"\n<b>Active:</b> {', '.join(active_sessions)}"
-            else:
-                active_str = ""
-
             message = (
-                f"{mode_label}<b>{dir_emoji} {direction} SIGNAL</b>\n"
+                f"{mode_label}<b>{dir_emoji} {direction} — AstraH4Trend v1.0</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<b>Session:</b> {session}\n"
-                f"<b>Entry:</b> {entry:.2f}\n"
-                f"<b>Stop Loss:</b> {sl:.2f}\n"
-                f"<b>Take Profit:</b> {tp:.2f}\n"
-                f"<b>Risk:</b> ${risk_usd:.0f}\n"
-                f"<b>R:R:</b> 1:{rr_ratio:.1f}{active_str}\n"
+                f"<b>H4 Trend:</b>    {trend_txt}\n"
+                f"<b>Entry:</b>       {entry:.2f}\n"
+                f"<b>Stop Loss:</b>   {sl:.2f}  (1.2×ATR)\n"
+                f"<b>Take Profit:</b> {tp:.2f}  (4R)\n"
+                f"<b>Risk:</b>        ${risk_usd:.0f}\n"
+                f"<b>R:R:</b>         1:{rr_ratio:.1f}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Strategy: Session Breakout v5.0 (LONG+FB Short, 5 sessions)</i>"
+                f"<i>Max 1 LONG + 1 SHORT per day | trail @ 0.8R/0.3R</i>"
             )
 
-            # Отправляем всем админам
             sent_count = 0
-
             for chat_id in self.admin_chat_ids:
                 if chat_id:
                     try:
@@ -1125,104 +1103,80 @@ class TelegramService:
                     except Exception as e:
                         logger.error(f"Ошибка отправки сигнала в {chat_id}: {e}")
 
-            logger.info(f"Signal sent to {sent_count} subscribers")
+            logger.info(f"H4Trend signal sent to {sent_count}: {direction} @ {entry:.2f}")
 
         except Exception as e:
             logger.error(f"Ошибка send_session_breakout_signal: {e}")
 
     def send_session_breakout_status(self, status_data):
         """
-        Отправка единого статуса Session Breakout v4.0 (каждые 15 мин)
+        Статус AstraH4Trend v1.0 каждые 15 мин → Astra Analyzer Pro (Main Bot)
         """
         if not self.bot or not self.admin_chat_ids:
             return
 
         try:
-            from astra_v2.mt5.mt5_signal_writer import get_active_signal
-
-            timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            timestamp     = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
             current_price = status_data.get('current_price', 'N/A')
-            h4_trend = status_data.get('h4_trend')
-            session_highs = status_data.get('session_highs', {})
-            session_lows = status_data.get('session_lows', {})
-            current_hour = status_data.get('current_hour', 0)
-            next_cron = status_data.get('next_cron', '')
-            current_session = status_data.get('current_session', 'Pause')
+            h4_trend      = status_data.get('h4_trend')
+            current_hour  = status_data.get('current_hour', 0)
+            next_cron     = status_data.get('next_cron', '')
+            long_done     = status_data.get('long_done', False)
+            short_done    = status_data.get('short_done', False)
+            active_long   = status_data.get('active_long')
+            active_short  = status_data.get('active_short')
 
-            # H4 trend line
+            # H4 trend
             if h4_trend:
-                trend_emoji = '🟢' if h4_trend['trend'] == 'UP' else '🔴'
-                cmp = '&gt;' if h4_trend['trend'] == 'UP' else '&lt;'
-                trend_line = f"H4 Trend: {trend_emoji} {h4_trend['trend']} ({h4_trend['close']:.0f} {cmp} EMA20 {h4_trend['ema20']:.0f})"
+                trend = h4_trend.get('trend', 'FLAT')
+                if trend == 'UP':
+                    trend_emoji, cmp, slope_arrow = '🟢', '&gt;', '↑'
+                elif trend == 'DN':
+                    trend_emoji, cmp, slope_arrow = '🔴', '&lt;', '↓'
+                else:
+                    trend_emoji, cmp, slope_arrow = '⚪', '~', '→'
+                trend_line = (
+                    f"H4 Trend: {trend_emoji} {trend}  "
+                    f"({h4_trend['close']:.0f} {cmp} EMA20 {h4_trend['ema20']:.0f}, slope {slope_arrow})"
+                )
             else:
                 trend_line = "H4 Trend: нет данных"
 
-            # Current phase line
-            if 'Pause' in current_session:
-                phase_emoji = '⏸'
-            elif 'Range' in current_session:
-                phase_emoji = '📐'
+            # Entry windows for current hour
+            long_win  = (5 <= current_hour <= 9) or (13 <= current_hour <= 16)
+            short_win = (8 <= current_hour <= 9) or (13 <= current_hour <= 16)
+            lw = "✅ OPEN" if long_win  else "⏸ closed"
+            sw = "✅ OPEN" if short_win else "⏸ closed"
+
+            # Today trade status
+            ls = "✅ Done" if long_done  else "⏳ Open"
+            ss = "✅ Done" if short_done else "⏳ Open"
+
+            # Active positions block
+            pos_lines = []
+            if active_long:
+                e = float(active_long.get('entry', 0))
+                s = float(active_long.get('sl', 0))
+                pos_lines.append(f"  🟢 LONG  @ {e:.2f}  SL {s:.2f}")
+            if active_short:
+                e = float(active_short.get('entry', 0))
+                s = float(active_short.get('sl', 0))
+                pos_lines.append(f"  🔴 SHORT @ {e:.2f}  SL {s:.2f}")
+
+            if pos_lines:
+                pos_block = "Active:\n" + "\n".join(pos_lines)
             else:
-                phase_emoji = '🎯'
-            phase_line = f"Фаза: {phase_emoji} {current_session}"
-
-            # Session ranges (UTC windows v5.0)
-            session_cfg = [
-                ('asian',  'Asian (3-6)',    3,  6),
-                ('london', 'London (8-11)',  8, 11),
-                ('ny',     'NY (15-18)',    15, 18),
-            ]
-            ranges_lines = []
-            for sess_name, label, start_h, end_h in session_cfg:
-                if sess_name in session_highs:
-                    h = session_highs[sess_name]
-                    l = session_lows[sess_name]
-                    suffix = ' 🔄' if start_h <= current_hour < end_h else ''
-                    ranges_lines.append(f"  {label}: High {h:.0f} | Low {l:.0f}{suffix}")
-                else:
-                    if current_hour < start_h:
-                        ranges_lines.append(f"  {label}: ещё не начался")
-                    elif start_h <= current_hour < end_h:
-                        ranges_lines.append(f"  {label}: формируется...")
-                    else:
-                        ranges_lines.append(f"  {label}: нет данных")
-
-            ranges_block = "📐 Ranges today:\n" + "\n".join(ranges_lines)
-
-            # Active positions
-            active_positions = []
-            for sess in ['asian', 'london', 'ny', 'short_ldn', 'short_ny']:
-                active = get_active_signal(session=sess)
-                if active:
-                    direction = active.get('direction', 'N/A')
-                    entry = active.get('entry', 0)
-                    active_positions.append(f"  • {sess.upper()} {direction} @ {entry:.2f}")
-
-            n = len(active_positions)
-            if n > 0:
-                positions_block = f"✅ Active Positions ({n}/5):\n" + "\n".join(active_positions)
-            else:
-                positions_block = "⏳ No Active Positions (0/5)"
-
-            # LONG/SHORT status
-            if h4_trend and h4_trend['trend'] == 'DOWN':
-                long_status = "заблокирован (H4 slope DOWN)"
-            elif h4_trend and h4_trend['trend'] == 'UP':
-                long_status = "мониторинг пробоя (H4 UP)"
-            else:
-                long_status = "мониторинг"
-            short_status = "FB Short: london_fb (6-9) TP3R | ny_fb (12-15) TP10R"
+                pos_block = "⏳ No active positions"
 
             message = (
-                f"<b>📊 Session Breakout v5.0</b>\n"
+                f"<b>📊 AstraH4Trend v1.0</b>\n"
                 f"<i>{timestamp} | ${current_price}</i>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"{trend_line}\n"
-                f"{phase_line}\n\n"
-                f"{ranges_block}\n\n"
-                f"{positions_block}\n"
-                f"  <b>LONG:</b> {long_status}\n"
-                f"  <b>SHORT:</b> {short_status}\n"
+                f"Hour: {current_hour:02d} UTC  │  LONG win: {lw}  │  SHORT win: {sw}\n\n"
+                f"Today:\n"
+                f"  <b>LONG:</b>  {ls}   │   <b>SHORT:</b> {ss}\n\n"
+                f"{pos_block}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"Следующий крон: {next_cron}"
             )
@@ -1239,8 +1193,8 @@ class TelegramService:
 
     def send_session_breakout_close(self, signal_data, test_mode=False):
         """
-        Уведомление о закрытии сделки по SL или TP в Astra Signal Bot.
-        Вызывается из session_breakout_trader.py когда EA закрывает позицию.
+        Уведомление о закрытии позиции → Astra Signal Bot
+        Вызывается из session_breakout_trader.py при EA-закрытии (SL/TP/trail/timeout).
 
         Args:
             signal_data: dict из Supabase mt5_signals (status=closed, exit_price, pnl заполнены EA)
@@ -1252,26 +1206,33 @@ class TelegramService:
 
         try:
             direction  = signal_data.get('direction', 'LONG')
-            session    = signal_data.get('session', 'unknown').upper()
             entry      = float(signal_data.get('entry', 0))
+            sl         = float(signal_data.get('sl', 0))
             exit_price = float(signal_data.get('exit_price', 0))
             pnl        = float(signal_data.get('pnl', 0))
+
+            sl_dist = abs(entry - sl)
+            if sl_dist > 0:
+                r_val = (exit_price - entry) / sl_dist if direction == 'LONG' else (entry - exit_price) / sl_dist
+            else:
+                r_val = 0.0
 
             pnl_emoji  = "💰" if pnl > 0 else "❌"
             dir_emoji  = "🟢" if direction == "LONG" else "🔴"
             close_type = "TP HIT ✅" if pnl > 0 else "SL HIT ❌"
             pnl_sign   = "+" if pnl >= 0 else ""
+            r_sign     = "+" if r_val >= 0 else ""
             mode_label = "⚠️ [TEST MODE] " if test_mode else ""
 
             message = (
                 f"{mode_label}<b>{pnl_emoji} CLOSED — {close_type}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<b>Session:</b> {session} {dir_emoji} {direction}\n"
+                f"{dir_emoji} <b>{direction}</b> | AstraH4Trend v1.0\n"
                 f"<b>Entry:</b>  {entry:.2f}\n"
                 f"<b>Exit:</b>   {exit_price:.2f}\n"
+                f"<b>Result:</b> {r_sign}{r_val:.2f}R\n"
                 f"<b>PnL:</b>    {pnl_sign}{pnl:.0f}$\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Session Breakout v5.0</i>"
             )
 
             sent_count = 0
@@ -1283,7 +1244,7 @@ class TelegramService:
                     except Exception as e:
                         logger.error(f"Ошибка отправки close в {chat_id}: {e}")
 
-            logger.info(f"Close notification sent to {sent_count} admin(s) — {session} PnL={pnl_sign}{pnl:.0f}$")
+            logger.info(f"Close sent to {sent_count}: {direction} {r_sign}{r_val:.2f}R  PnL={pnl_sign}{pnl:.0f}$")
 
         except Exception as e:
             logger.error(f"Ошибка send_session_breakout_close: {e}")

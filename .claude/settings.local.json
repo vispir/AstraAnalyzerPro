@@ -1,18 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m py_compile scripts/optimize_breaktest_retest.py)",
-      "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); from astra_v2 import config; print\\('Import OK'\\)\")",
-      "Bash(timeout 10 python scripts/optimize_breakout_retest.py)",
       "Bash(echo \"Exit code: $?\")",
-      "Bash(python -u scripts/optimize_breakout_retest.py)",
-      "Bash(tee optimization_log.txt)",
-      "Bash(python -u scripts/test_single_run.py)",
-      "Bash(tee test_run_log.txt)",
       "Bash(python -c ' *)",
       "Bash(pkill -f \"python.*optimize\")",
-      "Bash(rm -f optimization_log.txt)",
-      "Bash(python scripts/run_backtest.py --strategy breakout_retest_v1 --start 2020-01-01 --end 2024-12-31 --mode proxy --symbol XAUUSD)"
+      "PowerShell(cd \"D:\\\\Works\\\\ASTRA ANALYZER CHART\"; $env:PYTHONIOENCODING=\"utf-8\"; python scripts\\\\backtest_week_may2026.py 2>&1)",
+      "PowerShell(cd \"D:\\\\Works\\\\ASTRA ANALYZER CHART\"; $env:PYTHONIOENCODING=\"utf-8\"; python scripts\\\\backtest_friday_close.py 2>&1)",
+      "PowerShell(cd \"D:\\\\Works\\\\ASTRA ANALYZER CHART\"; $env:PYTHONIOENCODING=\"utf-8\"; python scripts\\\\backtest_jan2026_detailed.py 2>&1)"
     ]
   }
 }
