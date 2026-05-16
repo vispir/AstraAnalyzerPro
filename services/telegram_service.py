@@ -22,8 +22,6 @@ class TelegramService:
         admin_ids = []
         if os.getenv("TELEGRAM_ADMIN_CHAT_ID"):
             admin_ids.append(os.getenv("TELEGRAM_ADMIN_CHAT_ID"))
-        if os.getenv("TELEGRAM_ADMIN_CHAT_ID_2"):
-            admin_ids.append(os.getenv("TELEGRAM_ADMIN_CHAT_ID_2"))
         self.admin_chat_ids = admin_ids
 
         # Astra Signal Bot — только BUY/SELL (без анализа и WAIT)

@@ -15,7 +15,5 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_CHAT_ID
         sync: false
-      - key: TELEGRAM_ADMIN_CHAT_ID_2
-        sync: false
       - key: CRON_SECRET
         sync: false
