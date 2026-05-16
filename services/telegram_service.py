@@ -1091,7 +1091,7 @@ class TelegramService:
                 f"<b>Risk:</b>        ${risk_usd:.0f}\n"
                 f"<b>R:R:</b>         1:{rr_ratio:.1f}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Max 1 LONG + 1 SHORT per day | trail @ 0.8R/0.3R</i>"
+                f"<i>Max 1 LONG + 1 SHORT per day | LONG trail@1.2R/0.1R | SHORT trail@0.8R/0.1R</i>"
             )
 
             sent_count = 0

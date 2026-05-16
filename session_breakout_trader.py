@@ -611,7 +611,7 @@ def check_session_breakout():
     """
     try:
         logger.info("="*80)
-        logger.info("Session Breakout Trader v4.0 - MULTIPLE POSITIONS")
+        logger.info("AstraH4Trend v1.2 - TG Monitor (EA_MODE)")
         logger.info("="*80)
 
         # 1. Check for active trades (может быть несколько)
