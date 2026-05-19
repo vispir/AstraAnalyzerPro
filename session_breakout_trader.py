@@ -591,7 +591,7 @@ def check_short_reversal(today_data, df_h4, current_hour):
 def get_today_done_sessions():
     """Проверить, были ли LONG и/или SHORT сделки сегодня (активные или закрытые)."""
     try:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        today_start = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
         url = f"{SUPABASE_REST_URL}/mt5_signals?created_at=gte.{today_start}&select=session,status"
         resp = requests.get(url, headers=HEADERS, timeout=(5, 10))
         resp.raise_for_status()
