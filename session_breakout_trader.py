@@ -617,7 +617,7 @@ def check_session_breakout():
         # 1. Check for active trades (может быть несколько)
         active_sessions = []
         active_signals_data = []
-        for session in ['long', 'short']:
+        for session in ['long', 'short', 'long2', 'short2']:
             try:
                 active = get_active_signal(session=session)
                 if active:
@@ -700,7 +700,7 @@ def check_session_breakout():
                 # Refresh active_sessions after simulation
                 active_sessions = []
                 active_signals_data = []
-                for session in ['long', 'short']:
+                for session in ['long', 'short', 'long2', 'short2']:
                     try:
                         active = get_active_signal(session=session)
                         if active:
