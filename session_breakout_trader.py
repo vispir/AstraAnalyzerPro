@@ -589,19 +589,19 @@ def check_short_reversal(today_data, df_h4, current_hour):
 # ============================================================================
 
 def get_today_done_sessions():
-    """Проверить, были ли LONG и/или SHORT сделки сегодня (активные или закрытые)."""
+    """Считает кол-во LONG и SHORT сделок сегодня (0/1/2 для каждого направления)."""
     try:
         today_start = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
         url = f"{SUPABASE_REST_URL}/mt5_signals?created_at=gte.{today_start}&select=session,status"
         resp = requests.get(url, headers=HEADERS, timeout=(5, 10))
         resp.raise_for_status()
         data = resp.json()
-        long_done  = any(d.get('session') == 'long'  for d in data)
-        short_done = any(d.get('session') == 'short' for d in data)
-        return long_done, short_done
+        long_count  = sum(1 for d in data if d.get('session') in ('long',  'long2'))
+        short_count = sum(1 for d in data if d.get('session') in ('short', 'short2'))
+        return long_count, short_count
     except Exception as e:
         logger.error(f"get_today_done_sessions error: {e}")
-        return False, False
+        return 0, 0
 
 
 def check_session_breakout():
@@ -756,13 +756,15 @@ def check_session_breakout():
         # Send status to Telegram
         current_price = df['close'].iloc[-1] if len(df) > 0 else 0
 
-        # Check today's done sessions (any signal for 'long'/'short' created today)
-        long_done, short_done = get_today_done_sessions()
-        # Active signal counts as "done" even if not yet in Supabase history
-        if active_long:
-            long_done = True
-        if active_short:
-            short_done = True
+        # Count today's done sessions (0/1/2 per direction)
+        long_count, short_count = get_today_done_sessions()
+        # Active positions not yet in history → count them too
+        active_long2  = next((s for s in active_signals_data if s.get('session') == 'long2'),  None)
+        active_short2 = next((s for s in active_signals_data if s.get('session') == 'short2'), None)
+        if active_long  and long_count  == 0: long_count  = 1
+        if active_long2 and long_count  <  2: long_count  = 2
+        if active_short and short_count == 0: short_count = 1
+        if active_short2 and short_count < 2: short_count = 2
 
         # Next cron time (runs at 01/16/31/46)
         cron_minutes = [1, 16, 31, 46]
@@ -776,8 +778,8 @@ def check_session_breakout():
             'current_price': f"{current_price:.2f}",
             'h4_trend': h4_trend_data,
             'current_hour': current_hour,
-            'long_done': long_done,
-            'short_done': short_done,
+            'long_count': long_count,
+            'short_count': short_count,
             'active_long': active_long,
             'active_short': active_short,
             'next_cron': next_cron_str,

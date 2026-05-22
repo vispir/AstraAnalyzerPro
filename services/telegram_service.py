@@ -1119,8 +1119,8 @@ class TelegramService:
             h4_trend      = status_data.get('h4_trend')
             current_hour  = status_data.get('current_hour', 0)
             next_cron     = status_data.get('next_cron', '')
-            long_done     = status_data.get('long_done', False)
-            short_done    = status_data.get('short_done', False)
+            long_count    = status_data.get('long_count', 0)
+            short_count   = status_data.get('short_count', 0)
             active_long   = status_data.get('active_long')
             active_short  = status_data.get('active_short')
 
@@ -1146,9 +1146,13 @@ class TelegramService:
             lw = "✅ OPEN" if long_win  else "⏸ closed"
             sw = "✅ OPEN" if short_win else "⏸ closed"
 
-            # Today trade status
-            ls = "✅ Done" if long_done  else "⏳ Open"
-            ss = "✅ Done" if short_done else "⏳ Open"
+            # Today trade status: N/2 format
+            def count_label(n):
+                if n == 0:   return "0/2"
+                if n == 1:   return "1/2 ✅"
+                return "2/2 ✅✅"
+            ls = count_label(long_count)
+            ss = count_label(short_count)
 
             # Active positions block
             pos_lines = []
